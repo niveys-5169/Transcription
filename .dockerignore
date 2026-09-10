@@ -1,0 +1,17 @@
+# L'image RunPod ne contient que le worker (handler.py + requirements.txt).
+# Tout le reste est du contexte inutile à envoyer au démon Docker.
+app/
+tests/
+data/
+.venv/
+.git/
+.github/
+*.md
+*.bat
+*.sh
+run.py
+requirements-app.txt
+requirements-dev.txt
+pytest.ini
+__pycache__/
+*.pyc
