@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Transcription de cours</title>
+<link rel="stylesheet" href="/static/styles.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>🎓</text></svg>">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-mark" aria-hidden="true">🎓</span>
+    <div>
+      <h1>Transcription de cours</h1>
+      <p class="brand-sub">Déposez l'enregistrement, récupérez le texte relu.</p>
+    </div>
+  </div>
+  <div class="topbar-actions">
+    <div id="health" class="health" aria-live="polite"></div>
+    <button type="button" id="open-settings" class="btn btn-ghost">Réglages</button>
+  </div>
+</header>
+
+<main>
+  <!-- ------------------------------------------------ dépôt de fichier -->
+  <section class="panel">
+    <form id="upload-form">
+      <div id="dropzone" class="dropzone" tabindex="0" role="button"
+           aria-label="Déposer un fichier audio ou vidéo">
+        <div class="dropzone-icon" aria-hidden="true">⬆</div>
+        <p class="dropzone-title">Déposez la vidéo ou l'audio du cours</p>
+        <p class="dropzone-hint">
+          ou <span class="link">choisissez un fichier</span> —
+          mp4, mkv, mov, mp3, m4a, wav, ogg… jusqu'à plusieurs heures
+        </p>
+        <input type="file" id="file-input" accept="audio/*,video/*,.mkv,.m4a,.opus" multiple hidden>
+      </div>
+
+      <div class="options">
+        <label class="field">
+          <span>Moteur</span>
+          <select id="engine" name="engine"></select>
+          <small id="engine-detail"></small>
+        </label>
+
+        <label class="field">
+          <span>Modèle Whisper</span>
+          <select id="model" name="model"></select>
+          <small>large-v3 : le plus précis. tiny/base : pour un essai rapide.</small>
+        </label>
+
+        <label class="field">
+          <span>Langue</span>
+          <select id="language" name="language">
+            <option value="fr">Français</option>
+            <option value="en">Anglais</option>
+            <option value="es">Espagnol</option>
+            <option value="de">Allemand</option>
+            <option value="it">Italien</option>
+            <option value="">Détection automatique</option>
+          </select>
+          <small>Forcer la langue évite les faux départs sur les premières secondes.</small>
+        </label>
+
+        <label class="field">
+          <span>Relecture</span>
+          <select id="proofread" name="proofread">
+            <option value="claude">Complète (Claude)</option>
+            <option value="basic">Simple (hors ligne)</option>
+            <option value="none">Aucune</option>
+          </select>
+          <small id="proofread-detail"></small>
+        </label>
+
+        <label class="check">
+          <input type="checkbox" id="structure" checked>
+          <span>Ajouter un titre, un résumé et des intertitres</span>
+        </label>
+
+        <label class="check">
+          <input type="checkbox" id="verify" checked>
+          <span>Vérifier la fidélité au texte brut</span>
+        </label>
+
+        <label class="check">
+          <input type="checkbox" id="chain" checked>
+          <span>Relire dans la foulée <small>(sinon : transcrire seulement)</small></span>
+        </label>
+      </div>
+
+      <div class="upload-actions">
+        <p id="pending-files" class="pending"></p>
+        <button type="submit" id="submit-btn" class="btn btn-primary" disabled>
+          Lancer la transcription
+        </button>
+      </div>
+    </form>
+  </section>
+
+  <!-- --------------------------------------------------- file + résultat -->
+  <section class="workspace">
+    <aside class="panel jobs">
+      <div class="jobs-head">
+        <h2>Transcriptions</h2>
+        <input type="search" id="search" placeholder="Rechercher…" aria-label="Rechercher dans les transcriptions">
+      </div>
+      <ul id="job-list" class="job-list"></ul>
+      <p id="jobs-empty" class="empty">Aucune transcription pour l'instant.</p>
+    </aside>
+
+    <article class="panel result" id="result">
+      <div class="empty-state" id="result-empty">
+        <p class="empty-state-icon" aria-hidden="true">📄</p>
+        <p>Sélectionnez une transcription pour la lire ici.</p>
+      </div>
+
+      <div id="result-body" hidden>
+        <div class="result-head">
+          <div>
+            <h2 id="result-title"></h2>
+            <p id="result-meta" class="meta"></p>
+          </div>
+          <div class="result-tools">
+            <button type="button" class="btn btn-primary" id="proofread-btn" hidden>
+              Relire avec Claude
+            </button>
+            <button type="button" class="btn btn-ghost" id="copy-btn">Copier</button>
+            <div class="menu">
+              <button type="button" class="btn btn-ghost" id="download-btn" aria-haspopup="true">
+                Télécharger ▾
+              </button>
+              <div class="menu-items" id="download-menu" hidden>
+                <a data-fmt="txt">Texte relu (.txt)</a>
+                <a data-fmt="md">Document complet (.md)</a>
+                <a data-fmt="srt">Sous-titres (.srt)</a>
+                <a data-fmt="vtt">Sous-titres (.vtt)</a>
+                <a data-fmt="json">Tout, structuré (.json)</a>
+              </div>
+            </div>
+            <button type="button" class="btn btn-danger-ghost" id="delete-btn">Supprimer</button>
+          </div>
+        </div>
+
+        <div id="result-error" class="banner banner-error" hidden></div>
+
+        <div id="result-summary" class="summary" hidden>
+          <h3>En bref</h3>
+          <ul id="summary-list"></ul>
+        </div>
+
+        <div class="tabs" role="tablist">
+          <button type="button" class="tab is-active" data-tab="clean" role="tab">Texte relu</button>
+          <button type="button" class="tab" data-tab="raw" role="tab">Texte brut</button>
+          <button type="button" class="tab" data-tab="segments" role="tab">Segments horodatés</button>
+          <button type="button" class="tab" data-tab="verify" role="tab">
+            Vérification <span id="verify-count" class="tab-badge" hidden></span>
+          </button>
+          <button type="button" class="tab" data-tab="audio" role="tab">Audio extrait</button>
+        </div>
+
+        <div class="tab-panel" id="panel-clean"></div>
+        <div class="tab-panel" id="panel-raw" hidden></div>
+        <div class="tab-panel" id="panel-segments" hidden></div>
+        <div class="tab-panel" id="panel-verify" hidden></div>
+        <div class="tab-panel" id="panel-audio" hidden>
+          <p class="meta">
+            Le WAV 16 kHz mono effectivement envoyé au moteur. S'il est muet,
+            le problème vient de l'extraction, pas de la transcription.
+          </p>
+          <audio id="audio-player" controls preload="none"></audio>
+        </div>
+      </div>
+    </article>
+  </section>
+</main>
+
+<!-- ---------------------------------------------------------- réglages -->
+<dialog id="settings-dialog">
+  <form method="dialog" id="settings-form">
+    <h2>Réglages</h2>
+
+    <fieldset>
+      <legend>Relecture par Claude</legend>
+      <p class="hint">
+        La relecture transforme le flot de paroles en texte ponctué et
+        structuré. Sans clé, l'application se rabat automatiquement sur la
+        relecture simple, qui fonctionne hors ligne.
+      </p>
+      <label class="field">
+        <span>Clé API Anthropic</span>
+        <input type="password" id="anthropic_api_key" placeholder="sk-ant-…" autocomplete="off">
+        <small id="anthropic-state"></small>
+      </label>
+      <label class="field">
+        <span>Modèle</span>
+        <input type="text" id="proofread_model" placeholder="claude-opus-5">
+      </label>
+      <label class="field">
+        <span>Niveau d'effort</span>
+        <select id="proofread_effort">
+          <option value="low">Bas — le plus rapide et le moins cher</option>
+          <option value="medium">Moyen — recommandé</option>
+          <option value="high">Élevé — cours techniques, vocabulaire pointu</option>
+        </select>
+      </label>
+    </fieldset>
+
+    <fieldset>
+      <legend>RunPod (GPU dans le cloud, optionnel)</legend>
+      <p class="hint">
+        Utile pour les cours longs en large-v3 quand le processeur devient trop
+        lent. Le fichier est découpé sur des silences avant l'envoi.
+      </p>
+      <label class="field">
+        <span>Clé API RunPod</span>
+        <input type="password" id="runpod_api_key" placeholder="rpa_…" autocomplete="off">
+        <small id="runpod-state"></small>
+      </label>
+      <label class="field">
+        <span>Identifiant du endpoint</span>
+        <input type="text" id="runpod_endpoint_id" placeholder="abc123xyz">
+      </label>
+      <label class="field">
+        <span>Durée d'un tronçon (secondes)</span>
+        <input type="number" id="runpod_chunk_seconds" min="30" max="600" step="10">
+        <small>240 s tient dans la limite de charge utile de l'API RunPod.</small>
+      </label>
+    </fieldset>
+
+    <fieldset>
+      <legend>Par défaut</legend>
+      <label class="check">
+        <input type="checkbox" id="keep_media">
+        <span>Conserver le fichier d'origine après transcription</span>
+      </label>
+    </fieldset>
+
+    <div class="dialog-actions">
+      <button type="button" class="btn btn-ghost" id="settings-cancel">Fermer</button>
+      <button type="button" class="btn btn-primary" id="settings-save">Enregistrer</button>
+    </div>
+  </form>
+</dialog>
+
+<div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

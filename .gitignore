@@ -1,0 +1,24 @@
+# Données locales de l'application (médias, base SQLite, config avec clés API)
+data/
+*.wav
+*.mp3
+*.m4a
+*.mp4
+*.mkv
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Éditeurs / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

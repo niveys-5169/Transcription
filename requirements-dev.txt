@@ -1,0 +1,9 @@
+# Dépendances pour faire tourner la suite de tests.
+# Les tests n'ont besoin ni de faster-whisper ni d'anthropic : les moteurs
+# lourds sont remplacés par des doublures.
+
+fastapi>=0.115
+python-multipart>=0.0.9
+numpy>=1.24
+httpx>=0.27
+pytest>=8.0

@@ -1,0 +1,18 @@
+# Dépendances de l'application locale (serveur web + traitement).
+# Le worker RunPod a ses propres dépendances, épinglées dans requirements.txt.
+
+# Serveur web
+fastapi>=0.115
+uvicorn[standard]>=0.30
+python-multipart>=0.0.9
+
+# Traitement audio et appels réseau
+numpy>=1.24
+httpx>=0.27
+imageio-ffmpeg>=0.5          # ffmpeg embarqué, si absent du système
+
+# Transcription sur cette machine
+faster-whisper>=1.0
+
+# Relecture par Claude (facultative : sans clé API, repli sur la relecture simple)
+anthropic>=0.69
