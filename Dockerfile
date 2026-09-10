@@ -1,6 +1,7 @@
 FROM runpod/base:0.6.2-cuda12.1.0
 
-RUN pip install --no-cache-dir faster-whisper runpod
+COPY requirements.txt /requirements.txt
+RUN pip install --no-cache-dir -r /requirements.txt
 
 COPY handler.py /handler.py
 
