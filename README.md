@@ -11,21 +11,27 @@ Tout tourne sur votre machine. Rien n'est envoyé sur Internet, sauf si vous
 activez explicitement le GPU RunPod ou la relecture par Claude.
 
 ```
-   fichier déposé
-        │
-        ▼
-   ┌────────────┐   ffmpeg          ┌──────────────┐   Whisper        ┌───────────┐
-   │ vidéo/audio│ ───────────────►  │ WAV 16 kHz   │ ───────────────► │  texte    │
-   │  n'importe │   extraction      │ mono 16 bits │  transcription   │   brut    │
-   │ quel format│                   └──────────────┘                  └─────┬─────┘
-   └────────────┘                                                           │
-                                                                relecture   ▼
-                            ┌────────────────────────────────────────────────────┐
-                            │  texte ponctué, sans hésitations, en paragraphes,   │
-                            │  avec titre, résumé et intertitres                  │
-                            │  → .txt  .md  .srt  .vtt  .json                     │
-                            └────────────────────────────────────────────────────┘
+  ÉTAPE 1 — TRANSCRIPTION                    │  ÉTAPE 2 — RELECTURE
+  un calcul : rendre ce qui a été dit        │  une lecture : rendre ça lisible
+                                             │
+  ┌────────────┐  ffmpeg   ┌────────────┐    │   ┌──────────────┐   ┌──────────┐
+  │ vidéo/audio│ ────────► │ WAV 16 kHz │    │   │  relecture   │──►│ vérifi-  │
+  │  n'importe │ extraction│ mono 16 b. │    │   │              │   │ cation   │
+  │ quel format│           └─────┬──────┘    │   └──────────────┘   └────┬─────┘
+  └────────────┘                 │ Whisper   │          ▲                │
+                                 ▼           │          │                ▼
+                        ┌─────────────────┐  │  ┌───────┴────────┐  ┌─────────┐
+                        │ texte brut +    │──┼─►│ texte ponctué, │  │ points  │
+                        │ segments datés  │  │  │ structuré,     │  │ à véri- │
+                        └─────────────────┘  │  │ résumé         │  │ fier    │
+                        .txt .srt .vtt .json │  └────────────────┘  └─────────┘
+                        déjà téléchargeables │        .md, .json enrichis
 ```
+
+**Les deux étapes sont indépendantes.** La transcription rend le texte brut et
+s'arrête là ; la relecture part de ce texte, plus tard si vous voulez, et peut
+être relancée autant de fois que nécessaire sans jamais refaire tourner le
+moteur de transcription.
 
 ## Démarrer
 
@@ -52,6 +58,38 @@ python -m venv .venv
 Options : `--port 9000`, `--host 0.0.0.0` (accès depuis le réseau local),
 `--no-browser`, `--reload` (développement).
 </details>
+
+## Pourquoi deux étapes séparées
+
+Transcrire et relire sont deux métiers différents, et les mélanger coûte cher.
+
+**Transcrire est un calcul.** On donne de l'audio, on récupère les mots
+prononcés et leurs horodatages. Whisper fait ça, que ce soit sur votre
+processeur ou sur un GPU loué. Le résultat est vérifiable, reproductible, et
+c'est tout ce qu'on lui demande — d'où le mot « pure » : le worker RunPod ne
+fait rien d'autre, ne reformule rien, ne corrige rien.
+
+**Relire est une lecture.** Il faut comprendre le propos pour savoir qu'« a
+priori » n'était pas « appris ou rit », rétablir la ponctuation, décider où
+commence une nouvelle idée. C'est du travail sur du texte, et il n'a aucune
+raison de se produire au même moment que le calcul.
+
+Les séparer donne trois choses :
+
+- **Le texte brut arrive tout de suite** et ne dépend de rien d'autre. Pas de
+  clé API, pas de réseau, pas d'attente supplémentaire. Sous-titres et
+  segments horodatés sont téléchargeables dès la fin de l'étape 1.
+- **La relecture se rejoue.** Pas satisfait du découpage ? Envie d'essayer
+  sans les intertitres, ou avec un effort plus élevé ? On relance l'étape 2
+  seule : quelques secondes d'appels API, au lieu de plusieurs dizaines de
+  minutes de GPU.
+- **Un échec de relecture ne détruit rien.** Clé expirée, quota atteint,
+  panne réseau : le travail retombe à l'état « transcrit », le texte brut est
+  toujours là, et le bouton **Relire** attend.
+
+Concrètement : décochez **« Relire dans la foulée »** au dépôt pour ne faire
+que transcrire, puis lancez la relecture quand ça vous arrange — le soir, en
+lot, ou jamais.
 
 ## Les trois choix à faire
 
@@ -84,6 +122,33 @@ Sans clé Anthropic, l'application bascule d'elle-même sur la relecture simple.
 Si un appel échoue en cours de route, elle fait de même : **le texte n'est
 jamais perdu.**
 
+### La vérification
+
+Une relecture réussie est invisible — c'est bien le problème. Rien ne
+distingue, à la lecture, un texte fidèle d'un texte où une date a changé ou
+une phrase a disparu. Chaque passage est donc comparé à sa version brute, et
+ce qui cloche est listé dans l'onglet **Vérification**, horodaté.
+
+Deux niveaux, complémentaires :
+
+- **Des règles**, gratuites, hors ligne, toujours actives — y compris en
+  relecture simple. Elles voient ce qui est objectif : un nombre prononcé et
+  absent du texte relu, un sigle disparu, un passage qui a perdu 40 % de sa
+  longueur. « 1 000 » relu en « 1000 » n'est pas une perte ; « vingt » relu en
+  « 20 » non plus — seul le sens de la disparition compte.
+- **Une lecture par Claude**, qui repère ce qu'aucune règle ne voit : un sens
+  qui glisse, une nuance perdue, une phrase ajoutée. Elle ignore délibérément
+  la ponctuation, les majuscules et le retrait des hésitations, qui sont
+  précisément le travail attendu.
+
+Les points relevés partent aussi dans le `.md` et le `.json`. Décochable au
+dépôt : la vérification par Claude double approximativement le coût de la
+relecture, puisqu'elle relit les deux versions.
+
+Une vérification automatique reste une aide, pas une garantie. Sur un passage
+décisif, l'audio fait foi — l'onglet segments et le lecteur intégré sont là
+pour ça.
+
 ## Réglages
 
 Bouton **Réglages**, en haut à droite. Les clés API sont écrites dans
@@ -96,12 +161,12 @@ Les clés peuvent aussi venir de l'environnement (`ANTHROPIC_API_KEY`,
 
 ## Ce que produit l'application
 
-| Format | Contenu |
-|---|---|
-| `.txt` | Le texte relu, seul |
-| `.md` | Document complet : titre, résumé, intertitres, texte |
-| `.srt` / `.vtt` | Sous-titres horodatés |
-| `.json` | Tout : texte relu, texte brut, segments horodatés, métadonnées |
+| Format | Contenu | Dispo dès l'étape 1 |
+|---|---|---|
+| `.txt` | Le texte relu — ou le texte brut s'il n'a pas encore été relu | oui |
+| `.srt` / `.vtt` | Sous-titres horodatés | oui |
+| `.json` | Tout : texte relu, texte brut, segments, vérification, métadonnées | oui |
+| `.md` | Document complet : titre, résumé, intertitres, points à vérifier | oui |
 
 L'onglet **Audio extrait** rejoue le WAV réellement envoyé au moteur. S'il est
 muet, le problème vient de l'extraction et non de la transcription — c'est la
@@ -124,12 +189,14 @@ maintenant fait par ffmpeg, côté serveur.
 | Taille de fichier | Échec au-delà de ~180 Mo | Écriture en flux, sans limite pratique |
 | Formats | Ce que le navigateur sait décoder | Tout ce que ffmpeg lit |
 | Après la transcription | Texte brut de Whisper | Texte relu, structuré, résumé |
+| Fidélité du résultat | À vérifier à la main | Vérifiée et signalée, horodatée |
+| Relecture | — | Étape séparée, relançable sans refaire le calcul |
 | Plusieurs fichiers | Un par un, à la main | File d'attente |
 | Historique | Aucun | Base locale avec recherche |
 | Sorties | `.txt` | `.txt` `.md` `.srt` `.vtt` `.json` |
 | Cours d'une heure sur RunPod | Impossible (limite de 10 Mo par appel) | Découpage sur les silences |
 | Clés API | `localStorage`, en clair | Fichier local en permissions restreintes |
-| Tests | Scripts ponctuels | 74 tests automatisés |
+| Tests | Scripts ponctuels | 107 tests automatisés |
 
 ### Bugs du prototype, et comment ils ont disparu
 
@@ -153,18 +220,25 @@ Les sept bugs de l'historique du projet, et leur sort :
 7. **`runpod.serverless.start()` non détecté** — l'appel reste inconditionnel,
    au niveau module, dans `handler.py`.
 
-## RunPod : le découpage, et pourquoi il fallait le faire
+## RunPod : transcription pure, et rien d'autre
 
-L'API `/run` de RunPod plafonne la charge utile à environ 10 Mo. Un WAV
-16 kHz mono 16 bits encodé en base64 pèse ~42 ko par seconde : **un seul appel
-ne peut donc porter que quatre minutes d'audio.** Le prototype envoyait le
-fichier entier — au-delà de quelques minutes, il ne pouvait pas fonctionner.
+Le worker RunPod reçoit de l'audio et rend du texte avec ses horodatages. Il
+ne relit pas, ne structure pas, ne vérifie pas, n'appelle aucun autre service.
+C'est du calcul GPU, facturé à la seconde : tout ce qui peut se faire ailleurs
+doit se faire ailleurs.
 
-L'application découpe donc le WAV avant l'envoi. Pas à intervalle fixe, ce qui
-couperait au milieu d'un mot : elle mesure l'énergie du signal, cherche le
-passage le plus calme autour de la durée cible — une respiration entre deux
-phrases — et coupe là. Les horodatages de chaque tronçon sont ensuite recalés
-sur le fichier d'origine.
+Le découpage de l'audio, lui, se fait **côté application, avant l'envoi** —
+c'est une contrainte de transport, pas un traitement. L'API `/run` de RunPod
+plafonne la charge utile à environ 10 Mo, et un WAV 16 kHz mono 16 bits encodé
+en base64 pèse ~42 ko par seconde : **un seul appel ne peut donc porter que
+quatre minutes d'audio.** Le prototype envoyait le fichier entier — au-delà de
+quelques minutes, il ne pouvait pas fonctionner.
+
+Le découpage n'est pas fait à intervalle fixe, ce qui couperait au milieu d'un
+mot : l'application mesure l'énergie du signal, cherche le passage le plus
+calme autour de la durée cible — une respiration entre deux phrases — et coupe
+là. Chaque tronçon part comme un appel indépendant, et les horodatages sont
+recalés sur le fichier d'origine à l'arrivée.
 
 ### Déployer le worker GPU
 
@@ -232,10 +306,11 @@ fichiers audio sont synthétisés. La suite tourne en quelques secondes.
 |---|---|
 | `run.py` | Point d'entrée |
 | `app/server.py` | API HTTP et page unique |
-| `app/pipeline.py` | Enchaînement extraction → transcription → relecture |
+| `app/pipeline.py` | Les deux étapes : transcription, puis relecture |
 | `app/media.py` | ffmpeg, découpage sur les silences |
 | `app/engines/` | Moteurs de transcription (local, RunPod) |
 | `app/proofread/` | Relecture : par Claude, ou par règles |
+| `app/proofread/verify.py` | Vérification : règles, puis lecture par Claude |
 | `app/exporters.py` | txt, md, srt, vtt, json |
 | `app/db.py` | Historique SQLite |
 | `app/static/` | Interface |
@@ -243,7 +318,16 @@ fichiers audio sont synthétisés. La suite tourne en quelques secondes.
 
 Ajouter un moteur : implémenter le protocole de `app/engines/base.py`
 (`is_available`, `transcribe` en générateur de `Segment`) et l'inscrire dans
-`app/engines/__init__.py`.
+`app/engines/__init__.py`. Un moteur ne voit que de l'audio et ne rend que des
+segments — la relecture n'est pas son affaire.
+
+Les deux étapes exposées par l'API :
+
+```
+POST /api/jobs                    dépose un fichier et lance l'étape 1
+POST /api/jobs/{id}/proofread     lance ou relance l'étape 2, seule
+POST /api/jobs/{id}/retry         relance l'étape 1 depuis le fichier d'origine
+```
 
 ## Ce qui n'est pas fait
 

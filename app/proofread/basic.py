@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import re
 
-from .base import ProofreadResult
+from dataclasses import dataclass
+
+from .base import ProofreadResult, TextPair
 from .chunking import _bounds_of, _text_of
 
 # Interjections d'oral, retirées seulement quand elles forment un mot entier.
@@ -84,11 +86,21 @@ def clean_line(text: str) -> str:
     return fix_typography(collapse_repeats(strip_fillers(text)))
 
 
-def split_paragraphs(segments) -> list[str]:
+@dataclass
+class Paragraph:
+    """Un paragraphe brut, avec sa position dans l'enregistrement."""
+
+    text: str
+    start: float
+    end: float
+
+
+def split_paragraph_spans(segments) -> list[Paragraph]:
     """Regroupe les segments en paragraphes, en s'appuyant sur les pauses."""
-    paragraphs: list[str] = []
+    paragraphs: list[Paragraph] = []
     current: list[str] = []
     length = 0
+    start_at: float | None = None
     previous_end: float | None = None
 
     for segment in segments:
@@ -103,20 +115,43 @@ def split_paragraphs(segments) -> list[str]:
             or length >= MAX_PARAGRAPH_CHARS
         )
         if should_break:
-            paragraphs.append(" ".join(current))
-            current, length = [], 0
+            paragraphs.append(
+                Paragraph(" ".join(current), start_at or 0.0, previous_end or 0.0)
+            )
+            current, length, start_at = [], 0, None
 
+        if start_at is None:
+            start_at = start
         current.append(text)
         length += len(text) + 1
         previous_end = end
 
     if current:
-        paragraphs.append(" ".join(current))
+        paragraphs.append(
+            Paragraph(" ".join(current), start_at or 0.0, previous_end or 0.0)
+        )
     return paragraphs
+
+
+def split_paragraphs(segments) -> list[str]:
+    """Paragraphes bruts, texte seul."""
+    return [paragraph.text for paragraph in split_paragraph_spans(segments)]
 
 
 def basic_proofread(segments) -> ProofreadResult:
     """Relecture mécanique d'une liste de segments."""
-    paragraphs = [clean_line(paragraph) for paragraph in split_paragraphs(segments)]
-    body = "\n\n".join(p for p in paragraphs if p)
-    return ProofreadResult(text=body, mode="basic")
+    pairs: list[TextPair] = []
+    for paragraph in split_paragraph_spans(segments):
+        nettoye = clean_line(paragraph.text)
+        if nettoye:
+            pairs.append(
+                TextPair(
+                    start=paragraph.start,
+                    end=paragraph.end,
+                    raw=paragraph.text,
+                    clean=nettoye,
+                )
+            )
+
+    body = "\n\n".join(pair.clean for pair in pairs)
+    return ProofreadResult(text=body, mode="basic", pairs=pairs)

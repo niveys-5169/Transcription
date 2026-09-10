@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from app import config, db, engines, media, server
 from app.engines.base import Segment
+from app.proofread.base import ProofreadResult, TextPair
 
 FAUX_SEGMENTS = [
     Segment(0.0, 3.0, "alors euh bonjour à tous"),
@@ -87,14 +88,24 @@ def _deposer(client, nom="cours.mp4", **champs):
     return reponse.json()["id"]
 
 
-def _attendre(client, job_id, timeout=20.0):
+def _attendre_statut(client, job_id, statuts, timeout=20.0):
+    """Attend que le travail atteigne l'un des statuts donnés."""
     limite = time.monotonic() + timeout
+    job = None
     while time.monotonic() < limite:
         job = client.get(f"/api/jobs/{job_id}").json()
-        if job["status"] in {"done", "error", "canceled"}:
+        if job["status"] in statuts:
             return job
         time.sleep(0.15)
-    raise AssertionError(f"Travail {job_id} toujours en {job['status']}")
+    raise AssertionError(
+        f"Travail {job_id} toujours en {job['status'] if job else '?'}, "
+        f"attendu {statuts}"
+    )
+
+
+def _attendre(client, job_id, timeout=20.0):
+    """Attend la fin complète du travail — relecture comprise."""
+    return _attendre_statut(client, job_id, {"done", "error", "canceled"}, timeout)
 
 
 # --------------------------------------------------------------------- état
@@ -286,3 +297,153 @@ def test_mode_sans_relecture_ne_touche_pas_aux_mots(client):
     # Les scories de l'oral sont conservées telles quelles.
     assert "euh" in job["clean_text"]
     assert "le le" in job["clean_text"]
+
+
+# ------------------------------------------- deux étapes : transcrire, relire
+
+
+def test_sans_enchainement_le_travail_s_arrete_apres_la_transcription(client):
+    job_id = _deposer(client, "cours.mp4", chain="false")
+    job = _attendre_statut(client, job_id, {"transcribed"})
+
+    assert job["status"] == "transcribed"
+    assert job["raw_text"]
+    assert len(job["segments"]) == len(FAUX_SEGMENTS)
+    # La relecture n'a pas eu lieu : pas de texte relu, pas de vérification.
+    assert not job["clean_text"]
+    assert job["verification"] == []
+
+
+def test_un_travail_transcrit_est_deja_telechargeable(client):
+    job_id = _deposer(client, "brut.mp4", chain="false")
+    _attendre_statut(client, job_id, {"transcribed"})
+
+    for fmt in ("txt", "srt", "vtt", "json"):
+        reponse = client.get(f"/api/jobs/{job_id}/download/{fmt}")
+        assert reponse.status_code == 200, fmt
+    # Le .txt retombe sur le texte brut, faute de texte relu.
+    assert "euh" in client.get(f"/api/jobs/{job_id}/download/txt").text
+
+
+def test_la_relecture_se_lance_separement_plus_tard(client):
+    job_id = _deposer(client, "cours.mp4", chain="false")
+    _attendre_statut(client, job_id, {"transcribed"})
+
+    reponse = client.post(f"/api/jobs/{job_id}/proofread", json={"proofread": "basic"})
+    assert reponse.status_code == 200
+
+    job = _attendre(client, job_id)
+    assert job["status"] == "done"
+    assert "euh" not in job["clean_text"]
+    # La transcription n'a pas été refaite : mêmes segments.
+    assert len(job["segments"]) == len(FAUX_SEGMENTS)
+
+
+def test_la_relecture_peut_etre_relancee_avec_d_autres_reglages(client):
+    job_id = _deposer(client, "cours.mp4", proofread="basic")
+    premier = _attendre(client, job_id)
+    assert "euh" not in premier["clean_text"]
+
+    # Rejouer en mode « aucune relecture » : le texte redevient brut.
+    assert client.post(
+        f"/api/jobs/{job_id}/proofread", json={"proofread": "none"}
+    ).status_code == 200
+    second = _attendre(client, job_id)
+    assert second["proofread"] == "none"
+    assert "euh" in second["clean_text"]
+
+
+def test_relecture_refusee_sans_transcription(client, monkeypatch):
+    monkeypatch.setitem(engines._ENGINES, "local", MoteurEnEchec)
+    job_id = _deposer(client)
+    _attendre(client, job_id)
+
+    reponse = client.post(f"/api/jobs/{job_id}/proofread")
+    assert reponse.status_code == 409
+    assert "transcription" in reponse.json()["detail"].lower()
+
+
+def test_relecture_d_un_travail_inexistant(client):
+    assert client.post("/api/jobs/inconnu/proofread").status_code == 404
+
+
+def test_mode_de_relecture_invalide_refuse(client):
+    job_id = _deposer(client, chain="false")
+    _attendre_statut(client, job_id, {"transcribed"})
+    reponse = client.post(f"/api/jobs/{job_id}/proofread", json={"proofread": "zen"})
+    assert reponse.status_code == 400
+
+
+def test_la_verification_par_regles_tourne_meme_en_relecture_simple(client):
+    job_id = _deposer(client, proofread="basic")
+    job = _attendre(client, job_id)
+
+    rapport = job["verification"]
+    assert rapport["mode"] == "regles"
+    assert rapport["checked_pairs"] > 0
+    assert "counts" in rapport
+
+
+def test_la_verification_signale_un_chiffre_perdu(client, monkeypatch):
+    class MoteurAvecChiffre:
+        name, label = "local", "chiffre"
+
+        def is_available(self):
+            return True, "ok"
+
+        def transcribe(self, *args, **kwargs):
+            # « 42 » disparaîtra : le nettoyage mécanique retire « euh »,
+            # mais on force ici une relecture qui perd le nombre.
+            yield Segment(0.0, 5.0, "le seuil est fixé à 42 degrés exactement")
+
+    # Relecture qui perd le nombre : c'est précisément ce que la
+    # vérification doit rattraper.
+    relu = "Le seuil est fixé à quelques degrés exactement."
+    monkeypatch.setitem(engines._ENGINES, "local", MoteurAvecChiffre)
+    monkeypatch.setattr(
+        "app.pipeline.basic_proofread",
+        lambda segments: ProofreadResult(
+            text=relu,
+            mode="basic",
+            pairs=[
+                TextPair(
+                    start=0.0,
+                    end=5.0,
+                    raw="le seuil est fixé à 42 degrés exactement",
+                    clean=relu,
+                )
+            ],
+        ),
+    )
+
+    job = _attendre(client, _deposer(client, proofread="basic"))
+    points = job["verification"]["findings"]
+    assert any(p["kind"] == "chiffre" and "42" in p["message"] for p in points)
+
+
+def test_les_points_a_verifier_apparaissent_dans_le_markdown(client, monkeypatch):
+    job_id = _deposer(client, "chiffres.mp4", proofread="basic")
+    _attendre(client, job_id)
+    db.update_job(
+        job_id,
+        verification={
+            "mode": "regles",
+            "checked_pairs": 1,
+            "counts": {"haute": 1, "moyenne": 0, "basse": 0},
+            "findings": [
+                {
+                    "kind": "chiffre",
+                    "severity": "haute",
+                    "message": "Le nombre « 42 » est absent du texte relu.",
+                    "start": 12.0,
+                    "raw_excerpt": "",
+                    "clean_excerpt": "",
+                    "source": "regles",
+                }
+            ],
+        },
+    )
+    markdown = client.get(f"/api/jobs/{job_id}/download/md").text
+    assert "## Points à vérifier" in markdown
+    assert "00:00:12" in markdown
+    assert "42" in markdown

@@ -78,6 +78,16 @@
           <input type="checkbox" id="structure" checked>
           <span>Ajouter un titre, un résumé et des intertitres</span>
         </label>
+
+        <label class="check">
+          <input type="checkbox" id="verify" checked>
+          <span>Vérifier la fidélité au texte brut</span>
+        </label>
+
+        <label class="check">
+          <input type="checkbox" id="chain" checked>
+          <span>Relire dans la foulée <small>(sinon : transcrire seulement)</small></span>
+        </label>
       </div>
 
       <div class="upload-actions">
@@ -113,6 +123,9 @@
             <p id="result-meta" class="meta"></p>
           </div>
           <div class="result-tools">
+            <button type="button" class="btn btn-primary" id="proofread-btn" hidden>
+              Relire avec Claude
+            </button>
             <button type="button" class="btn btn-ghost" id="copy-btn">Copier</button>
             <div class="menu">
               <button type="button" class="btn btn-ghost" id="download-btn" aria-haspopup="true">
@@ -141,12 +154,16 @@
           <button type="button" class="tab is-active" data-tab="clean" role="tab">Texte relu</button>
           <button type="button" class="tab" data-tab="raw" role="tab">Texte brut</button>
           <button type="button" class="tab" data-tab="segments" role="tab">Segments horodatés</button>
+          <button type="button" class="tab" data-tab="verify" role="tab">
+            Vérification <span id="verify-count" class="tab-badge" hidden></span>
+          </button>
           <button type="button" class="tab" data-tab="audio" role="tab">Audio extrait</button>
         </div>
 
         <div class="tab-panel" id="panel-clean"></div>
         <div class="tab-panel" id="panel-raw" hidden></div>
         <div class="tab-panel" id="panel-segments" hidden></div>
+        <div class="tab-panel" id="panel-verify" hidden></div>
         <div class="tab-panel" id="panel-audio" hidden>
           <p class="meta">
             Le WAV 16 kHz mono effectivement envoyé au moteur. S'il est muet,

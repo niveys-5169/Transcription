@@ -42,6 +42,32 @@ def parse_json_object(raw: str) -> dict:
     return {}
 
 
+def parse_json_array(raw: str) -> list:
+    """Extrait un tableau JSON d'une réponse de modèle, tolérant aux enrobages."""
+    if not raw:
+        return []
+    text = raw.strip()
+
+    fenced = _JSON_FENCE.search(text)
+    if fenced:
+        text = fenced.group(1).strip()
+
+    try:
+        parsed = json.loads(text)
+        return parsed if isinstance(parsed, list) else []
+    except json.JSONDecodeError:
+        pass
+
+    start, end = text.find("["), text.rfind("]")
+    if start != -1 and end > start:
+        try:
+            parsed = json.loads(text[start : end + 1])
+            return parsed if isinstance(parsed, list) else []
+        except json.JSONDecodeError:
+            return []
+    return []
+
+
 def _fingerprint(text: str) -> tuple[str, list[int]]:
     """Version alphanumérique du texte + position d'origine de chaque caractère.
 

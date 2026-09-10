@@ -69,8 +69,28 @@ def to_json(job: dict) -> str:
         "texte_relu": job.get("clean_text"),
         "texte_brut": job.get("raw_text"),
         "segments": job.get("segments") or [],
+        "verification": _verification(job),
     }
     return json.dumps(payload, ensure_ascii=False, indent=2)
+
+
+def _verification(job: dict) -> dict:
+    raw = job.get("verification")
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str) and raw:
+        try:
+            parsed = json.loads(raw)
+            return parsed if isinstance(parsed, dict) else {}
+        except json.JSONDecodeError:
+            return {}
+    return {}
+
+
+def findings(job: dict) -> list[dict]:
+    """Points à vérifier, du plus grave au moins grave."""
+    entries = _verification(job).get("findings")
+    return entries if isinstance(entries, list) else []
 
 
 def _summary_list(job: dict) -> list[str]:
@@ -110,6 +130,22 @@ def _markdown(job: dict) -> str:
 
     body = (job.get("clean_text") or job.get("raw_text") or "").strip()
     parts.append(body)
+
+    points = findings(job)
+    if points:
+        lignes = ["## Points à vérifier", ""]
+        lignes.append(
+            "_Signalés par la vérification automatique : à confronter à "
+            "l'enregistrement._"
+        )
+        lignes.append("")
+        for point in points:
+            horodatage = timecode(point.get("start", 0)).split(",")[0]
+            gravite = str(point.get("severity", "")).strip()
+            message = str(point.get("message", "")).strip()
+            lignes.append(f"- **{horodatage}** ({gravite}) — {message}")
+        parts.append("\n".join(lignes))
+
     return "\n\n".join(parts).strip() + "\n"
 
 

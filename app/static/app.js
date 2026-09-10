@@ -192,6 +192,8 @@ async function submitFiles(event) {
     form.append("language", $("language").value);
     form.append("proofread", $("proofread").value);
     form.append("structure", $("structure").checked ? "true" : "false");
+    form.append("verify", $("verify").checked ? "true" : "false");
+    form.append("chain", $("chain").checked ? "true" : "false");
 
     button.textContent = files.length > 1
       ? `Envoi ${sent + 1}/${files.length}…`
@@ -220,10 +222,17 @@ function statusLabel(job) {
   return {
     queued: "En attente",
     running: job.stage || "En cours",
+    transcribed: "Transcrit — à relire",
     done: "Terminé",
     error: "Erreur",
     canceled: "Annulé",
   }[job.status] || job.status;
+}
+
+// Un travail transcrit est déjà exploitable : texte brut, segments et
+// sous-titres sont disponibles, la relecture peut venir plus tard.
+function isReadable(job) {
+  return job.status === "transcribed" || job.status === "done";
 }
 
 function renderJobs() {
@@ -368,6 +377,15 @@ function renderDetail() {
         </div>`).join("")}</div>`
     : `<p class="empty">Aucun segment.</p>`;
 
+  renderVerification(job);
+
+  // La relecture est une étape à part : on peut la lancer, ou la relancer
+  // avec d'autres réglages, sur n'importe quel travail déjà transcrit.
+  const proofreadBtn = $("proofread-btn");
+  proofreadBtn.hidden = !isReadable(job);
+  proofreadBtn.textContent =
+    job.status === "done" ? "Relancer la relecture" : "Relire maintenant";
+
   const player = $("audio-player");
   const audioUrl = `/api/jobs/${job.id}/audio`;
   if (player.dataset.job !== job.id) {
@@ -378,12 +396,81 @@ function renderDetail() {
   showTab(state.tab);
 }
 
+const KIND_LABELS = {
+  omission: "omission",
+  ajout: "ajout",
+  sens: "sens",
+  terme: "terme",
+  chiffre: "chiffre",
+  coupure: "coupure",
+};
+
+function renderVerification(job) {
+  const rapport = job.verification || {};
+  const points = Array.isArray(rapport.findings) ? rapport.findings : [];
+  const badge = $("verify-count");
+  const graves = points.filter((p) => p.severity === "haute").length;
+
+  badge.hidden = points.length === 0;
+  badge.textContent = String(points.length);
+  badge.style.background = graves ? "var(--danger)" : "var(--warn)";
+
+  const panel = $("panel-verify");
+
+  if (!isReadable(job)) {
+    panel.innerHTML = `<p class="empty">Vérification disponible après la relecture.</p>`;
+    return;
+  }
+  if (!rapport.mode) {
+    panel.innerHTML = `<p class="empty">
+      Ce travail n'a pas encore été relu, donc rien n'a été vérifié.
+    </p>`;
+    return;
+  }
+
+  const entete = `
+    <div class="verify-summary">
+      <span class="badge">${rapport.checked_pairs || 0} passages comparés</span>
+      <span class="badge">${
+        rapport.mode === "claude" ? "règles + lecture par Claude" : "règles seules"
+      }</span>
+      ${points.length
+        ? `<span class="badge error">${graves} point${graves > 1 ? "s" : ""} à regarder de près</span>`
+        : `<span class="verify-ok">Aucun écart détecté</span>`}
+    </div>`;
+
+  if (!points.length) {
+    panel.innerHTML = `${entete}
+      <p class="meta">
+        Aucune différence de sens n'a été relevée entre le texte brut et le
+        texte relu. Une vérification automatique reste une aide, pas une
+        garantie : sur un passage décisif, l'audio fait foi.
+      </p>`;
+    return;
+  }
+
+  panel.innerHTML = entete + points.map((point) => `
+    <div class="finding ${escapeHtml(point.severity)}">
+      <div class="finding-head">
+        <time>${clock(point.start)}</time>
+        <span class="finding-kind">${escapeHtml(KIND_LABELS[point.kind] || point.kind)}</span>
+        <span class="finding-kind">${point.source === "claude" ? "Claude" : "règle"}</span>
+      </div>
+      <p class="finding-message">${escapeHtml(point.message)}</p>
+      ${point.raw_excerpt || point.clean_excerpt ? `
+        <div class="finding-quotes">
+          ${point.raw_excerpt ? `<div class="finding-quote"><b>Brut</b><span>${escapeHtml(point.raw_excerpt)}</span></div>` : ""}
+          ${point.clean_excerpt ? `<div class="finding-quote"><b>Relu</b><span>${escapeHtml(point.clean_excerpt)}</span></div>` : ""}
+        </div>` : ""}
+    </div>`).join("");
+}
+
 function showTab(name) {
   state.tab = name;
   document.querySelectorAll(".tab").forEach((tab) =>
     tab.classList.toggle("is-active", tab.dataset.tab === name)
   );
-  ["clean", "raw", "segments", "audio"].forEach((key) => {
+  ["clean", "raw", "segments", "verify", "audio"].forEach((key) => {
     $(`panel-${key}`).hidden = key !== name;
   });
 }
@@ -486,6 +573,30 @@ function initActions() {
       menu.hidden = true;
     })
   );
+
+  $("proofread-btn").addEventListener("click", async () => {
+    const job = state.detail;
+    if (!job) return;
+    const button = $("proofread-btn");
+    button.disabled = true;
+    try {
+      await api(`/api/jobs/${job.id}/proofread`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          proofread: $("proofread").value,
+          structure: $("structure").checked,
+          verify: $("verify").checked,
+        }),
+      });
+      toast("Relecture lancée.");
+      await refreshJobs();
+    } catch (error) {
+      toast(error.message, true);
+    } finally {
+      button.disabled = false;
+    }
+  });
 
   $("delete-btn").addEventListener("click", async () => {
     const job = state.detail;

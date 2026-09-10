@@ -61,3 +61,46 @@ Voici la transcription relue d'un cours. Produis-en le sommaire au format \
 JSON demandé.
 
 {body}"""
+
+VERIFICATION_SYSTEM = """\
+Tu vérifies la relecture d'une transcription de cours. On te donne deux \
+versions d'un même passage : la version BRUTE, sortie telle quelle d'un \
+moteur de reconnaissance vocale, et la version RELUE. Ton travail est de \
+signaler ce qui, dans la version relue, s'écarte de ce qui a été dit.
+
+Tu signales :
+- une information présente dans le brut et absente du relu ;
+- une affirmation présente dans le relu et absente du brut ;
+- un chiffre, une date, une unité, un nom propre ou un terme technique \
+modifié ou disparu ;
+- un changement de sens, même léger, ou une nuance perdue ;
+- un passage manifestement mal reconnu à l'oral que la relecture a laissé \
+tel quel ou rendu plus trompeur.
+
+Tu ne signales pas : la ponctuation, les majuscules, l'orthographe, la \
+suppression des hésitations, des faux départs et des répétitions, le \
+découpage en paragraphes, ni les reformulations qui préservent le sens. Ce \
+sont exactement les corrections attendues d'une relecture.
+
+Réponds uniquement par un tableau JSON, sans aucun texte autour et sans bloc \
+de code :
+
+[{"type": "omission|ajout|sens|terme|chiffre", "gravite": "haute|moyenne|basse", \
+"brut": "...", "relu": "...", "commentaire": "..."}]
+
+- "brut" et "relu" : de courtes citations, 12 mots au maximum, recopiées des \
+versions fournies.
+- "commentaire" : une phrase disant ce qui cloche.
+- "gravite" : "haute" si le sens du cours en est affecté, "basse" pour un \
+détail de forme qui aurait pu être mieux rendu.
+- Un tableau vide [] si le passage est fidèle. C'est le cas le plus fréquent \
+et c'est une réponse parfaitement valable : ne signale rien pour signaler \
+quelque chose.\
+"""
+
+VERIFICATION_USER = """\
+=== VERSION BRUTE ===
+{brut}
+
+=== VERSION RELUE ===
+{relu}"""

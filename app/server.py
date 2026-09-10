@@ -29,8 +29,8 @@ async def lifespan(_: FastAPI):
     config.ensure_dirs()
     db.init_db()
     db.reset_interrupted()
-    for job_id in db.pending_job_ids():
-        pipeline.enqueue(job_id)
+    for job_id, task in db.pending_tasks():
+        pipeline.enqueue(job_id, task)
     pipeline.start_worker()
     yield
 
@@ -103,6 +103,8 @@ async def create_job(
     language: str | None = Form(None),
     proofread: str | None = Form(None),
     structure: bool = Form(True),
+    verify: bool = Form(True),
+    chain: bool = Form(True),
 ) -> dict:
     settings = config.load_settings()
     engine = engine or settings.default_engine
@@ -148,6 +150,8 @@ async def create_job(
         language=language,
         proofread=proofread,
         structure=structure,
+        verify=verify,
+        chain=chain,
     )
 
     # Ranger le média dans le dossier du travail, maintenant qu'on a son id.
@@ -181,6 +185,46 @@ async def cancel_job(job_id: str) -> dict:
     return _decorate(db.get_job(job_id, with_content=False))
 
 
+@app.post("/api/jobs/{job_id}/proofread")
+async def proofread_job(job_id: str, payload: dict = Body(default={})) -> dict:
+    """Lance (ou relance) la relecture d'un travail déjà transcrit.
+
+    C'est l'étape 2, indépendante : elle repart des segments déjà en base,
+    sans retoucher à l'audio ni refaire tourner le moteur de transcription.
+    Elle peut donc être jouée plus tard, et rejouée avec d'autres réglages.
+    """
+    job = db.get_job(job_id, with_content=False)
+    if job is None:
+        raise HTTPException(404, "Travail introuvable.")
+    if job["status"] == "running":
+        raise HTTPException(409, "Ce travail est déjà en cours.")
+    if job["status"] not in {"transcribed", "done", "error", "canceled"}:
+        raise HTTPException(409, "Ce travail n'est pas encore transcrit.")
+
+    complet = db.get_job(job_id)
+    if not (complet and complet.get("segments")):
+        raise HTTPException(
+            409, "Aucune transcription à relire : relancez d'abord la transcription."
+        )
+
+    mode = payload.get("proofread") or job["proofread"] or "basic"
+    if mode not in config.PROOFREAD_MODES:
+        raise HTTPException(400, f"Mode de relecture inconnu : {mode}")
+
+    db.update_job(
+        job_id,
+        proofread=mode,
+        structure=bool(payload.get("structure", job["structure"])),
+        verify=bool(payload.get("verify", job["verify"])),
+        status="queued",
+        stage="Relecture en attente",
+        progress=0.0,
+        error=None,
+    )
+    pipeline.enqueue(job_id, pipeline.TASK_PROOFREAD)
+    return _decorate(db.get_job(job_id, with_content=False))
+
+
 @app.post("/api/jobs/{job_id}/retry")
 async def retry_job(job_id: str) -> dict:
     job = db.get_job(job_id, with_content=False)
@@ -195,7 +239,7 @@ async def retry_job(job_id: str) -> dict:
     db.update_job(
         job_id, status="queued", stage="En attente", progress=0.0, error=None
     )
-    pipeline.enqueue(job_id)
+    pipeline.enqueue(job_id, pipeline.TASK_TRANSCRIPTION)
     return _decorate(db.get_job(job_id, with_content=False))
 
 
@@ -231,7 +275,10 @@ async def download(job_id: str, fmt: str) -> Response:
     job = db.get_job(job_id)
     if job is None:
         raise HTTPException(404, "Travail introuvable.")
-    if job["status"] != "done":
+    # Un travail transcrit mais pas encore relu est déjà téléchargeable : le
+    # texte brut, les segments et les sous-titres sont là. C'est tout l'objet
+    # de la séparation des deux étapes.
+    if job["status"] not in {"transcribed", "done"}:
         raise HTTPException(409, "La transcription n'est pas terminée.")
 
     filename = exporters.safe_filename(job["filename"], fmt)

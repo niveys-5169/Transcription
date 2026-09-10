@@ -28,6 +28,9 @@ CREATE TABLE IF NOT EXISTS jobs (
     language      TEXT,
     proofread     TEXT,
     structure     INTEGER DEFAULT 1,
+    verify        INTEGER DEFAULT 1,
+    chain         INTEGER DEFAULT 1,
+    task          TEXT,
     status        TEXT NOT NULL,
     stage         TEXT,
     progress      REAL DEFAULT 0,
@@ -36,6 +39,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     raw_text      TEXT,
     clean_text    TEXT,
     segments      TEXT,
+    verification  TEXT,
     error         TEXT,
     created_at    TEXT NOT NULL,
     updated_at    TEXT NOT NULL,
@@ -44,9 +48,23 @@ CREATE TABLE IF NOT EXISTS jobs (
 CREATE INDEX IF NOT EXISTS idx_jobs_created ON jobs (created_at DESC);
 """
 
+# Colonnes ajoutées après coup : appliquées à une base existante au démarrage.
+MIGRATIONS = {
+    "verify": "INTEGER DEFAULT 1",
+    "chain": "INTEGER DEFAULT 1",
+    "task": "TEXT",
+    "verification": "TEXT",
+}
+
 # Colonnes lourdes, exclues des listes (une transcription d'une heure fait
 # plusieurs centaines de kilo-octets).
-HEAVY_COLUMNS = ("raw_text", "clean_text", "segments")
+HEAVY_COLUMNS = ("raw_text", "clean_text", "segments", "verification")
+
+# Statuts d'un travail. La transcription et la relecture sont deux étapes
+# distinctes : « transcribed » est un état stable et exploitable, pas une
+# étape intermédiaire — le texte brut est déjà là, la relecture peut être
+# lancée plus tard, relancée, ou jamais.
+STATUSES = ("queued", "running", "transcribed", "done", "error", "canceled")
 
 # Les chemins de fichiers sont inclus : le worker et plusieurs routes en ont
 # besoin sans vouloir charger la transcription entière. Ils sont retirés des
@@ -54,8 +72,8 @@ HEAVY_COLUMNS = ("raw_text", "clean_text", "segments")
 # l'utilisateur n'a rien à faire dans le navigateur.
 LIST_COLUMNS = (
     "id, filename, media_path, wav_path, size_bytes, duration, engine, model, "
-    "language, proofread, structure, status, stage, progress, title, summary, "
-    "error, created_at, updated_at, finished_at"
+    "language, proofread, structure, verify, chain, task, status, stage, "
+    "progress, title, summary, error, created_at, updated_at, finished_at"
 )
 
 
@@ -76,14 +94,25 @@ def connect(db_path: Path | None = None) -> sqlite3.Connection:
 def init_db(db_path: Path | None = None) -> None:
     with connect(db_path) as conn:
         conn.executescript(SCHEMA)
+        existantes = {
+            row["name"] for row in conn.execute("PRAGMA table_info(jobs)").fetchall()
+        }
+        for colonne, definition in MIGRATIONS.items():
+            if colonne not in existantes:
+                conn.execute(f"ALTER TABLE jobs ADD COLUMN {colonne} {definition}")
 
 
 def _row_to_dict(row: sqlite3.Row) -> dict:
     data = dict(row)
-    if "segments" in data:
-        data["segments"] = json.loads(data["segments"]) if data["segments"] else []
-    if "structure" in data:
-        data["structure"] = bool(data["structure"])
+    for colonne in ("segments", "verification"):
+        if colonne in data:
+            try:
+                data[colonne] = json.loads(data[colonne]) if data[colonne] else []
+            except (json.JSONDecodeError, TypeError):
+                data[colonne] = []
+    for colonne in ("structure", "verify", "chain"):
+        if colonne in data:
+            data[colonne] = bool(data[colonne])
     return data
 
 
@@ -97,6 +126,8 @@ def create_job(
     language: str,
     proofread: str,
     structure: bool,
+    verify: bool = True,
+    chain: bool = True,
 ) -> str:
     job_id = uuid.uuid4().hex[:12]
     now = _now()
@@ -104,9 +135,9 @@ def create_job(
         conn.execute(
             """
             INSERT INTO jobs (id, filename, media_path, size_bytes, engine, model,
-                              language, proofread, structure, status, stage,
-                              progress, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 'En attente', 0, ?, ?)
+                              language, proofread, structure, verify, chain,
+                              status, stage, progress, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 'En attente', 0, ?, ?)
             """,
             (
                 job_id,
@@ -118,6 +149,8 @@ def create_job(
                 language,
                 proofread,
                 int(structure),
+                int(verify),
+                int(chain),
                 now,
                 now,
             ),
@@ -128,10 +161,12 @@ def create_job(
 def update_job(job_id: str, **fields: Any) -> None:
     if not fields:
         return
-    if "segments" in fields and not isinstance(fields["segments"], str):
-        fields["segments"] = json.dumps(fields["segments"], ensure_ascii=False)
-    if "structure" in fields:
-        fields["structure"] = int(bool(fields["structure"]))
+    for colonne in ("segments", "verification"):
+        if colonne in fields and not isinstance(fields[colonne], (str, type(None))):
+            fields[colonne] = json.dumps(fields[colonne], ensure_ascii=False)
+    for colonne in ("structure", "verify", "chain"):
+        if colonne in fields:
+            fields[colonne] = int(bool(fields[colonne]))
     fields["updated_at"] = _now()
     assignments = ", ".join(f"{key} = ?" for key in fields)
     with connect() as conn:
@@ -168,18 +203,22 @@ def delete_job(job_id: str) -> dict | None:
     return job
 
 
-def pending_job_ids() -> list[str]:
-    """Travaux à (re)mettre en file au démarrage du serveur."""
+def pending_tasks() -> list[tuple[str, str]]:
+    """Travaux à remettre en file au démarrage, avec l'étape à reprendre."""
     with connect() as conn:
         rows = conn.execute(
-            "SELECT id FROM jobs WHERE status IN ('queued', 'running') "
+            "SELECT id, task FROM jobs WHERE status IN ('queued', 'running') "
             "ORDER BY created_at ASC"
         ).fetchall()
-    return [row["id"] for row in rows]
+    return [(row["id"], row["task"] or "transcription") for row in rows]
 
 
 def reset_interrupted() -> None:
-    """Un travail « running » au démarrage vient d'un arrêt du serveur."""
+    """Un travail « running » au démarrage vient d'un arrêt du serveur.
+
+    L'étape en cours (``task``) est conservée : une relecture interrompue
+    reprend à la relecture, sans refaire la transcription.
+    """
     with connect() as conn:
         conn.execute(
             "UPDATE jobs SET status = 'queued', progress = 0, "
