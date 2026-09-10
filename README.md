@@ -252,6 +252,27 @@ Le dépôt contient aussi le worker RunPod Serverless (`handler.py`,
 3. Workers : min 0 (aucun coût entre deux usages), max selon vos besoins.
 4. Reportez l'**Endpoint ID** et une **clé API** dans les réglages de l'app.
 
+> **« Could not find runpod.serverless.start() in your repo »**
+>
+> Cet avertissement est un faux négatif sur un dépôt **privé**, et il
+> n'empêche pas le déploiement : cliquez sur **Next**.
+>
+> RunPod fait deux choses différentes. Il retrouve le `Dockerfile` par son
+> chemin — d'où le « ✓ Dockerfile found » — mais il cherche
+> `runpod.serverless.start()` avec l'API de *recherche de code* de GitHub, qui
+> n'indexe pas les dépôts privés. La recherche ne renvoie donc rien, quoi que
+> contienne le fichier. Vérifiable : une recherche de code sur ce dépôt
+> renvoie `total_count: 0` et `incomplete_results: true` pour n'importe quel
+> terme, y compris ceux qui y sont manifestement.
+>
+> La construction de l'image, elle, ne passe pas par cet index : elle copie le
+> dépôt tel quel, donc `handler.py` est bien là et le worker démarre. Rendre
+> le dépôt public ferait disparaître le message — c'est le seul effet.
+>
+> `tests/test_handler.py` vérifie de son côté que l'appel est bien au niveau
+> module, non indenté et sans garde `__main__` : si le message venait un jour
+> d'une vraie régression, ces tests échoueraient.
+
 <details>
 <summary>Contrat de l'API du worker</summary>
 
