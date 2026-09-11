@@ -313,10 +313,25 @@ d'attente habituel, pas par le pod.
 - Réglages → **Pod de secours RunPod**. Désactivé par défaut : le pod n'est
   ni créé ni facturé tant qu'il n'est pas activé *et* configuré.
 - Contrairement au serverless, RunPod ne construit pas cette image tout seul
-  depuis ce dépôt pour un pod : il faut la construire et la pousser vers un
-  registre (Docker Hub, GHCR...) vous-même, avec le même `Dockerfile` que le
-  worker serverless — `docker build -t <votre-registre>/transcription-pod:latest . && docker push <votre-registre>/transcription-pod:latest`
-  — puis renseigner cette référence dans les réglages.
+  depuis ce dépôt pour un pod — mais ce dépôt le fait à votre place :
+  `.github/workflows/pod-image.yml` reconstruit l'image et la pousse vers
+  **GitHub Container Registry** à chaque modification de `Dockerfile`,
+  `handler.py`, `pod_server.py` ou `requirements.txt` poussée sur `main`.
+  Aucune commande à taper : l'image reste à jour toute seule.
+  - Résultat : `ghcr.io/niveys-5169/transcription-pod:latest` — c'est cette
+    référence qu'il faut coller dans les réglages, une seule fois.
+  - **Une étape manuelle, une seule fois** : après le premier passage du
+    workflow, GitHub crée le paquet en **privé** par défaut — RunPod ne peut
+    pas le télécharger tel quel. Sur GitHub : onglet **Packages** du dépôt →
+    `transcription-pod` → **Package settings** → **Change visibility** →
+    **Public**.
+  - Si le workflow échoue avec une erreur de permission (403 sur le push),
+    c'est que les Actions du dépôt sont en lecture seule par défaut :
+    **Settings → Actions → General → Workflow permissions** → **Read and
+    write permissions**.
+  - `docker build`/`docker push` à la main restent utiles pour tester une
+    modification avant de la pousser, mais ne sont plus nécessaires pour la
+    mise en production de l'image.
 - GPU par défaut : **L4**, comme pour le serverless. Changez-le si ce type
   n'est pas disponible dans votre région.
 - `handler.py` (le worker serverless, invoqué par job) et `pod_server.py`
