@@ -135,6 +135,13 @@ def extract_wav(
         "-i",
         str(src),
         "-vn",  # ignorer la piste vidéo
+        # Normalisation de volume (EBU R128) : remet à niveau les
+        # enregistrements trop bas ou aux écarts de volume importants, sans
+        # risque de coupure (le paramètre TP plafonne les crêtes). Un seul
+        # passage (pas de mesure préalable) : moins précis qu'un loudnorm en
+        # deux temps, mais suffisant ici et sans coût de traitement supplémentaire.
+        "-af",
+        "loudnorm=I=-16:TP=-1.5:LRA=11",
         "-ac",
         str(CHANNELS),
         "-ar",
