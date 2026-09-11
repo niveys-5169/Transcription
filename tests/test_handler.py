@@ -120,6 +120,18 @@ def test_le_dockerignore_n_exclut_pas_le_worker():
     assert "*.py" not in motifs
 
 
+def test_le_dockerfile_installe_via_python3_et_verifie_l_import():
+    """Un pod de secours a échoué en production avec « No module named
+    'faster_whisper' » alors que le `pip install` du build avait pourtant
+    réussi — signe possible d'un `pip` et d'un `python3` résolus vers des
+    environnements différents dans l'image de base. `python3 -m pip` force
+    la cohérence, et l'import de vérification fait échouer le build tout de
+    suite si ça se reproduit, plutôt que de livrer une image cassée."""
+    contenu = (RACINE / "Dockerfile").read_text(encoding="utf-8")
+    assert "python3 -m pip install" in contenu
+    assert 'python3 -c "import faster_whisper' in contenu
+
+
 # ------------------------------------------------------------ contrat d'API
 
 
