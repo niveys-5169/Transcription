@@ -53,7 +53,10 @@ class Settings:
     # Taille des tronçons envoyés à RunPod. L'API /run plafonne la charge utile
     # à ~10 Mo ; un WAV 16 kHz mono 16 bits encodé en base64 pèse ~42 ko/s, donc
     # un cours d'une heure ne peut pas partir en un seul appel.
-    runpod_chunk_seconds: int = 240
+    # 180 s ≈ 7,3 Mo encodés : une vraie marge sous la limite. 240 s (l'ancien
+    # défaut) donnait ≈ 9,8 Mo — trop près du plafond une fois l'enveloppe
+    # JSON ajoutée, avec un risque d'échec intermittent selon les tronçons.
+    runpod_chunk_seconds: int = 180
 
     # --- Relecture (optionnelle) ---
     default_proofread: str = "claude"

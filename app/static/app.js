@@ -494,7 +494,7 @@ function openSettings() {
   $("proofread_model").value = settings.proofread_model || "";
   $("proofread_effort").value = settings.proofread_effort || "medium";
   $("runpod_endpoint_id").value = settings.runpod_endpoint_id || "";
-  $("runpod_chunk_seconds").value = settings.runpod_chunk_seconds || 240;
+  $("runpod_chunk_seconds").value = settings.runpod_chunk_seconds || 180;
   $("keep_media").checked = Boolean(settings.keep_media);
   $("anthropic_api_key").value = "";
   $("runpod_api_key").value = "";
@@ -512,7 +512,7 @@ async function saveSettings() {
     proofread_model: $("proofread_model").value.trim(),
     proofread_effort: $("proofread_effort").value,
     runpod_endpoint_id: $("runpod_endpoint_id").value.trim(),
-    runpod_chunk_seconds: Number($("runpod_chunk_seconds").value) || 240,
+    runpod_chunk_seconds: Number($("runpod_chunk_seconds").value) || 180,
     keep_media: $("keep_media").checked,
     default_engine: $("engine").value,
     default_model: $("model").value,
