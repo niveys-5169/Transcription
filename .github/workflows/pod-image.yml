@@ -25,6 +25,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # L'image part d'une base CUDA (runpod/base) et embarque ctranslate2 :
+      # plusieurs Go, alors que le runner GitHub n'a qu'une quinzaine de Go
+      # libres une fois ses outils préinstallés (.NET, Android, Haskell...)
+      # comptés. Sans ce nettoyage, le build finit en "No space left on
+      # device" avant même d'atteindre la limite de la couche applicative.
+      - name: Libérer de l'espace disque sur le runner
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /opt/hostedtoolcache/CodeQL /usr/local/.ghcup \
+            "$AGENT_TOOLSDIRECTORY"
+          docker image prune -a -f
+          df -h /
+
       - name: Préparer Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -44,4 +57,4 @@ jobs:
             ghcr.io/${{ github.repository_owner }}/transcription-pod:latest
             ghcr.io/${{ github.repository_owner }}/transcription-pod:${{ github.sha }}
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-to: type=gha,mode=min
