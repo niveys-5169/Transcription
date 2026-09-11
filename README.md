@@ -291,27 +291,38 @@ Sortie :
 En cas d'erreur : `{"error": "message"}`.
 </details>
 
-### Pod de secours, si le serverless ne démarre aucun worker
+### Pod : serverless, bascule, ou direct
 
 Le serverless descend à zéro worker entre deux usages — rien ne tourne, rien
 n'est facturé — mais l'inverse est aussi vrai : s'il n'y a **aucune**
 capacité disponible (GPU rare, quota atteint), un job peut rester coincé « en
-file » indéfiniment, sans jamais être pris en charge. C'est ce cas précis,
-et lui seul, que couvre le pod de secours : une machine GPU louée **à la
-minute** (pas à la requête), créée uniquement à ce moment-là et détruite —
-pas seulement arrêtée, ce qui laisserait le disque facturé — dès la fin de
-la transcription, pour ne payer que si le serverless a vraiment échoué à
-démarrer.
+file » indéfiniment, sans jamais être pris en charge. Un **pod** RunPod
+couvre ce cas : une machine GPU louée **à la minute** (pas à la requête),
+créée seulement quand on en a besoin et détruite — pas seulement arrêtée, ce
+qui laisserait le disque facturé — dès la fin de la transcription.
 
-La bascule n'a lieu qu'au tout premier tronçon : si le serverless démarre
-normalement, tout le reste s'y déroule comme d'habitude, même si un tronçon
-suivant est ensuite anormalement lent — ce cas reste couvert par le délai
-d'attente habituel, pas par le pod.
+Réglages → **Pod RunPod** → **Démarrage** propose trois choix :
+
+| Démarrage | Ce qui se passe | Quand le choisir |
+|---|---|---|
+| **Serverless uniquement** (défaut) | Uniquement le serverless. Si aucun worker ne le prend en charge, la transcription échoue avec un message explicite. | Pas de pod configuré, ou vous préférez échouer plutôt que payer un pod. |
+| **Serverless, avec bascule sur pod** | Le serverless d'abord ; si aucun worker n'a pris en charge le premier tronçon après un court délai, bascule automatiquement sur un pod. | Le cas courant : un secours qui ne coûte rien tant que le serverless répond. |
+| **Pod dès le premier tronçon** | Le pod est créé directement, sans jamais essayer le serverless. | Vous savez déjà que le serverless n'a pas de capacité (le tester à chaque fois ferait perdre le délai de bascule pour rien) — ou vous voulez tout simplement toujours passer par un pod. |
+
+Avec la bascule, elle n'a lieu qu'au tout premier tronçon : si le serverless
+démarre normalement, tout le reste s'y déroule comme d'habitude, même si un
+tronçon suivant est ensuite anormalement lent — ce cas reste couvert par le
+délai d'attente habituel, pas par le pod. En démarrage direct, le pod est
+créé une seule fois, avant le premier tronçon, et sert à tous les tronçons
+suivants.
 
 **Ce que ça change, concrètement :**
 
-- Réglages → **Pod de secours RunPod**. Désactivé par défaut : le pod n'est
-  ni créé ni facturé tant qu'il n'est pas activé *et* configuré.
+- Réglages → **Pod RunPod**. Démarrage à « Serverless uniquement » par
+  défaut : le pod n'est ni créé ni facturé tant que ce réglage ne le prévoit
+  pas *et* qu'une image n'est pas configurée.
+- En démarrage direct, l'identifiant de endpoint serverless n'est plus
+  nécessaire : seules la clé API RunPod et l'image du pod comptent.
 - Contrairement au serverless, RunPod ne construit pas cette image tout seul
   depuis ce dépôt pour un pod — mais ce dépôt le fait à votre place :
   `.github/workflows/pod-image.yml` reconstruit l'image et la pousse vers
@@ -348,9 +359,9 @@ son proxy HTTP (`https://{pod_id}-{port}.proxy.runpod.net`). L'environnement
 où ce code a été écrit n'a pas d'accès réseau sortant vers `runpod.io` /
 `runpod.ai`, donc ces appels n'ont pu être vérifiés que par des tests avec
 double du réseau (`tests/test_runpod_pod_engine.py`), pas par un vrai essai
-contre l'API. Si RunPod a fait évoluer les noms de champs depuis, un pod de
-secours activé échouera avec un message d'erreur explicite (jamais
-silencieusement) — comparez alors avec la documentation RunPod à jour.
+contre l'API. Si RunPod a fait évoluer les noms de champs depuis, un pod
+échouera avec un message d'erreur explicite (jamais silencieusement) —
+comparez alors avec la documentation RunPod à jour.
 </details>
 
 ## Comment la relecture évite de perdre du contenu
@@ -391,14 +402,14 @@ fichiers audio sont synthétisés. La suite tourne en quelques secondes.
 | `app/server.py` | API HTTP et page unique |
 | `app/pipeline.py` | Les deux étapes : transcription, puis relecture |
 | `app/media.py` | ffmpeg, découpage sur les silences |
-| `app/engines/` | Moteurs de transcription (local, RunPod, pod de secours) |
+| `app/engines/` | Moteurs de transcription (local, RunPod serverless, RunPod pod) |
 | `app/proofread/` | Relecture : par Claude, ou par règles |
 | `app/proofread/verify.py` | Vérification : règles, puis lecture par Claude |
 | `app/exporters.py` | txt, md, srt, vtt, json |
 | `app/db.py` | Historique SQLite |
 | `app/static/` | Interface |
 | `handler.py`, `Dockerfile` | Worker RunPod Serverless |
-| `pod_server.py` | Même calcul que `handler.py`, exposé en HTTP pour le pod de secours |
+| `pod_server.py` | Même calcul que `handler.py`, exposé en HTTP pour le pod RunPod |
 
 Ajouter un moteur : implémenter le protocole de `app/engines/base.py`
 (`is_available`, `transcribe` en générateur de `Segment`) et l'inscrire dans

@@ -1,5 +1,6 @@
-"""Bascule du moteur RunPod sur un pod de secours quand le serverless ne
-démarre aucun worker.
+"""``runpod_pod_mode`` du moteur RunPod : "off" (serverless seul), "fallback"
+(bascule sur un pod si le serverless ne démarre aucun worker) ou "always"
+(pod dès le premier tronçon, sans jamais essayer le serverless).
 
 Le point sensible n'est pas le calcul (c'est le pod qui transcrit, pas ce
 moteur) mais le cycle de vie : un pod RunPod est facturé à la minute dès sa
@@ -71,7 +72,7 @@ def _isoler_reglages():
         {
             "runpod_api_key": "__clear__",
             "runpod_endpoint_id": "",
-            "runpod_pod_enabled": False,
+            "runpod_pod_mode": "off",
             "runpod_pod_image": "",
         }
     )
@@ -125,10 +126,10 @@ def _transcrire(engine, tmp_path):
 def test_sans_pod_configure_le_message_explique_comment_l_activer(
     moteur_bloque_au_premier_troncon, tmp_path
 ):
-    _configurer(runpod_pod_enabled=False)
+    _configurer(runpod_pod_mode="off")
     engine = RunPodEngine()
 
-    with pytest.raises(TranscriptionError, match="pod de secours"):
+    with pytest.raises(TranscriptionError, match="bascule sur pod"):
         _transcrire(engine, tmp_path)
 
     assert _FausseSessionPod.instances == []  # jamais créé : pas configuré
@@ -138,7 +139,7 @@ def test_bascule_sur_le_pod_pour_tous_les_troncons_et_le_ferme_a_la_fin(
     moteur_bloque_au_premier_troncon, tmp_path, monkeypatch
 ):
     monkeypatch.setattr(runpod_module, "PodFallbackSession", _FausseSessionPod)
-    _configurer(runpod_pod_enabled=True, runpod_pod_image="repo/image:tag")
+    _configurer(runpod_pod_mode="fallback", runpod_pod_image="repo/image:tag")
     engine = RunPodEngine()
 
     segments = _transcrire(engine, tmp_path)
@@ -156,7 +157,7 @@ def test_seul_le_premier_troncon_peut_declencher_la_bascule(
 ):
     chunks, appels_run_job = moteur_bloque_au_premier_troncon
     monkeypatch.setattr(runpod_module, "PodFallbackSession", _FausseSessionPod)
-    _configurer(runpod_pod_enabled=True, runpod_pod_image="repo/image:tag")
+    _configurer(runpod_pod_mode="fallback", runpod_pod_image="repo/image:tag")
     engine = RunPodEngine()
 
     _transcrire(engine, tmp_path)
@@ -177,7 +178,7 @@ def test_le_pod_est_ferme_meme_si_la_transcription_y_echoue(
         "PodFallbackSession",
         lambda settings: _FausseSessionPod(settings, echoue_transcription=True),
     )
-    _configurer(runpod_pod_enabled=True, runpod_pod_image="repo/image:tag")
+    _configurer(runpod_pod_mode="fallback", runpod_pod_image="repo/image:tag")
     engine = RunPodEngine()
 
     with pytest.raises(TranscriptionError, match="planté"):
@@ -194,7 +195,7 @@ def test_le_pod_est_ferme_meme_si_son_demarrage_echoue(
         "PodFallbackSession",
         lambda settings: _FausseSessionPod(settings, echoue_au_demarrage=True),
     )
-    _configurer(runpod_pod_enabled=True, runpod_pod_image="repo/image:tag")
+    _configurer(runpod_pod_mode="fallback", runpod_pod_image="repo/image:tag")
     engine = RunPodEngine()
 
     with pytest.raises(TranscriptionError, match="jamais répondu"):
@@ -207,7 +208,7 @@ def test_le_pod_est_ferme_meme_si_l_annulation_survient_apres_la_bascule(
     moteur_bloque_au_premier_troncon, tmp_path, monkeypatch
 ):
     monkeypatch.setattr(runpod_module, "PodFallbackSession", _FausseSessionPod)
-    _configurer(runpod_pod_enabled=True, runpod_pod_image="repo/image:tag")
+    _configurer(runpod_pod_mode="fallback", runpod_pod_image="repo/image:tag")
     engine = RunPodEngine()
 
     compteur = {"n": 0}
@@ -229,3 +230,79 @@ def test_le_pod_est_ferme_meme_si_l_annulation_survient_apres_la_bascule(
         )
 
     assert _FausseSessionPod.instances[0].closed == 1
+
+
+# ------------------------------------------------------ mode "always" (direct)
+
+
+@pytest.fixture
+def moteur_avec_serverless_jamais_appele(monkeypatch, tmp_path):
+    """Comme ``moteur_bloque_au_premier_troncon``, mais ``_run_job`` échoue le
+    test s'il est appelé : en mode « always », le serverless ne doit même
+    pas être tenté."""
+    chunks = _preparer_troncons(tmp_path, 3)
+    monkeypatch.setattr(runpod_module.media, "split_wav", lambda *a, **k: chunks)
+
+    def _run_job_jamais(self, *a, **k):
+        raise AssertionError("_run_job appelé alors que le mode est « always »")
+
+    monkeypatch.setattr(RunPodEngine, "_run_job", _run_job_jamais)
+    return chunks
+
+
+def test_le_mode_always_va_droit_au_pod_sans_tenter_le_serverless(
+    moteur_avec_serverless_jamais_appele, tmp_path, monkeypatch
+):
+    monkeypatch.setattr(runpod_module, "PodFallbackSession", _FausseSessionPod)
+    _configurer(runpod_pod_mode="always", runpod_pod_image="repo/image:tag")
+    engine = RunPodEngine()
+
+    segments = _transcrire(engine, tmp_path)
+
+    assert len(segments) == 3
+    assert len(_FausseSessionPod.instances) == 1
+    session = _FausseSessionPod.instances[0]
+    assert session.started
+    assert len(session.chunks_transcrits) == 3
+    assert session.closed == 1
+
+
+def test_le_mode_always_sans_image_echoue_avant_toute_creation_de_pod(
+    moteur_avec_serverless_jamais_appele, tmp_path, monkeypatch
+):
+    monkeypatch.setattr(runpod_module, "PodFallbackSession", _FausseSessionPod)
+    _configurer(runpod_pod_mode="always", runpod_pod_image="")
+    engine = RunPodEngine()
+
+    with pytest.raises(TranscriptionError, match="[Dd]émarrage direct"):
+        _transcrire(engine, tmp_path)
+
+    assert _FausseSessionPod.instances == []
+
+
+def test_le_pod_est_ferme_meme_si_son_demarrage_echoue_en_mode_always(
+    moteur_avec_serverless_jamais_appele, tmp_path, monkeypatch
+):
+    monkeypatch.setattr(
+        runpod_module,
+        "PodFallbackSession",
+        lambda settings: _FausseSessionPod(settings, echoue_au_demarrage=True),
+    )
+    _configurer(runpod_pod_mode="always", runpod_pod_image="repo/image:tag")
+    engine = RunPodEngine()
+
+    with pytest.raises(TranscriptionError, match="jamais répondu"):
+        _transcrire(engine, tmp_path)
+
+    assert _FausseSessionPod.instances[0].closed == 1
+
+
+def test_le_mode_always_n_exige_pas_d_endpoint_serverless():
+    """Le endpoint serverless ne sert à rien en mode « always » : is_available()
+    ne doit pas le réclamer, contrairement aux modes "off"/"fallback"."""
+    _configurer(runpod_pod_mode="always", runpod_pod_image="repo/image:tag", runpod_endpoint_id="")
+    engine = RunPodEngine()
+
+    available, detail = engine.is_available()
+
+    assert available, detail

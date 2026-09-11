@@ -43,11 +43,17 @@ class RunPodEngine:
 
     def is_available(self) -> tuple[bool, str]:
         settings = load_settings()
-        if not settings.runpod_api_key or not settings.runpod_endpoint_id:
-            return False, (
-                "Clé API et identifiant de endpoint RunPod à renseigner dans "
-                "les réglages."
-            )
+        if not settings.runpod_api_key:
+            return False, "Clé API RunPod à renseigner dans les réglages."
+        if settings.runpod_pod_mode == "always":
+            if not settings.runpod_pod_image:
+                return False, (
+                    "Démarrage direct sur pod activé, mais aucune image "
+                    "configurée (réglages → Pod RunPod)."
+                )
+            return True, f"Pod direct sur {settings.runpod_pod_image}."
+        if not settings.runpod_endpoint_id:
+            return False, "Identifiant de endpoint RunPod à renseigner dans les réglages."
         return True, f"Endpoint {settings.runpod_endpoint_id} configuré."
 
     def transcribe(
@@ -69,6 +75,13 @@ class RunPodEngine:
         if model not in WHISPER_MODELS:
             model = "large-v3"
 
+        pod_direct = settings.runpod_pod_mode == "always"
+        if pod_direct and not settings.runpod_pod_image:
+            raise TranscriptionError(
+                "Démarrage direct sur pod activé, mais aucune image "
+                "configurée (réglages → Pod RunPod)."
+            )
+
         chunk_dir = workdir / "runpod-chunks"
         chunks = media.split_wav(
             wav_path, float(settings.runpod_chunk_seconds), chunk_dir
@@ -83,6 +96,12 @@ class RunPodEngine:
 
         pod_session: PodFallbackSession | None = None
         try:
+            if pod_direct:
+                if on_progress:
+                    on_progress(0.0, "Création du pod GPU…")
+                pod_session = PodFallbackSession(settings)
+                pod_session.start()
+
             with httpx.Client(timeout=httpx.Timeout(120.0, read=120.0)) as client:
                 for index, chunk in enumerate(chunks, start=1):
                     if should_cancel is not None and should_cancel():
@@ -93,7 +112,7 @@ class RunPodEngine:
                             chunk.offset / total if total else 0.0,
                             f"Envoi du {label} vers le GPU…"
                             if pod_session is None
-                            else f"Envoi du {label} au pod de secours…",
+                            else f"Envoi du {label} au pod…",
                         )
 
                     audio_bytes = chunk.path.read_bytes()
@@ -133,11 +152,12 @@ class RunPodEngine:
                             )
                         except _ServerlessLaunchTimeout as exc:
                             if not (
-                                settings.runpod_pod_enabled
+                                settings.runpod_pod_mode == "fallback"
                                 and settings.runpod_pod_image
                             ):
                                 raise TranscriptionError(
-                                    f"{exc} Activez le pod de secours dans les "
+                                    f"{exc} Activez la bascule sur pod (ou le "
+                                    "démarrage direct sur pod) dans les "
                                     "réglages pour continuer automatiquement, "
                                     "ou réessayez plus tard."
                                 ) from exc

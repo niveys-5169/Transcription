@@ -29,6 +29,17 @@ WHISPER_MODELS = ["tiny", "base", "small", "medium", "large-v3"]
 # Moteurs de transcription disponibles.
 ENGINES = ["local", "runpod"]
 
+# Comment le moteur RunPod démarre le calcul :
+# - "off" : uniquement le serverless. Si aucun worker ne le prend en charge,
+#   la transcription échoue avec un message explicite.
+# - "fallback" : le serverless d'abord ; si aucun worker ne prend en charge
+#   le premier tronçon avant runpod_launch_timeout_seconds, bascule sur un
+#   pod créé à ce moment-là.
+# - "always" : pod dès le premier tronçon, sans jamais essayer le
+#   serverless — utile quand on sait déjà qu'il n'a pas de capacité, pour ne
+#   pas perdre runpod_launch_timeout_seconds à l'attendre pour rien.
+RUNPOD_POD_MODES = ["off", "fallback", "always"]
+
 # Modes de relecture.
 PROOFREAD_MODES = ["claude", "basic", "none"]
 
@@ -63,16 +74,16 @@ class Settings:
     # totale une fois qu'un worker a effectivement pris le job.
     runpod_launch_timeout_seconds: int = 90
 
-    # --- RunPod : pod de secours (optionnel) ---
-    # Le serverless RunPod peut rester bloqué en file si aucun worker ne
-    # dispose de capacité (GPU rare, quota atteint...). Le pod de secours est
-    # une machine GPU louée à la minute, créée seulement à ce moment-là et
-    # détruite (« terminate », pas juste « stop ») dès la transcription finie
-    # — pour ne payer que si le serverless a vraiment échoué à démarrer.
+    # --- RunPod : pod (optionnel) ---
+    # Une machine GPU louée à la minute (pas à la requête comme le
+    # serverless), créée seulement quand runpod_pod_mode en a besoin et
+    # détruite (« terminate », pas juste « stop ») dès la transcription
+    # finie — pour ne jamais payer un GPU qui ne fait rien. Voir
+    # RUNPOD_POD_MODES ci-dessus pour le choix entre serverless et pod.
     # Contrairement au serverless, un pod n'a pas de build automatique depuis
     # ce dépôt : il faut construire et pousser l'image vous-même (voir le
     # README) et renseigner sa référence ici.
-    runpod_pod_enabled: bool = False
+    runpod_pod_mode: str = "off"
     runpod_pod_image: str = ""
     runpod_pod_gpu_type_id: str = "NVIDIA L4"
     runpod_pod_container_disk_gb: int = 20
