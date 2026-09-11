@@ -19,12 +19,22 @@ import httpx
 from ..config import WHISPER_MODELS, load_settings
 from .. import media
 from .base import CancelCheck, ProgressCallback, Segment, TranscriptionError
+from .runpod_pod import PodFallbackSession
 
 API_ROOT = "https://api.runpod.ai/v2"
 POLL_INTERVAL = 2.0
 # Un tronçon de 4 min sur un L4 prend quelques secondes ; cette limite ne sert
 # qu'à ne pas attendre indéfiniment un worker qui ne démarre jamais.
 MAX_WAIT_PER_CHUNK = 30 * 60
+
+
+class _ServerlessLaunchTimeout(TranscriptionError):
+    """Le premier job est resté en file sans qu'aucun worker ne le prenne.
+
+    Distinct de TranscriptionError seulement pour être intercepté : c'est le
+    signal qui déclenche le pod de secours (voir ``transcribe``). Si rien ne
+    l'intercepte, il se comporte comme n'importe quelle TranscriptionError.
+    """
 
 
 class RunPodEngine:
@@ -71,34 +81,77 @@ class RunPodEngine:
         }
         base_url = f"{API_ROOT}/{settings.runpod_endpoint_id}"
 
+        pod_session: PodFallbackSession | None = None
         try:
             with httpx.Client(timeout=httpx.Timeout(120.0, read=120.0)) as client:
                 for index, chunk in enumerate(chunks, start=1):
                     if should_cancel is not None and should_cancel():
                         raise TranscriptionError("Transcription annulée.")
+                    label = f"tronçon {index}/{len(chunks)}"
                     if on_progress:
                         on_progress(
                             chunk.offset / total if total else 0.0,
-                            f"Envoi du tronçon {index}/{len(chunks)} vers le GPU…",
+                            f"Envoi du {label} vers le GPU…"
+                            if pod_session is None
+                            else f"Envoi du {label} au pod de secours…",
                         )
 
-                    payload = {
-                        "input": {
-                            "audio_base64": base64.b64encode(
-                                chunk.path.read_bytes()
-                            ).decode("ascii"),
-                            "model": model,
-                            "language": language or None,
+                    audio_bytes = chunk.path.read_bytes()
+
+                    if pod_session is not None:
+                        output = pod_session.transcribe_chunk(
+                            audio_bytes, model, language, label=label
+                        )
+                    else:
+                        payload = {
+                            "input": {
+                                "audio_base64": base64.b64encode(audio_bytes).decode(
+                                    "ascii"
+                                ),
+                                "model": model,
+                                "language": language or None,
+                            }
                         }
-                    }
-                    output = self._run_job(
-                        client,
-                        base_url,
-                        headers,
-                        payload,
-                        label=f"tronçon {index}/{len(chunks)}",
-                        should_cancel=should_cancel,
-                    )
+                        try:
+                            output = self._run_job(
+                                client,
+                                base_url,
+                                headers,
+                                payload,
+                                label=label,
+                                should_cancel=should_cancel,
+                                # Seul le premier tronçon détecte un
+                                # serverless qui ne démarre aucun worker :
+                                # une fois lancé, on lui fait confiance
+                                # jusqu'au bout plutôt que de basculer en
+                                # cours de route.
+                                fail_fast_after=(
+                                    settings.runpod_launch_timeout_seconds
+                                    if index == 1
+                                    else None
+                                ),
+                            )
+                        except _ServerlessLaunchTimeout as exc:
+                            if not (
+                                settings.runpod_pod_enabled
+                                and settings.runpod_pod_image
+                            ):
+                                raise TranscriptionError(
+                                    f"{exc} Activez le pod de secours dans les "
+                                    "réglages pour continuer automatiquement, "
+                                    "ou réessayez plus tard."
+                                ) from exc
+                            if on_progress:
+                                on_progress(
+                                    0.0,
+                                    "Le GPU serverless ne démarre aucun worker — "
+                                    "bascule sur un pod de secours…",
+                                )
+                            pod_session = PodFallbackSession(settings)
+                            pod_session.start()
+                            output = pod_session.transcribe_chunk(
+                                audio_bytes, model, language, label=label
+                            )
 
                     for raw in output.get("segments") or []:
                         text = (raw.get("text") or "").strip()
@@ -114,9 +167,14 @@ class RunPodEngine:
                         done = chunk.offset + chunk.duration
                         on_progress(
                             min(done / total, 1.0),
-                            f"Tronçon {index}/{len(chunks)} transcrit.",
+                            f"{label} transcrit.",
                         )
         finally:
+            # Le pod de secours est facturé à la minute dès sa création : il
+            # doit disparaître ici quoi qu'il arrive — fin normale, erreur,
+            # ou annulation — pour ne jamais payer un GPU qui ne fait rien.
+            if pod_session is not None:
+                pod_session.close()
             self._cleanup(chunks, wav_path, chunk_dir)
 
     def _run_job(
@@ -128,6 +186,7 @@ class RunPodEngine:
         *,
         label: str,
         should_cancel: CancelCheck | None,
+        fail_fast_after: float | None = None,
     ) -> dict:
         try:
             response = client.post(f"{base_url}/run", headers=headers, json=payload)
@@ -152,11 +211,27 @@ class RunPodEngine:
                 f"Réponse RunPod inattendue pour le {label} : {response.text[:300]}"
             )
 
-        deadline = time.monotonic() + MAX_WAIT_PER_CHUNK
+        start = time.monotonic()
+        deadline = start + MAX_WAIT_PER_CHUNK
+        state = None
         while True:
             if should_cancel is not None and should_cancel():
                 self._cancel_job(client, base_url, headers, job_id)
                 raise TranscriptionError("Transcription annulée.")
+            # Tant que le job n'a été pris par aucun worker (état encore
+            # IN_QUEUE, ou pas encore observé), un délai qui traîne signale
+            # une absence de capacité côté RunPod plutôt qu'un calcul lent —
+            # c'est ce cas précis que le pod de secours doit couvrir.
+            if (
+                fail_fast_after is not None
+                and state in (None, "IN_QUEUE")
+                and time.monotonic() - start > fail_fast_after
+            ):
+                self._cancel_job(client, base_url, headers, job_id)
+                raise _ServerlessLaunchTimeout(
+                    f"Aucun worker RunPod n'a pris en charge le {label} après "
+                    f"{fail_fast_after:.0f}s d'attente."
+                )
             if time.monotonic() > deadline:
                 self._cancel_job(client, base_url, headers, job_id)
                 raise TranscriptionError(
