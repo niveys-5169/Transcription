@@ -197,7 +197,12 @@ class RunPodEngine:
             raise TranscriptionError("Clé API RunPod refusée (401).")
         if response.status_code == 404:
             raise TranscriptionError(
-                "Endpoint RunPod introuvable (404) : vérifiez l'identifiant."
+                f"Endpoint RunPod introuvable (404) à l'adresse {base_url}/run. "
+                "Vérifiez que l'identifiant de endpoint copié dans les réglages "
+                "correspond bien à celui affiché sur la page de l'endpoint dans "
+                "la console RunPod (pas l'URL complète, pas l'id d'un pod), et "
+                "que la clé API utilisée appartient au même compte/organisation "
+                "que cet endpoint."
             )
         if response.status_code >= 400:
             raise TranscriptionError(

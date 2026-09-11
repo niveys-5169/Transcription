@@ -111,6 +111,26 @@ class Settings:
 _settings: Settings | None = None
 
 
+def _normalize_runpod_endpoint_id(value: str) -> str:
+    """Nettoie l'identifiant de endpoint RunPod.
+
+    Erreur fréquente : coller l'URL affichée dans la console RunPod
+    (« https://api.runpod.ai/v2/<id>/run ») plutôt que le seul identifiant.
+    Le code construit alors une URL avec l'identifiant à l'intérieur d'une
+    autre URL, que RunPod renvoie en 404 sans indice sur la cause. On
+    retrouve donc le segment utile, et on retire au passage guillemets et
+    espaces qu'un copier-coller laisse parfois.
+    """
+    cleaned = value.strip().strip("'\"").strip()
+    if "api.runpod.ai/v2/" in cleaned:
+        cleaned = cleaned.split("api.runpod.ai/v2/", 1)[1]
+    cleaned = cleaned.strip("/")
+    for suffix in ("/run", "/runsync", "/health", "/status", "/cancel"):
+        if cleaned.endswith(suffix):
+            cleaned = cleaned[: -len(suffix)]
+    return cleaned.split("/", 1)[0]
+
+
 def _from_env(settings: Settings) -> Settings:
     """Applique les variables d'environnement par-dessus les réglages."""
     env_map = {
@@ -124,6 +144,9 @@ def _from_env(settings: Settings) -> Settings:
     for attr, env_name in env_map.items():
         value = os.environ.get(env_name)
         if value:
+            value = value.strip()
+            if attr == "runpod_endpoint_id":
+                value = _normalize_runpod_endpoint_id(value)
             setattr(settings, attr, value)
     return settings
 
@@ -178,6 +201,8 @@ def save_settings(updates: dict) -> Settings:
                     setattr(settings, key, int(value))
                 except (TypeError, ValueError):
                     pass
+            elif key == "runpod_endpoint_id" and value:
+                setattr(settings, key, _normalize_runpod_endpoint_id(str(value)))
             else:
                 setattr(settings, key, value)
 
