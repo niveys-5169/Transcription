@@ -236,6 +236,62 @@ def test_transcribe_chunk_envoie_l_audio_encode_et_rend_le_resultat():
     assert output["segments"][0]["text"] == "bonjour"
 
 
+def test_transcribe_chunk_retente_apres_un_404_illisible_du_proxy(monkeypatch):
+    """Le proxy RunPod peut renvoyer un 404 non-JSON juste après la création
+    du pod, le temps que sa route se propage — même si /health avait déjà
+    répondu. pod_server.py, lui, répond toujours en JSON : un corps illisible
+    vient donc forcément du proxy, et mérite une nouvelle tentative."""
+    reponses = iter(
+        [
+            httpx.Response(404, text="404 page not found"),
+            httpx.Response(
+                200,
+                json={
+                    "segments": [{"start": 0.0, "end": 1.0, "text": "bonjour"}],
+                    "language": "fr",
+                },
+            ),
+        ]
+    )
+    appels = []
+
+    def http(request: httpx.Request) -> httpx.Response:
+        appels.append(1)
+        return next(reponses)
+
+    dodo = []
+    monkeypatch.setattr(
+        "app.engines.runpod_pod.time.sleep", lambda s: dodo.append(s)
+    )
+
+    session = _session(_Settings(), lambda r: httpx.Response(200), http)
+    session.pod_id = "pod123"
+
+    output = session.transcribe_chunk(b"x", "large-v3", "fr", label="tronçon 1/3")
+
+    assert output["segments"][0]["text"] == "bonjour"
+    assert len(appels) == 2
+    assert dodo == [3.0]
+
+
+def test_transcribe_chunk_abandonne_apres_plusieurs_404_illisibles(monkeypatch):
+    appels = []
+
+    def http(request: httpx.Request) -> httpx.Response:
+        appels.append(1)
+        return httpx.Response(404, text="404 page not found")
+
+    monkeypatch.setattr("app.engines.runpod_pod.time.sleep", lambda s: None)
+
+    session = _session(_Settings(), lambda r: httpx.Response(200), http)
+    session.pod_id = "pod123"
+
+    with pytest.raises(TranscriptionError, match="illisible"):
+        session.transcribe_chunk(b"x", "large-v3", "fr", label="tronçon 1/3")
+
+    assert len(appels) == 3
+
+
 def test_transcribe_chunk_leve_une_erreur_si_le_pod_en_renvoie_une():
     def http(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"error": "plus de mémoire GPU"})

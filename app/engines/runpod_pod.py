@@ -190,20 +190,32 @@ class PodFallbackSession:
             "model": model,
             "language": language or None,
         }
-        try:
-            response = self._http.post(url, json=payload)
-        except httpx.HTTPError as exc:
-            raise TranscriptionError(
-                f"Pod de secours injoignable ({label}) : {exc}"
-            ) from exc
+        attempts = 3
+        for attempt in range(1, attempts + 1):
+            try:
+                response = self._http.post(url, json=payload)
+            except httpx.HTTPError as exc:
+                raise TranscriptionError(
+                    f"Pod de secours injoignable ({label}) : {exc}"
+                ) from exc
 
-        try:
-            output = response.json()
-        except ValueError:
-            raise TranscriptionError(
-                f"Réponse du pod de secours illisible pour le {label} "
-                f"(HTTP {response.status_code})."
-            )
+            try:
+                output = response.json()
+            except ValueError:
+                # pod_server.py répond toujours en JSON, y compris pour ses
+                # propres 404 (mauvais chemin). Un corps illisible vient donc
+                # du proxy RunPod, pas de l'application : juste après la
+                # création du pod, sa route peut ne pas être encore
+                # entièrement propagée, même si /health avait déjà répondu.
+                # On retente avant d'abandonner.
+                if response.status_code == 404 and attempt < attempts:
+                    time.sleep(POLL_INTERVAL)
+                    continue
+                raise TranscriptionError(
+                    f"Réponse du pod de secours illisible pour le {label} "
+                    f"(HTTP {response.status_code})."
+                )
+            break
 
         if isinstance(output, dict) and output.get("error"):
             raise TranscriptionError(
