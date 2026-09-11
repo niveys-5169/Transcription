@@ -225,7 +225,8 @@
       <label class="field">
         <span>Durée d'un tronçon (secondes)</span>
         <input type="number" id="runpod_chunk_seconds" min="30" max="600" step="10">
-        <small>240 s tient dans la limite de charge utile de l'API RunPod.</small>
+        <small>180 s ≈ 7,3 Mo encodés, avec une vraie marge sous le plafond de
+        l'API RunPod (~10 Mo). Au-delà de 220 s, le risque d'échec augmente.</small>
       </label>
     </fieldset>
 
