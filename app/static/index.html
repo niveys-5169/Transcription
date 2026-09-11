@@ -231,6 +231,30 @@
     </fieldset>
 
     <fieldset>
+      <legend>Pod de secours RunPod (avancé, optionnel)</legend>
+      <p class="hint">
+        Si le serverless ne démarre aucun worker (charge, quota), bascule
+        automatiquement sur un pod GPU loué à la minute — créé au moment de
+        la bascule, détruit dès la transcription finie pour ne payer que ce
+        secours a vraiment servi. Nécessite une image Docker poussée
+        séparément (voir le README) : le serverless se construit seul depuis
+        ce dépôt, pas un pod.
+      </p>
+      <label class="check">
+        <input type="checkbox" id="runpod_pod_enabled">
+        <span>Activer le pod de secours</span>
+      </label>
+      <label class="field">
+        <span>Image Docker du pod</span>
+        <input type="text" id="runpod_pod_image" placeholder="mon-registre/transcription-pod:latest">
+      </label>
+      <label class="field">
+        <span>Type de GPU</span>
+        <input type="text" id="runpod_pod_gpu_type_id" placeholder="NVIDIA L4">
+      </label>
+    </fieldset>
+
+    <fieldset>
       <legend>Par défaut</legend>
       <label class="check">
         <input type="checkbox" id="keep_media">

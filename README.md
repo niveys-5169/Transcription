@@ -291,6 +291,53 @@ Sortie :
 En cas d'erreur : `{"error": "message"}`.
 </details>
 
+### Pod de secours, si le serverless ne démarre aucun worker
+
+Le serverless descend à zéro worker entre deux usages — rien ne tourne, rien
+n'est facturé — mais l'inverse est aussi vrai : s'il n'y a **aucune**
+capacité disponible (GPU rare, quota atteint), un job peut rester coincé « en
+file » indéfiniment, sans jamais être pris en charge. C'est ce cas précis,
+et lui seul, que couvre le pod de secours : une machine GPU louée **à la
+minute** (pas à la requête), créée uniquement à ce moment-là et détruite —
+pas seulement arrêtée, ce qui laisserait le disque facturé — dès la fin de
+la transcription, pour ne payer que si le serverless a vraiment échoué à
+démarrer.
+
+La bascule n'a lieu qu'au tout premier tronçon : si le serverless démarre
+normalement, tout le reste s'y déroule comme d'habitude, même si un tronçon
+suivant est ensuite anormalement lent — ce cas reste couvert par le délai
+d'attente habituel, pas par le pod.
+
+**Ce que ça change, concrètement :**
+
+- Réglages → **Pod de secours RunPod**. Désactivé par défaut : le pod n'est
+  ni créé ni facturé tant qu'il n'est pas activé *et* configuré.
+- Contrairement au serverless, RunPod ne construit pas cette image tout seul
+  depuis ce dépôt pour un pod : il faut la construire et la pousser vers un
+  registre (Docker Hub, GHCR...) vous-même, avec le même `Dockerfile` que le
+  worker serverless — `docker build -t <votre-registre>/transcription-pod:latest . && docker push <votre-registre>/transcription-pod:latest`
+  — puis renseigner cette référence dans les réglages.
+- GPU par défaut : **L4**, comme pour le serverless. Changez-le si ce type
+  n'est pas disponible dans votre région.
+- `handler.py` (le worker serverless, invoqué par job) et `pod_server.py`
+  (le pod, un petit serveur HTTP écoutant `/health` et `/transcribe`)
+  partagent la même image ; seule la commande de démarrage diffère, et c'est
+  l'application qui la choisit à la création du pod.
+
+<details>
+<summary>Pourquoi l'API RunPod des pods n'a pas pu être vérifiée en direct</summary>
+
+`app/engines/runpod_pod.py` s'appuie sur l'API GraphQL RunPod des pods
+(`podFindAndDeployOnDemand`, `podTerminate`) et sur la convention d'URL de
+son proxy HTTP (`https://{pod_id}-{port}.proxy.runpod.net`). L'environnement
+où ce code a été écrit n'a pas d'accès réseau sortant vers `runpod.io` /
+`runpod.ai`, donc ces appels n'ont pu être vérifiés que par des tests avec
+double du réseau (`tests/test_runpod_pod_engine.py`), pas par un vrai essai
+contre l'API. Si RunPod a fait évoluer les noms de champs depuis, un pod de
+secours activé échouera avec un message d'erreur explicite (jamais
+silencieusement) — comparez alors avec la documentation RunPod à jour.
+</details>
+
 ## Comment la relecture évite de perdre du contenu
 
 Faire relire un cours d'une heure par un modèle de langue, c'est prendre deux
@@ -329,13 +376,14 @@ fichiers audio sont synthétisés. La suite tourne en quelques secondes.
 | `app/server.py` | API HTTP et page unique |
 | `app/pipeline.py` | Les deux étapes : transcription, puis relecture |
 | `app/media.py` | ffmpeg, découpage sur les silences |
-| `app/engines/` | Moteurs de transcription (local, RunPod) |
+| `app/engines/` | Moteurs de transcription (local, RunPod, pod de secours) |
 | `app/proofread/` | Relecture : par Claude, ou par règles |
 | `app/proofread/verify.py` | Vérification : règles, puis lecture par Claude |
 | `app/exporters.py` | txt, md, srt, vtt, json |
 | `app/db.py` | Historique SQLite |
 | `app/static/` | Interface |
 | `handler.py`, `Dockerfile` | Worker RunPod Serverless |
+| `pod_server.py` | Même calcul que `handler.py`, exposé en HTTP pour le pod de secours |
 
 Ajouter un moteur : implémenter le protocole de `app/engines/base.py`
 (`is_available`, `transcribe` en générateur de `Segment`) et l'inscrire dans

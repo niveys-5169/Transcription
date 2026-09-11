@@ -1,0 +1,174 @@
+"""Tests du serveur HTTP du pod de secours (``pod_server.py``), sans GPU.
+
+Même contrat que ``handler.py`` (voir ``tests/test_handler.py``) mais exposé
+en HTTP continu plutôt qu'en job serverless — ce fichier vérifie surtout que
+le contrat est bien respecté par-dessus HTTP : ``/health`` pour le
+health-check attendu par ``PodFallbackSession._wait_ready``, ``/transcribe``
+pour le calcul, avec le même comportement « pas de filtre de voix » que les
+deux autres moteurs.
+"""
+from __future__ import annotations
+
+import base64
+import importlib.util
+import sys
+import threading
+import types
+from pathlib import Path
+
+import httpx
+import pytest
+
+RACINE = Path(__file__).resolve().parent.parent
+POD_SERVER = RACINE / "pod_server.py"
+
+
+class _FauxSegment:
+    def __init__(self, start, end, text):
+        self.start, self.end, self.text = start, end, text
+
+
+class _FauxInfo:
+    language = "fr"
+
+
+@pytest.fixture
+def worker(monkeypatch):
+    """Importe pod_server.py avec faster-whisper simulé."""
+    appels = {"modele": [], "transcribe": None}
+
+    class FauxWhisperModel:
+        def __init__(self, taille, **kwargs):
+            appels["modele"].append({"taille": taille, **kwargs})
+
+        def transcribe(self, chemin, **kwargs):
+            appels["transcribe"] = {"chemin": chemin, **kwargs}
+            return (
+                iter(
+                    [
+                        _FauxSegment(0.0, 2.0, " Bonjour à tous."),
+                        _FauxSegment(2.0, 4.5, " On commence le cours."),
+                    ]
+                ),
+                _FauxInfo(),
+            )
+
+    faux_fw = types.ModuleType("faster_whisper")
+    faux_fw.WhisperModel = FauxWhisperModel
+    monkeypatch.setitem(sys.modules, "faster_whisper", faux_fw)
+    monkeypatch.delitem(sys.modules, "pod_server", raising=False)
+
+    spec = importlib.util.spec_from_file_location("pod_server", POD_SERVER)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["pod_server"] = module
+    spec.loader.exec_module(module)
+
+    module._appels = appels
+    module._model_cache.clear()
+    yield module
+    sys.modules.pop("pod_server", None)
+
+
+# ------------------------------------------------------------ contrat d'API
+
+
+def test_transcription_rend_le_contrat_attendu(worker):
+    sortie = worker.transcribe(
+        base64.b64encode(b"RIFF____WAVE").decode(), "large-v3", "fr"
+    )
+    assert sortie["text"] == "Bonjour à tous. On commence le cours."
+    assert sortie["language"] == "fr"
+    assert sortie["segments"][0] == {"start": 0.0, "end": 2.0, "text": " Bonjour à tous."}
+    assert "error" not in sortie
+
+
+def test_le_filtre_de_voix_reste_desactive(worker):
+    """Même bug que sur handler.py et le moteur local : vad_filter=True a
+    déjà fait disparaître un fichier entier sans la moindre erreur."""
+    worker.transcribe(base64.b64encode(b"RIFF____WAVE").decode(), "large-v3", "fr")
+    assert worker._appels["transcribe"]["vad_filter"] is False
+
+
+def test_le_worker_tourne_sur_gpu_en_float16(worker):
+    worker.transcribe(base64.b64encode(b"RIFF____WAVE").decode(), "medium", "fr")
+    charge = worker._appels["modele"][-1]
+    assert charge["taille"] == "medium"
+    assert charge["device"] == "cuda"
+    assert charge["compute_type"] == "float16"
+
+
+def test_un_modele_inconnu_retombe_sur_large_v3(worker):
+    worker.transcribe(base64.b64encode(b"RIFF____WAVE").decode(), "gigantesque", "fr")
+    assert worker._appels["modele"][-1]["taille"] == "large-v3"
+
+
+def test_le_modele_est_garde_en_cache_entre_deux_appels(worker):
+    worker.transcribe(base64.b64encode(b"RIFF____WAVE").decode(), "small", "fr")
+    worker.transcribe(base64.b64encode(b"RIFF____WAVE").decode(), "small", "fr")
+    tailles = [charge["taille"] for charge in worker._appels["modele"]]
+    assert tailles == ["small"], "le modèle a été rechargé inutilement"
+
+
+def test_audio_manquant(worker):
+    sortie = worker.transcribe(None, "large-v3", "fr")
+    assert "error" in sortie
+    assert "audio_base64" in sortie["error"]
+
+
+def test_audio_base64_invalide(worker):
+    sortie = worker.transcribe("pas du base64 !!", "large-v3", "fr")
+    assert "error" in sortie
+
+
+def test_une_erreur_de_transcription_est_renvoyee_proprement(worker, monkeypatch):
+    def explose(self, chemin, **kwargs):
+        raise RuntimeError("plus de mémoire GPU")
+
+    monkeypatch.setattr(
+        sys.modules["faster_whisper"].WhisperModel, "transcribe", explose
+    )
+    sortie = worker.transcribe(
+        base64.b64encode(b"RIFF____WAVE").decode(), "large-v3", "fr"
+    )
+    assert sortie["error"] == "plus de mémoire GPU"
+
+
+# ------------------------------------------------------------- routes HTTP
+
+
+@pytest.fixture
+def serveur(worker):
+    httpd = worker.ThreadingHTTPServer(("127.0.0.1", 0), worker.Handler)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    port = httpd.server_address[1]
+    try:
+        yield f"http://127.0.0.1:{port}"
+    finally:
+        httpd.shutdown()
+        thread.join(timeout=5)
+
+
+def test_health_repond_200(serveur):
+    reponse = httpx.get(f"{serveur}/health", timeout=5.0)
+    assert reponse.status_code == 200
+    assert reponse.json() == {"status": "ok"}
+
+
+def test_transcribe_via_http_rend_le_meme_contrat(serveur):
+    reponse = httpx.post(
+        f"{serveur}/transcribe",
+        json={
+            "audio_base64": base64.b64encode(b"RIFF____WAVE").decode(),
+            "model": "large-v3",
+            "language": "fr",
+        },
+        timeout=5.0,
+    )
+    assert reponse.status_code == 200
+    corps = reponse.json()
+    assert corps["text"] == "Bonjour à tous. On commence le cours."
+
+
+def test_route_inconnue_rend_404(serveur):
+    assert httpx.get(f"{serveur}/autre-chose", timeout=5.0).status_code == 404

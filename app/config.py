@@ -57,6 +57,30 @@ class Settings:
     # défaut) donnait ≈ 9,8 Mo — trop près du plafond une fois l'enveloppe
     # JSON ajoutée, avec un risque d'échec intermittent selon les tronçons.
     runpod_chunk_seconds: int = 180
+    # Combien de temps un premier tronçon peut rester « en file » avant de
+    # conclure qu'aucun worker serverless ne va démarrer (voir pod de secours
+    # ci-dessous). Sans rapport avec MAX_WAIT_PER_CHUNK, qui borne l'attente
+    # totale une fois qu'un worker a effectivement pris le job.
+    runpod_launch_timeout_seconds: int = 90
+
+    # --- RunPod : pod de secours (optionnel) ---
+    # Le serverless RunPod peut rester bloqué en file si aucun worker ne
+    # dispose de capacité (GPU rare, quota atteint...). Le pod de secours est
+    # une machine GPU louée à la minute, créée seulement à ce moment-là et
+    # détruite (« terminate », pas juste « stop ») dès la transcription finie
+    # — pour ne payer que si le serverless a vraiment échoué à démarrer.
+    # Contrairement au serverless, un pod n'a pas de build automatique depuis
+    # ce dépôt : il faut construire et pousser l'image vous-même (voir le
+    # README) et renseigner sa référence ici.
+    runpod_pod_enabled: bool = False
+    runpod_pod_image: str = ""
+    runpod_pod_gpu_type_id: str = "NVIDIA L4"
+    runpod_pod_container_disk_gb: int = 20
+    runpod_pod_port: int = 8000
+    # Démarrage d'un pod : tirage de l'image + démarrage CUDA + chargement du
+    # modèle Whisper. Généreux à dessein — plus lent qu'un worker serverless
+    # déjà chaud, mais ça ne se produit qu'en secours.
+    runpod_pod_boot_timeout_seconds: int = 600
 
     # --- Relecture (optionnelle) ---
     default_proofread: str = "claude"
