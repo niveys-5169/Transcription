@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import atexit
 import base64
+import os
 import threading
 import time
 import uuid
@@ -44,6 +45,20 @@ POLL_INTERVAL = 3.0
 # que la fonctionnalite "Model Caching" native de RunPod, pour qu'un seul
 # volume beneficie aux deux sans configuration supplementaire.
 VOLUME_MOUNT_PATH = "/runpod-volume"
+
+
+def _hf_token_env() -> dict[str, str] | None:
+    """Transmet HF_TOKEN au pod créé, s'il est défini côté application.
+
+    Sans jeton, huggingface_hub télécharge le modèle en anonyme et se heurte
+    au rate-limit du Hub — plus vite atteint sur un pod fraîchement créé qui
+    n'a rien en cache. Contrairement à handler.py (serverless), un pod n'a
+    pas de variables d'environnement à lui : elles doivent être fournies à
+    la création, d'où ce transfert explicite plutôt qu'un simple `os.getenv`
+    côté pod.
+    """
+    token = os.environ.get("HF_TOKEN")
+    return {"HF_TOKEN": token} if token else None
 
 
 class RunPodPodClient:
@@ -90,6 +105,7 @@ class RunPodPodClient:
         port: int,
         start_command: str,
         network_volume_id: str | None = None,
+        env: dict[str, str] | None = None,
     ) -> str:
         query = """
         mutation PodCreate($input: PodFindAndDeployOnDemandInput!) {
@@ -115,6 +131,10 @@ class RunPodPodClient:
             # (voir le commentaire sur runpod_pod_network_volume_id).
             variables["input"]["networkVolumeId"] = network_volume_id
             variables["input"]["volumeMountPath"] = VOLUME_MOUNT_PATH
+        if env:
+            variables["input"]["env"] = [
+                {"key": key, "value": value} for key, value in env.items()
+            ]
         data = self._graphql(query, variables)
         pod_id = (data.get("podFindAndDeployOnDemand") or {}).get("id")
         if not pod_id:
@@ -177,6 +197,7 @@ class PodFallbackSession:
             port=settings.runpod_pod_port,
             start_command="python3 -u /pod_server.py",
             network_volume_id=getattr(settings, "runpod_pod_network_volume_id", "") or None,
+            env=_hf_token_env(),
         )
         self._wait_ready()
 

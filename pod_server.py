@@ -20,6 +20,14 @@ import os
 import tempfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+# HF_HUB_ENABLE_HF_TRANSFER est déprécié (huggingface_hub a basculé son
+# transfert accéléré sur le backend Xet) : s'il traîne dans l'environnement
+# (image de base RunPod notamment), il ne fait plus rien à part déclencher
+# un FutureWarning à chaque import. On le retire et on active son
+# remplaçant à la place, avant tout import de faster_whisper/huggingface_hub.
+os.environ.pop("HF_HUB_ENABLE_HF_TRANSFER", None)
+os.environ.setdefault("HF_XET_HIGH_PERFORMANCE", "1")
+
 VALID_MODELS = {"tiny", "base", "small", "medium", "large-v3"}
 VOLUME_ROOT = "/runpod-volume"
 _model_cache: dict[str, object] = {}

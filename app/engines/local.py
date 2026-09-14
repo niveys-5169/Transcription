@@ -42,6 +42,14 @@ class LocalWhisperEngine:
     def _load(self, model: str):
         import os
 
+        # HF_HUB_ENABLE_HF_TRANSFER est déprécié (huggingface_hub a basculé
+        # son transfert accéléré sur le backend Xet) : s'il traîne dans
+        # l'environnement, il ne fait plus rien à part déclencher un
+        # FutureWarning à chaque import. On le retire et on active son
+        # remplaçant à la place.
+        os.environ.pop("HF_HUB_ENABLE_HF_TRANSFER", None)
+        os.environ.setdefault("HF_XET_HIGH_PERFORMANCE", "1")
+
         from faster_whisper import WhisperModel
 
         if model not in WHISPER_MODELS:

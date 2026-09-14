@@ -13,6 +13,10 @@ imageio-ffmpeg>=0.5          # ffmpeg embarqué, si absent du système
 
 # Transcription sur cette machine
 faster-whisper>=1.0
+# Backend de transfert accéléré de huggingface_hub (téléchargement des
+# modèles Whisper) : sans lui, HF_XET_HIGH_PERFORMANCE (voir
+# app/engines/local.py) n'a aucun effet et on retombe sur un simple GET HTTP.
+hf_xet>=1.0
 
 # Relecture par Claude, uniquement pour le back-end "api" (clé API Anthropic).
 # Le back-end par défaut ("cli", sur l'abonnement) appelle le binaire claude

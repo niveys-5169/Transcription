@@ -622,6 +622,28 @@ existe pour pallier un manque de capacité serverless. Sans volume configuré
 (réglage laissé vide), le pod garde son comportement actuel : image légère,
 mais le modèle est retéléchargé depuis Hugging Face à chaque pod créé.
 
+### Jeton Hugging Face (optionnel, évite le rate-limit)
+
+Sans jeton, chaque téléchargement d'un modèle Whisper (`Systran/faster-whisper-*`
+sur le Hub) part en anonyme — huggingface_hub le rappelle par un avertissement
+(« Please set a HF_TOKEN to enable higher rate limits ») et se heurte plus
+vite au rate-limit du Hub, en particulier quand un cold start ou un pod
+fraîchement créé n'a rien en cache local.
+
+- **Application locale et pod de secours** : rien à faire dans le code.
+  `HF_TOKEN`, s'il est présent dans l'environnement de l'application au
+  moment où elle tourne (ou crée un pod), est repris automatiquement —
+  huggingface_hub le lit tout seul localement, et `app/engines/runpod_pod.py`
+  le transmet explicitement au pod créé (les pods RunPod n'héritent pas de
+  l'environnement de la machine qui les crée).
+- **Étape manuelle, une seule fois — worker Serverless** : `handler.py`
+  tourne dans un conteneur RunPod totalement séparé, qui n'a par construction
+  aucun moyen de recevoir cette variable depuis votre machine. RunPod →
+  **Serverless** → votre endpoint → **Manage** → **Edit Endpoint** →
+  **Environment Variables** → ajoutez `HF_TOKEN` avec un jeton
+  [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens)
+  (lecture seule suffit).
+
 <details>
 <summary>Pourquoi l'API RunPod des pods n'a pas pu être vérifiée en direct</summary>
 

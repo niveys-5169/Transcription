@@ -1,2 +1,6 @@
 faster-whisper==1.2.1
 runpod==1.12.0
+# Backend de transfert accéléré de huggingface_hub (téléchargement des
+# modèles Whisper) : sans lui, HF_XET_HIGH_PERFORMANCE (voir handler.py /
+# pod_server.py) n'a aucun effet et on retombe sur un simple GET HTTP.
+hf_xet>=1.0
