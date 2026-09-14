@@ -300,3 +300,39 @@ def test_parsed_tableau(backend, monkeypatch):
         system="s", user="u", max_tokens=100, schema={"type": "array"}
     )
     assert result.parsed == payload
+
+
+def test_schema_tableau_est_enveloppe_pour_le_cli(backend, monkeypatch):
+    """L'API Anthropic exige un ``input_schema`` de type objet pour un outil
+    personnalisé (ce que devient ``--json-schema``) : un schéma « array » nu
+    fait échouer l'appel réel avec « tools.0.custom.input_schema.type: Input
+    should be 'object' ». Le schéma envoyé au CLI doit donc être enveloppé,
+    même si l'appelant continue de passer un schéma « array »."""
+    _make_available(monkeypatch)
+    captured = {}
+
+    def fake_popen(cmd, **kwargs):
+        captured["cmd"] = cmd
+        return _FakeProcess(_stream(_result("{}")))
+
+    monkeypatch.setattr("subprocess.Popen", fake_popen)
+    backend.complete(system="s", user="u", max_tokens=100, schema={"type": "array"})
+
+    schema_index = captured["cmd"].index("--json-schema") + 1
+    sent_schema = json.loads(captured["cmd"][schema_index])
+    assert sent_schema["type"] == "object"
+
+
+def test_parsed_tableau_enveloppe_est_defait(backend, monkeypatch):
+    """Réponse réaliste d'un CLI contraint par le schéma enveloppé ci-dessus :
+    ``{"items": [...]}`` plutôt qu'un tableau nu."""
+    _make_available(monkeypatch)
+    payload = [{"citation": "x"}]
+    monkeypatch.setattr(
+        "subprocess.Popen",
+        lambda cmd, **k: _FakeProcess(_stream(_result(json.dumps({"items": payload})))),
+    )
+    result = backend.complete(
+        system="s", user="u", max_tokens=100, schema={"type": "array"}
+    )
+    assert result.parsed == payload

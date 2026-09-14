@@ -145,7 +145,7 @@ class CliBackend:
         assert exe is not None  # garanti par is_available() ci-dessus
 
         cmd = self._build_command(exe, system=system, schema=schema, web_search=web_search)
-        return self._run(cmd, user)
+        return self._run(cmd, user, schema)
 
     def _build_command(self, exe: str, *, system: str, schema: dict | None, web_search: bool) -> list[str]:
         cmd = [
@@ -181,12 +181,12 @@ class CliBackend:
             "",
         ]
         if schema is not None:
-            cmd += ["--json-schema", json.dumps(schema, ensure_ascii=False)]
+            cmd += ["--json-schema", json.dumps(_cli_schema(schema), ensure_ascii=False)]
         return cmd
 
     # ------------------------------------------------------------- exécution
 
-    def _run(self, cmd: list[str], user_prompt: str) -> BackendResult:
+    def _run(self, cmd: list[str], user_prompt: str, schema: dict | None) -> BackendResult:
         process = subprocess.Popen(
             cmd,
             stdin=subprocess.PIPE,
@@ -274,12 +274,7 @@ class CliBackend:
                 )
             text = str(result_event.get("result") or "")
 
-        schema_present = "--json-schema" in cmd
-        parsed = None
-        if schema_present:
-            schema_index = cmd.index("--json-schema") + 1
-            schema_json = json.loads(cmd[schema_index])
-            parsed = _parse_schema(text, schema_json)
+        parsed = _parse_schema(text, schema) if schema is not None else None
 
         return BackendResult(
             text=text, web_searches=web_searches, sources=sources, parsed=parsed
@@ -321,15 +316,37 @@ def _scan_tool_results(event: dict, websearch_ids: set[str]) -> list[str]:
     return list(dict.fromkeys(urls))
 
 
+def _cli_schema(schema: dict) -> dict:
+    """Schéma effectivement transmis à ``--json-schema``.
+
+    L'API Anthropic exige qu'un outil personnalisé — ce que devient
+    ``--json-schema`` sous le capot du CLI — déclare un ``input_schema`` de
+    type « object » ; un schéma de type « array » nu fait échouer l'appel
+    (« tools.0.custom.input_schema.type: Input should be 'object' »). On
+    l'enveloppe donc dans un objet ; ``_parse_schema`` défait l'enveloppe
+    côté lecture.
+    """
+    if schema.get("type") == "array":
+        return {"type": "object", "properties": {"items": schema}, "required": ["items"]}
+    return schema
+
+
 def _parse_schema(text: str, schema: dict) -> dict | list | None:
+    is_array = schema.get("type") == "array"
     try:
         parsed = json.loads(text)
-        if schema.get("type") == "array" and isinstance(parsed, list):
-            return parsed
-        if schema.get("type") != "array" and isinstance(parsed, dict):
-            return parsed
     except json.JSONDecodeError:
-        pass
-    if schema.get("type") == "array":
+        parsed = None
+
+    if parsed is not None:
+        if is_array:
+            if isinstance(parsed, list):
+                return parsed
+            if isinstance(parsed, dict) and isinstance(parsed.get("items"), list):
+                return parsed["items"]
+        elif isinstance(parsed, dict):
+            return parsed
+
+    if is_array:
         return parse_json_array(text) or None
     return parse_json_object(text) or None
