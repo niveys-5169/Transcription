@@ -306,8 +306,11 @@ quand plusieurs fichiers s'enchaînent, le pod créé pour le premier reste
 disponible pour les suivants au lieu d'être détruit puis recréé à chaque
 fois — ce qui rechargerait l'image et le modèle Whisper à chaque fichier
 pour rien. Il n'est détruit que si plus aucun travail n'en a eu besoin
-pendant `runpod_pod_idle_timeout_seconds` (5 minutes par défaut, réglable) —
-jamais laissé vivre indéfiniment.
+pendant `runpod_pod_idle_timeout_seconds` (90 secondes par défaut, réglable)
+— jamais laissé vivre indéfiniment. Après le tout dernier fichier, ce délai
+reste du temps GPU facturé pour rien : c'est le prix à payer pour couvrir
+l'écart entre deux dépôts manuels rapprochés sans savoir à l'avance lequel
+sera le dernier.
 
 Réglages → **Pod RunPod** → **Démarrage** propose trois choix :
 

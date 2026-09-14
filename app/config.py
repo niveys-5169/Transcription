@@ -97,8 +97,11 @@ class Settings:
     # disponible pour les suivants au lieu d'être détruit puis recréé à
     # chaque fois (ce qui rechargerait l'image et le modèle Whisper à
     # chaque fichier). Il n'est détruit que si personne n'en a eu besoin
-    # pendant ce délai — jamais laissé vivre indéfiniment.
-    runpod_pod_idle_timeout_seconds: int = 300
+    # pendant ce délai — jamais laissé vivre indéfiniment. Court par défaut :
+    # après le tout dernier fichier, ce délai est du temps GPU facturé pour
+    # rien puisque personne ne le redemandera ; il ne sert qu'à couvrir
+    # l'écart entre deux dépôts manuels rapprochés.
+    runpod_pod_idle_timeout_seconds: int = 90
 
     # --- Relecture (optionnelle) ---
     default_proofread: str = "claude"
