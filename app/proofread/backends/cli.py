@@ -101,6 +101,8 @@ class CliBackend:
                 [exe, "auth", "status", "--json"],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=15,
             )
         except (OSError, subprocess.TimeoutExpired) as exc:
@@ -193,6 +195,7 @@ class CliBackend:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            encoding="utf-8",
             errors="replace",
         )
         assert process.stdin is not None and process.stdout is not None
