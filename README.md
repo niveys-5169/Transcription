@@ -299,7 +299,18 @@ capacité disponible (GPU rare, quota atteint), un job peut rester coincé « en
 file » indéfiniment, sans jamais être pris en charge. Un **pod** RunPod
 couvre ce cas : une machine GPU louée **à la minute** (pas à la requête),
 créée seulement quand on en a besoin et détruite — pas seulement arrêtée, ce
-qui laisserait le disque facturé — dès la fin de la transcription.
+qui laisserait le disque facturé.
+
+Un seul travail est traité à la fois (un seul thread dépile la file), donc
+quand plusieurs fichiers s'enchaînent, le pod créé pour le premier reste
+disponible pour les suivants au lieu d'être détruit puis recréé à chaque
+fois — ce qui rechargerait l'image et le modèle Whisper à chaque fichier
+pour rien. Il n'est détruit que si plus aucun travail n'en a eu besoin
+pendant `runpod_pod_idle_timeout_seconds` (90 secondes par défaut, réglable)
+— jamais laissé vivre indéfiniment. Après le tout dernier fichier, ce délai
+reste du temps GPU facturé pour rien : c'est le prix à payer pour couvrir
+l'écart entre deux dépôts manuels rapprochés sans savoir à l'avance lequel
+sera le dernier.
 
 Réglages → **Pod RunPod** → **Démarrage** propose trois choix :
 

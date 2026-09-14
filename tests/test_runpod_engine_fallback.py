@@ -4,10 +4,14 @@
 
 Le point sensible n'est pas le calcul (c'est le pod qui transcrit, pas ce
 moteur) mais le cycle de vie : un pod RunPod est facturé à la minute dès sa
-création, sans redescendre à zéro entre deux usages comme le serverless. Ces
-tests vérifient donc surtout une chose, sous toutes ses formes : le pod est
-toujours fermé (``close()``), succès ou échec, dès que la transcription qui
-en avait besoin se termine.
+création, sans redescendre à zéro entre deux usages comme le serverless. Le
+moteur ne le ferme donc plus lui-même à la fin de chaque transcription — il
+le rend au ``PodPool`` partagé (voir ``test_runpod_pod_engine.py`` pour le
+pool lui-même), qui le garde chaud pour le travail suivant de la file et ne
+le ferme qu'après un délai d'inactivité. Ces tests vérifient donc surtout :
+que le pod est bien créé quand il le faut, rendu au pool (pas fermé) à la
+fin d'une transcription réussie, mais tout de même fermé immédiatement si sa
+création ou son démarrage échoue (rien d'utilisable à garder chaud).
 
 Aucun appel réseau réel : ``_run_job`` (l'appel serverless) et
 ``PodFallbackSession`` (le pod) sont remplacés par des doublures.
@@ -20,8 +24,10 @@ import pytest
 
 from app import config
 from app.engines import runpod as runpod_module
+from app.engines import runpod_pod as runpod_pod_module
 from app.engines.base import TranscriptionError
 from app.engines.runpod import RunPodEngine, _ServerlessLaunchTimeout
+from app.engines.runpod_pod import pod_pool
 from app.media import AudioChunk
 
 
@@ -44,6 +50,9 @@ class _FausseSessionPod:
             raise TranscriptionError("le pod n'a jamais répondu")
         self.started = True
 
+    def is_healthy(self):
+        return True
+
     def transcribe_chunk(self, audio_bytes, model, language, *, label):
         if self._echoue_transcription:
             raise TranscriptionError(f"le pod a planté sur le {label}")
@@ -65,8 +74,10 @@ def _preparer_troncons(tmp_path: Path, n: int) -> list[AudioChunk]:
 
 @pytest.fixture(autouse=True)
 def _isoler_reglages():
+    pod_pool.shutdown()  # au cas où un test précédent aurait laissé un pod chaud
     _FausseSessionPod.instances.clear()
     yield
+    pod_pool.shutdown()
     _FausseSessionPod.instances.clear()
     config.save_settings(
         {
@@ -135,10 +146,10 @@ def test_sans_pod_configure_le_message_explique_comment_l_activer(
     assert _FausseSessionPod.instances == []  # jamais créé : pas configuré
 
 
-def test_bascule_sur_le_pod_pour_tous_les_troncons_et_le_ferme_a_la_fin(
+def test_bascule_sur_le_pod_pour_tous_les_troncons_et_le_garde_chaud_ensuite(
     moteur_bloque_au_premier_troncon, tmp_path, monkeypatch
 ):
-    monkeypatch.setattr(runpod_module, "PodFallbackSession", _FausseSessionPod)
+    monkeypatch.setattr(runpod_pod_module, "PodFallbackSession", _FausseSessionPod)
     _configurer(runpod_pod_mode="fallback", runpod_pod_image="repo/image:tag")
     engine = RunPodEngine()
 
@@ -149,14 +160,16 @@ def test_bascule_sur_le_pod_pour_tous_les_troncons_et_le_ferme_a_la_fin(
     session = _FausseSessionPod.instances[0]
     assert session.started
     assert len(session.chunks_transcrits) == 3
-    assert session.closed == 1
+    # Rendu au pool, pas fermé : un éventuel travail suivant dans la file le
+    # retrouve chaud plutôt que d'en attendre un nouveau.
+    assert session.closed == 0
 
 
 def test_seul_le_premier_troncon_peut_declencher_la_bascule(
     moteur_bloque_au_premier_troncon, tmp_path, monkeypatch
 ):
     chunks, appels_run_job = moteur_bloque_au_premier_troncon
-    monkeypatch.setattr(runpod_module, "PodFallbackSession", _FausseSessionPod)
+    monkeypatch.setattr(runpod_pod_module, "PodFallbackSession", _FausseSessionPod)
     _configurer(runpod_pod_mode="fallback", runpod_pod_image="repo/image:tag")
     engine = RunPodEngine()
 
@@ -170,11 +183,14 @@ def test_seul_le_premier_troncon_peut_declencher_la_bascule(
     assert fail_fast_after == config.load_settings().runpod_launch_timeout_seconds
 
 
-def test_le_pod_est_ferme_meme_si_la_transcription_y_echoue(
+def test_le_pod_reste_chaud_si_seule_la_transcription_echoue(
     moteur_bloque_au_premier_troncon, tmp_path, monkeypatch
 ):
+    """Un tronçon en échec (audio corrompu, OOM ponctuel…) ne veut pas dire
+    que le pod lui-même est mort : inutile de le fermer, le pool le
+    revalidera (``is_healthy``) au prochain travail qui en a besoin."""
     monkeypatch.setattr(
-        runpod_module,
+        runpod_pod_module,
         "PodFallbackSession",
         lambda settings: _FausseSessionPod(settings, echoue_transcription=True),
     )
@@ -184,14 +200,14 @@ def test_le_pod_est_ferme_meme_si_la_transcription_y_echoue(
     with pytest.raises(TranscriptionError, match="planté"):
         _transcrire(engine, tmp_path)
 
-    assert _FausseSessionPod.instances[0].closed == 1
+    assert _FausseSessionPod.instances[0].closed == 0
 
 
 def test_le_pod_est_ferme_meme_si_son_demarrage_echoue(
     moteur_bloque_au_premier_troncon, tmp_path, monkeypatch
 ):
     monkeypatch.setattr(
-        runpod_module,
+        runpod_pod_module,
         "PodFallbackSession",
         lambda settings: _FausseSessionPod(settings, echoue_au_demarrage=True),
     )
@@ -204,10 +220,10 @@ def test_le_pod_est_ferme_meme_si_son_demarrage_echoue(
     assert _FausseSessionPod.instances[0].closed == 1
 
 
-def test_le_pod_est_ferme_meme_si_l_annulation_survient_apres_la_bascule(
+def test_le_pod_reste_chaud_meme_si_l_annulation_survient_apres_la_bascule(
     moteur_bloque_au_premier_troncon, tmp_path, monkeypatch
 ):
-    monkeypatch.setattr(runpod_module, "PodFallbackSession", _FausseSessionPod)
+    monkeypatch.setattr(runpod_pod_module, "PodFallbackSession", _FausseSessionPod)
     _configurer(runpod_pod_mode="fallback", runpod_pod_image="repo/image:tag")
     engine = RunPodEngine()
 
@@ -229,7 +245,9 @@ def test_le_pod_est_ferme_meme_si_l_annulation_survient_apres_la_bascule(
             )
         )
 
-    assert _FausseSessionPod.instances[0].closed == 1
+    # Une annulation vient de l'utilisateur, pas d'un pod défaillant : le
+    # prochain travail de la file le retrouve chaud comme les autres.
+    assert _FausseSessionPod.instances[0].closed == 0
 
 
 # ------------------------------------------------------ mode "always" (direct)
@@ -253,7 +271,7 @@ def moteur_avec_serverless_jamais_appele(monkeypatch, tmp_path):
 def test_le_mode_always_va_droit_au_pod_sans_tenter_le_serverless(
     moteur_avec_serverless_jamais_appele, tmp_path, monkeypatch
 ):
-    monkeypatch.setattr(runpod_module, "PodFallbackSession", _FausseSessionPod)
+    monkeypatch.setattr(runpod_pod_module, "PodFallbackSession", _FausseSessionPod)
     _configurer(runpod_pod_mode="always", runpod_pod_image="repo/image:tag")
     engine = RunPodEngine()
 
@@ -264,13 +282,56 @@ def test_le_mode_always_va_droit_au_pod_sans_tenter_le_serverless(
     session = _FausseSessionPod.instances[0]
     assert session.started
     assert len(session.chunks_transcrits) == 3
+    assert session.closed == 0  # gardé chaud pour le prochain fichier de la file
+
+
+def test_le_mode_always_reutilise_le_meme_pod_pour_plusieurs_fichiers(
+    tmp_path, monkeypatch
+):
+    """Le cas visé par le pool : plusieurs fichiers traités à la suite (un
+    seul thread dépile la file, voir pipeline.py) partagent le même pod
+    plutôt que d'en recréer un — et retélécharger l'image, recharger le
+    modèle — à chaque fichier.
+
+    Ne réutilise pas ``moteur_avec_serverless_jamais_appele`` : ses tronçons
+    factices sont supprimés par ``_cleanup`` à la fin de chaque appel à
+    ``transcribe()``, donc chaque fichier a besoin des siens, régénérés à
+    chaque appel à ``split_wav``.
+    """
+    monkeypatch.setattr(runpod_pod_module, "PodFallbackSession", _FausseSessionPod)
+    monkeypatch.setattr(
+        runpod_module.media,
+        "split_wav",
+        lambda *a, **k: _preparer_troncons(tmp_path, 3),
+    )
+
+    def _run_job_jamais(self, *a, **k):
+        raise AssertionError("_run_job appelé alors que le mode est « always »")
+
+    monkeypatch.setattr(RunPodEngine, "_run_job", _run_job_jamais)
+
+    _configurer(runpod_pod_mode="always", runpod_pod_image="repo/image:tag")
+    engine = RunPodEngine()
+
+    _transcrire(engine, tmp_path)
+    _transcrire(engine, tmp_path)
+    _transcrire(engine, tmp_path)
+
+    assert len(_FausseSessionPod.instances) == 1  # le même pod pour les 3 fichiers
+    session = _FausseSessionPod.instances[0]
+    assert len(session.chunks_transcrits) == 9  # 3 tronçons × 3 fichiers
+    assert session.closed == 0
+
+    # Personne d'autre n'a besoin du pod : la fin de session (ou l'échéance
+    # d'inactivité) le ferme bel et bien.
+    pod_pool.shutdown()
     assert session.closed == 1
 
 
 def test_le_mode_always_sans_image_echoue_avant_toute_creation_de_pod(
     moteur_avec_serverless_jamais_appele, tmp_path, monkeypatch
 ):
-    monkeypatch.setattr(runpod_module, "PodFallbackSession", _FausseSessionPod)
+    monkeypatch.setattr(runpod_pod_module, "PodFallbackSession", _FausseSessionPod)
     _configurer(runpod_pod_mode="always", runpod_pod_image="")
     engine = RunPodEngine()
 
@@ -284,7 +345,7 @@ def test_le_pod_est_ferme_meme_si_son_demarrage_echoue_en_mode_always(
     moteur_avec_serverless_jamais_appele, tmp_path, monkeypatch
 ):
     monkeypatch.setattr(
-        runpod_module,
+        runpod_pod_module,
         "PodFallbackSession",
         lambda settings: _FausseSessionPod(settings, echoue_au_demarrage=True),
     )

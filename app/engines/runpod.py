@@ -19,7 +19,7 @@ import httpx
 from ..config import WHISPER_MODELS, load_settings
 from .. import media
 from .base import CancelCheck, ProgressCallback, Segment, TranscriptionError
-from .runpod_pod import PodFallbackSession
+from .runpod_pod import PodFallbackSession, pod_pool
 
 API_ROOT = "https://api.runpod.ai/v2"
 POLL_INTERVAL = 2.0
@@ -98,9 +98,8 @@ class RunPodEngine:
         try:
             if pod_direct:
                 if on_progress:
-                    on_progress(0.0, "Création du pod GPU…")
-                pod_session = PodFallbackSession(settings)
-                pod_session.start()
+                    on_progress(0.0, "Préparation du pod GPU…")
+                pod_session = pod_pool.acquire(settings)
 
             with httpx.Client(timeout=httpx.Timeout(120.0, read=120.0)) as client:
                 for index, chunk in enumerate(chunks, start=1):
@@ -167,8 +166,7 @@ class RunPodEngine:
                                     "Le GPU serverless ne démarre aucun worker — "
                                     "bascule sur un pod de secours…",
                                 )
-                            pod_session = PodFallbackSession(settings)
-                            pod_session.start()
+                            pod_session = pod_pool.acquire(settings)
                             output = pod_session.transcribe_chunk(
                                 audio_bytes, model, language, label=label
                             )
@@ -190,11 +188,14 @@ class RunPodEngine:
                             f"{label} transcrit.",
                         )
         finally:
-            # Le pod de secours est facturé à la minute dès sa création : il
-            # doit disparaître ici quoi qu'il arrive — fin normale, erreur,
-            # ou annulation — pour ne jamais payer un GPU qui ne fait rien.
+            # Le pod de secours est facturé à la minute dès sa création,
+            # donc on ne le garde jamais oisif indéfiniment — mais rien
+            # n'empêche le travail suivant dans la file d'en avoir besoin
+            # dans la foulée. On le rend donc au pool plutôt que de le
+            # fermer ici : c'est lui qui décide, via le délai d'inactivité,
+            # du moment où plus personne n'en veut.
             if pod_session is not None:
-                pod_session.close()
+                pod_pool.release(settings)
             self._cleanup(chunks, wav_path, chunk_dir)
 
     def _run_job(

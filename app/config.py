@@ -92,6 +92,16 @@ class Settings:
     # modèle Whisper. Généreux à dessein — plus lent qu'un worker serverless
     # déjà chaud, mais ça ne se produit qu'en secours.
     runpod_pod_boot_timeout_seconds: int = 600
+    # Un seul thread traite la file de travaux (voir pipeline.py) : quand
+    # plusieurs fichiers s'enchaînent, le pod créé pour le premier reste donc
+    # disponible pour les suivants au lieu d'être détruit puis recréé à
+    # chaque fois (ce qui rechargerait l'image et le modèle Whisper à
+    # chaque fichier). Il n'est détruit que si personne n'en a eu besoin
+    # pendant ce délai — jamais laissé vivre indéfiniment. Court par défaut :
+    # après le tout dernier fichier, ce délai est du temps GPU facturé pour
+    # rien puisque personne ne le redemandera ; il ne sert qu'à couvrir
+    # l'écart entre deux dépôts manuels rapprochés.
+    runpod_pod_idle_timeout_seconds: int = 90
 
     # --- Relecture (optionnelle) ---
     default_proofread: str = "claude"
