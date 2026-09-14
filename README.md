@@ -428,8 +428,12 @@ Le dépôt contient aussi le worker RunPod Serverless (`handler.py`,
 Entrée (`job["input"]`) :
 
 ```json
-{"audio_base64": "<WAV en base64>", "model": "large-v3", "language": "fr"}
+{"audio_base64": "<WAV en base64>", "model": "large-v3", "language": "fr",
+ "initial_prompt": "amorce de vocabulaire, facultative"}
 ```
+
+`initial_prompt` est optionnel : un worker déployé avant son ajout l'ignore
+sans casser (voir [le lexique MJPM](#le-lexique-mjpm)).
 
 Sortie :
 
