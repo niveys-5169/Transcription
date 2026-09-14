@@ -30,7 +30,7 @@ import threading
 import time
 from pathlib import Path
 
-from . import config, db, lexicon, media, obsidian
+from . import config, db, exporters, lexicon, media, obsidian
 from .engines import get_engine
 from .engines.base import TranscriptionError
 from .proofread import ProofreadError, ProofreadResult, basic_proofread
@@ -164,6 +164,66 @@ def _release(job_id: str) -> None:
     with _lock:
         _live.pop(job_id, None)
         _cancelled.discard(job_id)
+
+
+# --------------------------------------------------- compilation NotebookLM
+
+
+def _export_course_markdown(job_id: str) -> Path | None:
+    """Écrit (ou réécrit) le .md finalisé du cours dans data/cours/.
+
+    Relit systématiquement le travail en base plutôt que de réutiliser un
+    dict déjà en main dans l'appelant : mark_finished() vient tout juste
+    d'écrire de nouvelles valeurs (texte relu, vérifié…) que ce dict périmé
+    ne porte pas encore. Sans ce rechargement, un appel après l'étape 3
+    exporterait le texte d'avant la vérification web.
+
+    N'importe pas depuis le module notebooklm_sync : celui-ci compile
+    ensuite ces fichiers, mais ignore tout de la base de travaux — la
+    frontière reste nette entre « ce qui vient de SQLite » et « ce qui vient
+    du disque ». Échec d'écriture disque : journalisé, jamais remonté — un
+    export raté ne doit pas faire échouer une étape par ailleurs réussie.
+    """
+    job = db.get_job(job_id)
+    if job is None:
+        return None
+
+    try:
+        config.COURSES_DIR.mkdir(parents=True, exist_ok=True)
+
+        # Anti-doublon : un titre modifié entre deux runs ne doit pas laisser
+        # une ancienne section du même cours à côté de la nouvelle.
+        for stale in config.COURSES_DIR.glob(f"*-{job_id}.md"):
+            stale.unlink(missing_ok=True)
+
+        date = (job.get("created_at") or "")[:10] or "0000-00-00"
+        title = job.get("title") or job.get("filename") or "cours"
+        slug = exporters.safe_filename(title, "md")[: -len(".md")]
+        path = config.COURSES_DIR / f"{date}-{slug}-{job_id}.md"
+
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_text(exporters.render(job, "md"), encoding="utf-8")
+        tmp.replace(path)
+        return path
+    except OSError as exc:
+        logger.warning("Export du cours %s en échec : %s", job_id, exc)
+        return None
+
+
+def _sync_notebooklm() -> None:
+    """Pousse la compilation de data/cours/ vers le Doc maître Drive.
+
+    Étape non bloquante, comme la publication Obsidian : ``sync_master_doc``
+    ne lève jamais (elle journalise et renvoie ``False``), le garde-fou ici
+    ne sert qu'à couvrir un import inattendu — aucune erreur Google ne doit
+    jamais faire mourir le thread du pipeline.
+    """
+    try:
+        from . import notebooklm_sync
+
+        notebooklm_sync.sync_master_doc(config.COURSES_DIR)
+    except Exception:  # pragma: no cover - garde-fou ultime
+        logger.exception("Synchronisation NotebookLM en échec de façon inattendue.")
 
 
 # ------------------------------------------------------ étape 1 : transcription
@@ -384,6 +444,14 @@ def run_proofread(job_id: str) -> None:
             enqueue(job_id, TASK_FACTCHECK)
         elif job.get("publish", True):
             enqueue(job_id, TASK_PUBLISH)
+        else:
+            # Rien ne suit : la relecture est la dernière étape de cette
+            # chaîne, c'est donc elle qui exporte et synchronise.
+            _export_course_markdown(job_id)
+            _sync_notebooklm()
+    else:
+        _export_course_markdown(job_id)
+        _sync_notebooklm()
 
 
 def _proofread(job: dict, segments: list[dict], *, on_progress, should_cancel):
@@ -517,8 +585,13 @@ def run_factcheck(job_id: str) -> None:
     finally:
         _release(job_id)
 
+    # Export systématique : le texte est définitif dès cette étape (fact-
+    # check compris), que la publication Obsidian suive ou non.
+    _export_course_markdown(job_id)
     if job.get("chain", True) and job.get("publish", True):
         enqueue(job_id, TASK_PUBLISH)
+    else:
+        _sync_notebooklm()
 
 
 def _merge_verification(existing, new_findings: list) -> dict:
@@ -589,6 +662,12 @@ def run_publish(job_id: str) -> None:
         error=None,
     )
 
+    # État final de cette tentative, renseigné dans chaque branche : sert
+    # après le bloc try/finally à décider s'il faut exporter et synchroniser
+    # (voir plus bas — délibérément hors du try, pour qu'un incident Drive
+    # ne puisse jamais se faire passer pour un échec de publication Obsidian).
+    final_status: str | None = None
+
     try:
         if is_cancelled(job_id):
             raise obsidian.ObsidianError("Publication annulée.")
@@ -605,6 +684,7 @@ def run_publish(job_id: str) -> None:
             task=None,
             obsidian_path=relative_path,
         )
+        final_status = "published"
 
     except obsidian.ObsidianError as exc:
         status = "canceled" if is_cancelled(job_id) else fallback_status
@@ -617,6 +697,7 @@ def run_publish(job_id: str) -> None:
             error=str(exc),
         )
         logger.info("Publication %s : %s (%s)", job_id, exc, status)
+        final_status = status
     except Exception as exc:  # pragma: no cover - garde-fou
         logger.exception("Publication %s en échec", job_id)
         db.mark_finished(
@@ -626,8 +707,17 @@ def run_publish(job_id: str) -> None:
             task=None,
             error=str(exc),
         )
+        final_status = fallback_status
     finally:
         _release(job_id)
+
+    # Le texte relu (et vérifié, le cas échéant) est définitif dès l'étape 2
+    # ou 3 : un échec de publication Obsidian n'a aucune raison d'empêcher le
+    # cours d'arriver dans le Doc maître NotebookLM. Seule l'annulation
+    # explicite du travail le retient.
+    if final_status and final_status != "canceled":
+        _export_course_markdown(job_id)
+        _sync_notebooklm()
 
 
 _RUNNERS.update(

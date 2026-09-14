@@ -196,6 +196,122 @@ def test_route_publish_explicite_depuis_done(client, vault):
     assert job["status"] == "published"
 
 
+def _fichier_cours(job_id):
+    """Le .md exporté pour ce travail dans data/cours/, ou None."""
+    trouvés = list(config.COURSES_DIR.glob(f"*-{job_id}.md"))
+    assert len(trouvés) <= 1, f"plusieurs .md pour le même travail : {trouvés}"
+    return trouvés[0] if trouvés else None
+
+
+def test_publication_exporte_le_cours_dans_data_cours(client, vault):
+    """La compilation NotebookLM (app/notebooklm_sync.py) part de data/cours/ :
+    la publication (dernière étape de la chaîne) doit y écrire un .md.
+    """
+    reponse = client.post(
+        "/api/jobs",
+        files={"file": ("cours.mp4", b"\x00" * 2048, "video/mp4")},
+        data={
+            "engine": "local", "model": "tiny", "language": "fr",
+            "proofread": "basic", "structure": "false", "one_click": "true",
+        },
+    )
+    job_id = reponse.json()["id"]
+    job = _attendre_statut(client, job_id, {"published", "error", "canceled"})
+    assert job["status"] == "published"
+
+    fichier = _fichier_cours(job_id)
+    assert fichier is not None
+    assert fichier.read_text(encoding="utf-8").strip()
+
+
+def test_republication_remplace_le_meme_fichier_de_cours(client, vault):
+    """Republier ne doit pas laisser deux .md pour le même travail dans
+    data/cours/ — même anti-doublon que pour la fiche Obsidian.
+    """
+    reponse = client.post(
+        "/api/jobs",
+        files={"file": ("cours.mp4", b"\x00" * 2048, "video/mp4")},
+        data={
+            "engine": "local", "model": "tiny", "language": "fr",
+            "proofread": "basic", "structure": "false", "one_click": "true",
+        },
+    )
+    job_id = reponse.json()["id"]
+    job = _attendre_statut(client, job_id, {"published"})
+    premier_fichier = _fichier_cours(job_id)
+    assert premier_fichier is not None
+
+    r = client.post(f"/api/jobs/{job_id}/publish")
+    assert r.status_code == 200
+    _attendre_statut(client, job_id, {"published"})
+
+    assert _fichier_cours(job_id) == premier_fichier
+
+
+def test_export_relit_la_base_plutot_que_le_dict_perime(client, vault):
+    """``_export_course_markdown`` doit relire le travail en base, pas se
+    fier à un dict déjà en main dans l'appelant : sinon un appel juste après
+    ``mark_finished()`` (étapes 2 et 3) exporterait l'ancien texte, d'avant
+    la relecture ou la vérification web qui viennent d'écrire en base.
+    """
+    from app import db, pipeline
+
+    job_id = db.create_job(
+        filename="cours.mp4",
+        media_path="",
+        size_bytes=0,
+        engine="local",
+        model="tiny",
+        language="fr",
+        proofread="basic",
+        structure=False,
+    )
+    db.update_job(job_id, title="Titre initial", clean_text="Texte initial.")
+    pipeline._export_course_markdown(job_id)
+
+    # Simule ce que mark_finished() d'une étape suivante vient d'écrire en
+    # base, sans que quiconque ne recharge le dict « job » de l'appelant.
+    db.update_job(job_id, title="Titre à jour", clean_text="Texte vérifié à jour.")
+    pipeline._export_course_markdown(job_id)
+
+    fichier = _fichier_cours(job_id)
+    assert fichier is not None
+    contenu = fichier.read_text(encoding="utf-8")
+    assert "Titre à jour" in contenu
+    assert "Texte vérifié à jour." in contenu
+    assert "Titre initial" not in contenu
+
+
+def test_echec_publication_obsidian_n_empeche_pas_l_export_et_le_sync(
+    client, vault, monkeypatch
+):
+    """Le texte est définitif dès la relecture (et le fact-check) : un
+    incident dans l'écriture de la fiche Obsidian ne doit ni empêcher
+    l'export vers data/cours/, ni le sync NotebookLM — sinon un cours ne
+    partirait jamais vers Drive à cause d'un coffre mal configuré.
+    """
+    def _publish_en_echec(job, *, settings=None):
+        raise obsidian.ObsidianError("coffre indisponible (simulé)")
+
+    monkeypatch.setattr(obsidian, "publish", _publish_en_echec)
+
+    reponse = client.post(
+        "/api/jobs",
+        files={"file": ("cours.mp4", b"\x00" * 2048, "video/mp4")},
+        data={
+            "engine": "local", "model": "tiny", "language": "fr",
+            "proofread": "basic", "structure": "false", "one_click": "true",
+        },
+    )
+    job_id = reponse.json()["id"]
+    job = _attendre_statut(client, job_id, {"checked", "error", "canceled"})
+    assert job["status"] == "checked"
+    assert "Publication Obsidian en échec" in (job.get("stage") or "")
+
+    fichier = _fichier_cours(job_id)
+    assert fichier is not None
+
+
 def test_republier_manuellement_ne_duplique_pas_la_fiche(client, vault):
     reponse = client.post(
         "/api/jobs",

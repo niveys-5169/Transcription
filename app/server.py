@@ -419,6 +419,20 @@ async def delete_job(job_id: str) -> dict:
     pipeline.cancel(job_id)
     db.delete_job(job_id)
     shutil.rmtree(config.MEDIA_DIR / job_id, ignore_errors=True)
+
+    # Un cours supprimé ne doit pas rester à jamais dans le Doc maître
+    # NotebookLM : son .md (data/cours/) est retiré, puis le Doc maître
+    # resynchronisé pour refléter la suppression. Échec Drive sans
+    # conséquence sur la suppression elle-même, déjà actée ci-dessus.
+    for stale in config.COURSES_DIR.glob(f"*-{job_id}.md"):
+        stale.unlink(missing_ok=True)
+    try:
+        from . import notebooklm_sync
+
+        notebooklm_sync.sync_master_doc(config.COURSES_DIR)
+    except Exception:  # pragma: no cover - garde-fou : jamais fatal ici non plus
+        logger.exception("Synchronisation NotebookLM en échec après suppression.")
+
     return {"deleted": job_id}
 
 
