@@ -179,7 +179,30 @@ select:focus, input:focus { outline: 2px solid var(--accent); outline-offset: 1p
   flex-wrap: wrap;
   margin-top: 18px;
 }
+.upload-actions-main { margin-top: 20px; }
 .pending { margin: 0; color: var(--text-soft); font-size: 13px; }
+
+.btn-big { font-size: 15px; padding: 12px 22px; }
+
+.one-click-hint {
+  margin: 10px 0 0;
+  color: var(--text-soft);
+  font-size: 12.5px;
+}
+
+#advanced-options {
+  margin-top: 14px;
+  border-top: 1px solid var(--border);
+  padding-top: 14px;
+}
+#advanced-options summary {
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 13.5px;
+  color: var(--text-soft);
+}
+#advanced-options summary:hover { color: var(--text); }
+#advanced-options[open] summary { color: var(--text); margin-bottom: 4px; }
 
 /* ------------------------------------------------------------- boutons */
 
@@ -372,6 +395,35 @@ select:focus, input:focus { outline: 2px solid var(--accent); outline-offset: 1p
 .finding-quote { display: flex; gap: 8px; }
 .finding-quote b { color: var(--text-soft); font-weight: 600; min-width: 42px; font-size: 12px; }
 .finding-quote span { color: var(--text-soft); font-style: italic; }
+
+/* ------------------------------------------------------------ sources */
+
+.verdict {
+  display: inline-flex;
+  align-items: center;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text-soft);
+}
+.verdict.confirme { color: var(--ok); border-color: var(--ok); }
+.verdict.infirme, .verdict.corrige { color: var(--danger); border-color: var(--danger); }
+.verdict.introuvable, .verdict.ambigu { color: var(--warn); border-color: var(--warn); }
+
+.finding-sources { margin-top: 8px; display: flex; gap: 8px; flex-wrap: wrap; }
+.finding-sources a {
+  font-size: 12px;
+  color: var(--accent);
+  text-decoration: none;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 2px 9px;
+}
+.finding-sources a:hover { text-decoration: underline; }
 
 .verify-summary {
   display: flex;

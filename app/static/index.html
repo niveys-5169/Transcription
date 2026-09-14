@@ -38,64 +38,90 @@
         <input type="file" id="file-input" accept="audio/*,video/*,.mkv,.m4a,.opus" multiple hidden>
       </div>
 
-      <div class="options">
-        <label class="field">
-          <span>Moteur</span>
-          <select id="engine" name="engine"></select>
-          <small id="engine-detail"></small>
-        </label>
-
-        <label class="field">
-          <span>Modèle Whisper</span>
-          <select id="model" name="model"></select>
-          <small>large-v3 : le plus précis. tiny/base : pour un essai rapide.</small>
-        </label>
-
-        <label class="field">
-          <span>Langue</span>
-          <select id="language" name="language">
-            <option value="fr">Français</option>
-            <option value="en">Anglais</option>
-            <option value="es">Espagnol</option>
-            <option value="de">Allemand</option>
-            <option value="it">Italien</option>
-            <option value="">Détection automatique</option>
-          </select>
-          <small>Forcer la langue évite les faux départs sur les premières secondes.</small>
-        </label>
-
-        <label class="field">
-          <span>Relecture</span>
-          <select id="proofread" name="proofread">
-            <option value="claude">Complète (Claude)</option>
-            <option value="basic">Simple (hors ligne)</option>
-            <option value="none">Aucune</option>
-          </select>
-          <small id="proofread-detail"></small>
-        </label>
-
-        <label class="check">
-          <input type="checkbox" id="structure" checked>
-          <span>Ajouter un titre, un résumé et des intertitres</span>
-        </label>
-
-        <label class="check">
-          <input type="checkbox" id="verify" checked>
-          <span>Vérifier la fidélité au texte brut</span>
-        </label>
-
-        <label class="check">
-          <input type="checkbox" id="chain" checked>
-          <span>Relire dans la foulée <small>(sinon : transcrire seulement)</small></span>
-        </label>
-      </div>
-
-      <div class="upload-actions">
+      <div class="upload-actions upload-actions-main">
         <p id="pending-files" class="pending"></p>
-        <button type="submit" id="submit-btn" class="btn btn-primary" disabled>
-          Lancer la transcription
+        <button type="button" id="one-click-btn" class="btn btn-primary btn-big" disabled>
+          Tout faire
         </button>
       </div>
+      <p class="one-click-hint">
+        Extraction, transcription, relecture, vérification par recherche web
+        et publication dans Obsidian, à la suite — avec les réglages par
+        défaut. Pour ajuster un réglage pour ce dépôt précis :
+      </p>
+
+      <details id="advanced-options">
+        <summary>Options avancées</summary>
+
+        <div class="options">
+          <label class="field">
+            <span>Moteur</span>
+            <select id="engine" name="engine"></select>
+            <small id="engine-detail"></small>
+          </label>
+
+          <label class="field">
+            <span>Modèle Whisper</span>
+            <select id="model" name="model"></select>
+            <small>large-v3 : le plus précis. tiny/base : pour un essai rapide.</small>
+          </label>
+
+          <label class="field">
+            <span>Langue</span>
+            <select id="language" name="language">
+              <option value="fr">Français</option>
+              <option value="en">Anglais</option>
+              <option value="es">Espagnol</option>
+              <option value="de">Allemand</option>
+              <option value="it">Italien</option>
+              <option value="">Détection automatique</option>
+            </select>
+            <small>Forcer la langue évite les faux départs sur les premières secondes.</small>
+          </label>
+
+          <label class="field">
+            <span>Relecture</span>
+            <select id="proofread" name="proofread">
+              <option value="claude">Complète (Claude)</option>
+              <option value="basic">Simple (hors ligne)</option>
+              <option value="none">Aucune</option>
+            </select>
+            <small id="proofread-detail"></small>
+          </label>
+
+          <label class="check">
+            <input type="checkbox" id="structure" checked>
+            <span>Ajouter un titre, un résumé et des intertitres</span>
+          </label>
+
+          <label class="check">
+            <input type="checkbox" id="verify" checked>
+            <span>Vérifier la fidélité au texte brut</span>
+          </label>
+
+          <label class="check">
+            <input type="checkbox" id="chain" checked>
+            <span>Relire dans la foulée <small>(sinon : transcrire seulement)</small></span>
+          </label>
+
+          <label class="check">
+            <input type="checkbox" id="factcheck" checked>
+            <span>Vérifier par recherche web <small>(noms propres, rapports, statistiques)</small></span>
+          </label>
+
+          <label class="check">
+            <input type="checkbox" id="publish" checked>
+            <span>Publier la fiche dans Obsidian <small>(si un coffre est configuré)</small></span>
+          </label>
+        </div>
+
+        <div class="upload-actions">
+          <span></span>
+          <button type="submit" id="submit-btn" class="btn btn-ghost" disabled>
+            Lancer avec ces réglages
+          </button>
+        </div>
+      </details>
     </form>
   </section>
 
@@ -123,6 +149,11 @@
             <p id="result-meta" class="meta"></p>
           </div>
           <div class="result-tools">
+            <a class="btn btn-ghost" id="obsidian-link" href="#" hidden>Ouvrir dans Obsidian</a>
+            <button type="button" class="btn btn-ghost" id="publish-btn" hidden>Publier</button>
+            <button type="button" class="btn btn-ghost" id="factcheck-btn" hidden>
+              Vérifier par recherche web
+            </button>
             <button type="button" class="btn btn-primary" id="proofread-btn" hidden>
               Relire avec Claude
             </button>
@@ -137,6 +168,7 @@
                 <a data-fmt="srt">Sous-titres (.srt)</a>
                 <a data-fmt="vtt">Sous-titres (.vtt)</a>
                 <a data-fmt="json">Tout, structuré (.json)</a>
+                <a data-fmt="obsidian">Fiche Obsidian (.md)</a>
               </div>
             </div>
             <button type="button" class="btn btn-danger-ghost" id="delete-btn">Supprimer</button>
@@ -157,6 +189,9 @@
           <button type="button" class="tab" data-tab="verify" role="tab">
             Vérification <span id="verify-count" class="tab-badge" hidden></span>
           </button>
+          <button type="button" class="tab" data-tab="sources" role="tab">
+            Sources <span id="sources-count" class="tab-badge" hidden></span>
+          </button>
           <button type="button" class="tab" data-tab="audio" role="tab">Audio extrait</button>
         </div>
 
@@ -164,6 +199,7 @@
         <div class="tab-panel" id="panel-raw" hidden></div>
         <div class="tab-panel" id="panel-segments" hidden></div>
         <div class="tab-panel" id="panel-verify" hidden></div>
+        <div class="tab-panel" id="panel-sources" hidden></div>
         <div class="tab-panel" id="panel-audio" hidden>
           <p class="meta">
             Le WAV 16 kHz mono effectivement envoyé au moteur. S'il est muet,
@@ -182,28 +218,124 @@
     <h2>Réglages</h2>
 
     <fieldset>
-      <legend>Relecture par Claude</legend>
+      <legend>Accès à Claude</legend>
       <p class="hint">
-        La relecture transforme le flot de paroles en texte ponctué et
-        structuré. Sans clé, l'application se rabat automatiquement sur la
-        relecture simple, qui fonctionne hors ligne.
+        Sert à la relecture, au sommaire et à la vérification par recherche
+        web. Deux façons d'y accéder : le CLI <code>claude</code>, sur votre
+        abonnement (recommandé — installez Claude Code et lancez
+        <code>claude setup-token</code> une fois) ; ou une clé API Anthropic,
+        facturée séparément à l'usage.
       </p>
       <label class="field">
-        <span>Clé API Anthropic</span>
+        <span>Accès</span>
+        <select id="claude_backend">
+          <option value="cli">CLI claude (abonnement)</option>
+          <option value="api">Clé API Anthropic</option>
+        </select>
+        <small id="claude-state"></small>
+      </label>
+      <label class="field">
+        <span>Chemin du CLI claude <small>(vide = cherché dans le PATH)</small></span>
+        <input type="text" id="claude_cli_path" placeholder="claude">
+      </label>
+      <label class="field">
+        <span>Clé API Anthropic <small>(back-end « Clé API » uniquement)</small></span>
         <input type="password" id="anthropic_api_key" placeholder="sk-ant-…" autocomplete="off">
         <small id="anthropic-state"></small>
       </label>
       <label class="field">
         <span>Modèle</span>
-        <input type="text" id="proofread_model" placeholder="claude-opus-5">
+        <input type="text" id="proofread_model" placeholder="claude-sonnet-5">
       </label>
       <label class="field">
         <span>Niveau d'effort</span>
         <select id="proofread_effort">
-          <option value="low">Bas — le plus rapide et le moins cher</option>
-          <option value="medium">Moyen — recommandé</option>
-          <option value="high">Élevé — cours techniques, vocabulaire pointu</option>
+          <option value="low">Bas — le plus rapide</option>
+          <option value="medium">Moyen</option>
+          <option value="high">Élevé — recommandé</option>
+          <option value="xhigh">Très élevé</option>
+          <option value="max">Maximal — le plus lent, le plus soigné</option>
         </select>
+      </label>
+    </fieldset>
+
+    <fieldset>
+      <legend>Vérification externe (recherche web)</legend>
+      <p class="hint">
+        Après la relecture, une recherche web ciblée vérifie les noms
+        propres, titres de rapport, statistiques et références juridiques
+        cités — pas une simple relecture de plausibilité. Ce qui n'a pas pu
+        être confirmé reste visible dans le texte, avec un appel de note :
+        rien n'est lissé en une version fluide mais faussement définitive.
+      </p>
+      <label class="check">
+        <input type="checkbox" id="factcheck_setting">
+        <span>Activer par défaut au dépôt</span>
+      </label>
+      <label class="field">
+        <span>Recherches web autorisées par affirmation</span>
+        <input type="number" id="factcheck_max_searches" min="1" max="30" step="1">
+      </label>
+    </fieldset>
+
+    <fieldset>
+      <legend>Lexique MJPM</legend>
+      <p class="hint">
+        Sigles, acteurs, actes et références juridiques du domaine (MJPM,
+        DIPM, CRG, curatelle renforcée…). Sert à amorcer la reconnaissance
+        vocale, à repérer une graphie proche mais douteuse, et à résoudre
+        certains points sans recherche web pour les termes déjà vérifiés.
+      </p>
+      <label class="check">
+        <input type="checkbox" id="lexicon_enabled">
+        <span>Utiliser le lexique</span>
+      </label>
+      <label class="check">
+        <input type="checkbox" id="lexicon_whisper_prompt">
+        <span>Amorcer la transcription avec le lexique</span>
+      </label>
+    </fieldset>
+
+    <fieldset>
+      <legend>Coffre Obsidian</legend>
+      <p class="hint">
+        Chemin d'un coffre existant sur cette machine. La fiche y est écrite
+        directement, dans le dossier indiqué ; les fiches d'entités et le
+        glossaire suivent la même logique — voir le README pour le détail
+        de la convention.
+      </p>
+      <label class="field">
+        <span>Chemin du coffre <small>(vide = publication désactivée)</small></span>
+        <input type="text" id="obsidian_vault_path" placeholder="/chemin/vers/MonCoffre">
+        <small id="obsidian-state"></small>
+      </label>
+      <label class="field">
+        <span>Dossier des fiches</span>
+        <input type="text" id="obsidian_notes_folder" placeholder="Formation/Transcriptions">
+      </label>
+      <label class="field">
+        <span>Dossier des entités</span>
+        <input type="text" id="obsidian_entities_folder" placeholder="Formation/MJPM/Entités">
+      </label>
+      <label class="field">
+        <span>Note d'index (MOC)</span>
+        <input type="text" id="obsidian_index_note" placeholder="Formation/MJPM/MOC Formation.md">
+      </label>
+      <label class="field">
+        <span>Note de glossaire</span>
+        <input type="text" id="obsidian_glossary_note" placeholder="Formation/MJPM/Glossaire MJPM.md">
+      </label>
+      <label class="field">
+        <span>Étiquettes <small>(séparées par des virgules)</small></span>
+        <input type="text" id="obsidian_tags" placeholder="formation/MJPM">
+      </label>
+      <label class="field">
+        <span>Gabarit de nom de fichier</span>
+        <input type="text" id="obsidian_filename_template" placeholder="{date} — {titre}">
+      </label>
+      <label class="check">
+        <input type="checkbox" id="obsidian_create_entities">
+        <span>Créer une fiche pour chaque entité confirmée</span>
       </label>
     </fieldset>
 
