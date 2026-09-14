@@ -727,6 +727,7 @@ function openSettings() {
   $("runpod_pod_mode").value = settings.runpod_pod_mode || "off";
   $("runpod_pod_image").value = settings.runpod_pod_image || "";
   $("runpod_pod_gpu_type_id").value = settings.runpod_pod_gpu_type_id || "NVIDIA L4";
+  $("runpod_pod_network_volume_id").value = settings.runpod_pod_network_volume_id || "";
   $("keep_media").checked = Boolean(settings.keep_media);
   $("anthropic_api_key").value = "";
   $("runpod_api_key").value = "";
@@ -780,6 +781,7 @@ async function saveSettings() {
     runpod_pod_mode: $("runpod_pod_mode").value,
     runpod_pod_image: $("runpod_pod_image").value.trim(),
     runpod_pod_gpu_type_id: $("runpod_pod_gpu_type_id").value.trim() || "NVIDIA L4",
+    runpod_pod_network_volume_id: $("runpod_pod_network_volume_id").value.trim(),
     keep_media: $("keep_media").checked,
     default_engine: $("engine").value,
     default_model: $("model").value,

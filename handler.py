@@ -13,7 +13,23 @@ import tempfile
 import runpod
 
 VALID_MODELS = {"tiny", "base", "small", "medium", "large-v3"}
+VOLUME_ROOT = "/runpod-volume"
 _model_cache = {}
+
+
+def _model_cache_dir():
+    """Cache Hugging Face sur le volume reseau RunPod, s'il est monte.
+
+    Un volume reseau (attache a l'endpoint serverless, voir Reglages ->
+    Network Volumes) survit a la recreation d'un worker : le modele n'y est
+    telecharge qu'une fois, sans avoir a l'embarquer dans l'image Docker
+    (ce qui la rendrait lourde a tirer). Meme convention de chemin que la
+    fonctionnalite "Model Caching" native de RunPod. Sans volume attache,
+    on retombe sur le cache Hugging Face par defaut de l'image.
+    """
+    if os.path.isdir(VOLUME_ROOT):
+        return os.path.join(VOLUME_ROOT, "huggingface-cache", "hub")
+    return None
 
 
 def get_model(model_size):
@@ -23,7 +39,8 @@ def get_model(model_size):
         from faster_whisper import WhisperModel
         print(f"[handler] Chargement du modele '{model_size}' sur GPU (float16)...")
         _model_cache[model_size] = WhisperModel(
-            model_size, device="cuda", compute_type="float16"
+            model_size, device="cuda", compute_type="float16",
+            download_root=_model_cache_dir(),
         )
         print(f"[handler] Modele '{model_size}' pret.")
     return _model_cache[model_size]

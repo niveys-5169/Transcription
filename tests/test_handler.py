@@ -132,12 +132,14 @@ def test_le_dockerfile_installe_via_python3_et_verifie_l_import():
     assert 'python3 -c "import faster_whisper' in contenu
 
 
-def test_le_dockerfile_precharge_large_v3():
-    """large-v3 est le seul modèle utilisé en prod : le précharger au build
-    évite qu'il soit retéléchargé (lentement, en anonyme) à chaque cold
-    start RunPod — ce qui gonflerait aussi le temps GPU facturé."""
+def test_le_dockerfile_ne_precharge_plus_le_modele():
+    """large-v3 (~plusieurs Go) précaché dans l'image la rendait lourde à
+    tirer pour un pod de secours démarré sur un hôte RunPod sans cache local
+    — plus de 10 minutes, au-delà du budget de démarrage. Le cache vit
+    maintenant sur un volume réseau optionnel (voir handler.py/pod_server.py
+    et le README), pas dans l'image."""
     contenu = (RACINE / "Dockerfile").read_text(encoding="utf-8")
-    assert "WhisperModel('large-v3'" in contenu
+    assert "WhisperModel(" not in contenu
 
 
 # ------------------------------------------------------------ contrat d'API
@@ -177,6 +179,26 @@ def test_le_filtre_de_voix_reste_desactive(worker):
 def test_un_modele_inconnu_retombe_sur_large_v3(worker):
     worker.handler(_job(model="gigantesque"))
     assert worker._appels["modele"][-1]["taille"] == "large-v3"
+
+
+def test_le_modele_charge_depuis_le_volume_reseau_si_monte(worker, monkeypatch, tmp_path):
+    """Sans volume attaché, aucun cache spécifique n'est imposé (repli sur
+    le cache Hugging Face par défaut de l'image)."""
+    monkeypatch.setattr(worker, "VOLUME_ROOT", str(tmp_path / "absent"))
+    worker.handler(_job(model="small"))
+    charge = worker._appels["modele"][-1]
+    assert charge["download_root"] is None
+
+
+def test_le_modele_utilise_le_cache_du_volume_reseau_quand_il_est_monte(
+    worker, monkeypatch, tmp_path
+):
+    volume = tmp_path / "runpod-volume"
+    volume.mkdir()
+    monkeypatch.setattr(worker, "VOLUME_ROOT", str(volume))
+    worker.handler(_job(model="small"))
+    charge = worker._appels["modele"][-1]
+    assert charge["download_root"] == str(volume / "huggingface-cache" / "hub")
 
 
 def test_le_modele_est_garde_en_cache_entre_deux_jobs(worker):

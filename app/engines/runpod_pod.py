@@ -39,6 +39,11 @@ from .base import TranscriptionError
 
 GRAPHQL_URL = "https://api.runpod.io/graphql"
 POLL_INTERVAL = 3.0
+# Chemin de montage d'un volume reseau RunPod, cote pod comme cote
+# serverless — meme convention que handler.py/pod_server.py (VOLUME_ROOT) et
+# que la fonctionnalite "Model Caching" native de RunPod, pour qu'un seul
+# volume beneficie aux deux sans configuration supplementaire.
+VOLUME_MOUNT_PATH = "/runpod-volume"
 
 
 class RunPodPodClient:
@@ -84,6 +89,7 @@ class RunPodPodClient:
         container_disk_gb: int,
         port: int,
         start_command: str,
+        network_volume_id: str | None = None,
     ) -> str:
         query = """
         mutation PodCreate($input: PodFindAndDeployOnDemandInput!) {
@@ -103,6 +109,12 @@ class RunPodPodClient:
                 "volumeInGb": 0,
             }
         }
+        if network_volume_id:
+            # Epingle le pod au datacenter du volume : RunPod l'exige, au
+            # prix d'une disponibilite GPU restreinte a ce seul datacenter
+            # (voir le commentaire sur runpod_pod_network_volume_id).
+            variables["input"]["networkVolumeId"] = network_volume_id
+            variables["input"]["volumeMountPath"] = VOLUME_MOUNT_PATH
         data = self._graphql(query, variables)
         pod_id = (data.get("podFindAndDeployOnDemand") or {}).get("id")
         if not pod_id:
@@ -164,6 +176,7 @@ class PodFallbackSession:
             container_disk_gb=settings.runpod_pod_container_disk_gb,
             port=settings.runpod_pod_port,
             start_command="python3 -u /pod_server.py",
+            network_volume_id=getattr(settings, "runpod_pod_network_volume_id", "") or None,
         )
         self._wait_ready()
 
@@ -271,11 +284,12 @@ _POD_SETTINGS_FIELDS = (
     "runpod_pod_gpu_type_id",
     "runpod_pod_container_disk_gb",
     "runpod_pod_port",
+    "runpod_pod_network_volume_id",
 )
 
 
 def _pod_settings_snapshot(settings) -> tuple:
-    return tuple(getattr(settings, name) for name in _POD_SETTINGS_FIELDS)
+    return tuple(getattr(settings, name, None) for name in _POD_SETTINGS_FIELDS)
 
 
 class PodPool:

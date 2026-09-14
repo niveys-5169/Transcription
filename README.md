@@ -591,6 +591,37 @@ suivants.
   partagent la même image ; seule la commande de démarrage diffère, et c'est
   l'application qui la choisit à la création du pod.
 
+### Pod : volume réseau (recommandé)
+
+L'image du pod ne contient plus le modèle Whisper (il l'a longtemps fait,
+mais ça la rendait lourde de plusieurs Go — RunPod devait alors la tirer en
+entier à chaque pod créé sur un hôte qui ne l'avait pas déjà en cache local,
+plus de 10 minutes dans certains cas). À la place, `handler.py` et
+`pod_server.py` mettent le cache Hugging Face sur un **volume réseau**
+RunPod quand un est monté (`/runpod-volume`), pour ne payer le
+téléchargement qu'une seule fois, sans jamais alourdir l'image elle-même.
+
+Mise en place :
+
+1. RunPod → **Storage** → **Network Volumes** → créez-en un (quelques Go
+   suffisent pour `large-v3`), dans le datacenter de votre choix.
+2. Réglages → **Pod RunPod** → **Volume réseau** : collez son identifiant.
+   L'application le transmet à `podFindAndDeployOnDemand` (`networkVolumeId`
+   + `volumeMountPath`), monté au même chemin que RunPod utilise pour le
+   serverless (`/runpod-volume`).
+3. Pour le même bénéfice côté serverless (évite de retélécharger le modèle
+   à chaque cold start) : RunPod → **Serverless** → votre endpoint →
+   **Manage** → **Edit Endpoint** → **Advanced** → **Network Volumes** →
+   attachez le même volume.
+
+**Contrepartie à connaître** : un volume réseau est épinglé à un
+datacenter précis, donc un pod qui en utilise un ne peut plus être créé
+que dans ce datacenter — au lieu de « n'importe lequel » aujourd'hui. Ça
+réduit la disponibilité GPU du pod de secours, précisément le mécanisme qui
+existe pour pallier un manque de capacité serverless. Sans volume configuré
+(réglage laissé vide), le pod garde son comportement actuel : image légère,
+mais le modèle est retéléchargé depuis Hugging Face à chaque pod créé.
+
 <details>
 <summary>Pourquoi l'API RunPod des pods n'a pas pu être vérifiée en direct</summary>
 
