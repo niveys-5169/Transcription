@@ -132,6 +132,14 @@ def test_le_dockerfile_installe_via_python3_et_verifie_l_import():
     assert 'python3 -c "import faster_whisper' in contenu
 
 
+def test_le_dockerfile_precharge_large_v3():
+    """large-v3 est le seul modèle utilisé en prod : le précharger au build
+    évite qu'il soit retéléchargé (lentement, en anonyme) à chaque cold
+    start RunPod — ce qui gonflerait aussi le temps GPU facturé."""
+    contenu = (RACINE / "Dockerfile").read_text(encoding="utf-8")
+    assert "WhisperModel('large-v3'" in contenu
+
+
 # ------------------------------------------------------------ contrat d'API
 
 

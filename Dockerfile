@@ -12,6 +12,13 @@ COPY requirements.txt /requirements.txt
 RUN python3 -m pip install --no-cache-dir -r /requirements.txt \
     && python3 -c "import faster_whisper, runpod"
 
+# Precharge le modele large-v3 (seul modele utilise en prod) dans le cache
+# Hugging Face de l'image, pour qu'aucun cold start ne le retelecharge.
+# device="cpu" : le build n'a pas de GPU, et le download ne depend pas du
+# device — seul le chargement en memoire au runtime (handler.py/pod_server.py)
+# utilisera cuda/float16.
+RUN python3 -c "from faster_whisper import WhisperModel; WhisperModel('large-v3', device='cpu', compute_type='int8')"
+
 COPY handler.py /handler.py
 COPY pod_server.py /pod_server.py
 
