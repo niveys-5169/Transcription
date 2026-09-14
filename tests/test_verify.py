@@ -2,6 +2,8 @@
 import pytest
 
 from app.config import Settings
+from app.proofread import verify as verify_module
+from app.proofread.backends.base import BackendResult
 from app.proofread.base import ProofreadError, TextPair
 from app.proofread.verify import (
     ClaudeVerifier,
@@ -9,6 +11,19 @@ from app.proofread.verify import (
     rule_findings,
     verify,
 )
+
+
+class _FakeBackend:
+    """Doublure de back-end : une réponse canée, pas d'appel réel."""
+
+    def __init__(self, text: str = "[]"):
+        self.text = text
+
+    def is_available(self):
+        return True, "simulé"
+
+    def complete(self, **kwargs):
+        return BackendResult(text=self.text)
 
 
 def pair(raw, clean, start=0.0):
@@ -84,9 +99,8 @@ def test_les_extraits_situent_le_probleme():
 
 @pytest.fixture
 def verificateur(monkeypatch):
-    instance = ClaudeVerifier(Settings(anthropic_api_key="sk-ant-test"))
+    instance = ClaudeVerifier(Settings(anthropic_api_key="sk-ant-test", claude_backend="api"))
     monkeypatch.setattr(instance, "is_available", lambda: (True, "simulé"))
-    monkeypatch.setattr(instance, "_client", lambda: object())
     return instance
 
 
@@ -95,7 +109,7 @@ def test_claude_signale_un_glissement_de_sens(verificateur, monkeypatch):
       {"type": "sens", "gravite": "haute", "brut": "ne jamais dépasser",
        "relu": "ne pas dépasser souvent", "commentaire": "L'interdiction devient une recommandation."}
     ]"""
-    monkeypatch.setattr(verificateur, "_call", lambda *a, **k: reponse)
+    monkeypatch.setattr(verificateur.backend, "complete", lambda **k: BackendResult(text=reponse))
 
     findings = verificateur.verify([pair("ne jamais dépasser", "ne pas dépasser souvent")])
     assert len(findings) == 1
@@ -106,18 +120,20 @@ def test_claude_signale_un_glissement_de_sens(verificateur, monkeypatch):
 
 
 def test_un_tableau_vide_veut_dire_fidele(verificateur, monkeypatch):
-    monkeypatch.setattr(verificateur, "_call", lambda *a, **k: "[]")
+    monkeypatch.setattr(verificateur.backend, "complete", lambda **k: BackendResult(text="[]"))
     assert verificateur.verify([pair("un texte", "Un texte.")]) == []
 
 
 def test_une_reponse_illisible_est_ignoree(verificateur, monkeypatch):
-    monkeypatch.setattr(verificateur, "_call", lambda *a, **k: "tout va bien !")
+    monkeypatch.setattr(
+        verificateur.backend, "complete", lambda **k: BackendResult(text="tout va bien !")
+    )
     assert verificateur.verify([pair("un texte", "Un texte.")]) == []
 
 
 def test_les_types_inconnus_sont_ramenes_a_des_valeurs_sures(verificateur, monkeypatch):
     reponse = '[{"type": "bizarre", "gravite": "catastrophique", "commentaire": "hmm"}]'
-    monkeypatch.setattr(verificateur, "_call", lambda *a, **k: reponse)
+    monkeypatch.setattr(verificateur.backend, "complete", lambda **k: BackendResult(text=reponse))
 
     finding = verificateur.verify([pair("a", "b")])[0]
     assert finding.kind == "sens"
@@ -126,20 +142,24 @@ def test_les_types_inconnus_sont_ramenes_a_des_valeurs_sures(verificateur, monke
 
 def test_un_signalement_sans_commentaire_est_jete(verificateur, monkeypatch):
     monkeypatch.setattr(
-        verificateur, "_call", lambda *a, **k: '[{"type": "sens", "commentaire": "  "}]'
+        verificateur.backend,
+        "complete",
+        lambda **k: BackendResult(text='[{"type": "sens", "commentaire": "  "}]'),
     )
     assert verificateur.verify([pair("a", "b")]) == []
 
 
 def test_annulation_pendant_la_verification(verificateur, monkeypatch):
-    monkeypatch.setattr(verificateur, "_call", lambda *a, **k: "[]")
+    monkeypatch.setattr(verificateur.backend, "complete", lambda **k: BackendResult(text="[]"))
     with pytest.raises(ProofreadError, match="annulée"):
         verificateur.verify([pair("a", "b")], should_cancel=lambda: True)
 
 
 def test_verification_indisponible_sans_cle():
     with pytest.raises(ProofreadError):
-        ClaudeVerifier(Settings(anthropic_api_key="")).verify([pair("a", "b")])
+        ClaudeVerifier(Settings(anthropic_api_key="", claude_backend="api")).verify(
+            [pair("a", "b")]
+        )
 
 
 # ---------------------------------------------------------- orchestration
@@ -147,9 +167,7 @@ def test_verification_indisponible_sans_cle():
 
 def test_verify_combine_regles_et_claude(monkeypatch):
     reponse = '[{"type": "omission", "gravite": "basse", "commentaire": "Nuance perdue."}]'
-    monkeypatch.setattr(ClaudeVerifier, "is_available", lambda self: (True, "ok"))
-    monkeypatch.setattr(ClaudeVerifier, "_client", lambda self: object())
-    monkeypatch.setattr(ClaudeVerifier, "_call", lambda self, *a, **k: reponse)
+    monkeypatch.setattr(verify_module, "get_backend", lambda settings=None: _FakeBackend(reponse))
 
     rapport = verify([pair("il y a 42 cas précis", "il y a des cas")])
     sources = {f.source for f in rapport.findings}
@@ -159,9 +177,7 @@ def test_verify_combine_regles_et_claude(monkeypatch):
 
 def test_verify_trie_par_gravite(monkeypatch):
     reponse = '[{"type": "sens", "gravite": "basse", "commentaire": "Détail."}]'
-    monkeypatch.setattr(ClaudeVerifier, "is_available", lambda self: (True, "ok"))
-    monkeypatch.setattr(ClaudeVerifier, "_client", lambda self: object())
-    monkeypatch.setattr(ClaudeVerifier, "_call", lambda self, *a, **k: reponse)
+    monkeypatch.setattr(verify_module, "get_backend", lambda settings=None: _FakeBackend(reponse))
 
     rapport = verify([pair("le seuil de 42 degrés", "le seuil")])
     gravites = [f.severity for f in rapport.findings]
