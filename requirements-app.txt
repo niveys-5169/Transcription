@@ -19,3 +19,11 @@ faster-whisper>=1.0
 # en sous-processus et n'a pas besoin de ce paquet. Facultatif dans les deux
 # cas : sans back-end disponible, repli sur la relecture simple.
 anthropic>=0.69
+
+# Synchronisation NotebookLM (étape 5, facultative) : compile les cours
+# relus dans un Google Doc maître sur Drive. Sans ces paquets, l'étape se
+# désactive toute seule avec un message clair au lieu de faire échouer le
+# reste du pipeline — voir app/notebooklm_sync.py.
+google-api-python-client>=2.130
+google-auth-oauthlib>=1.2
+google-auth-httplib2>=0.2

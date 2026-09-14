@@ -22,6 +22,10 @@ DATA_DIR = Path(os.environ.get("TRANSCRIPTION_DATA_DIR", Path.cwd() / "data")).r
 MEDIA_DIR = DATA_DIR / "media"
 CONFIG_PATH = DATA_DIR / "config.json"
 DB_PATH = DATA_DIR / "transcription.db"
+# Un .md finalisé par cours (relu, vérifié ou publié) : la matière première du
+# Doc maître NotebookLM (voir app/notebooklm_sync.py). Indépendant du coffre
+# Obsidian, qui reste optionnel — ce dossier existe dès qu'un cours est relu.
+COURSES_DIR = DATA_DIR / "cours"
 
 # Modèles Whisper acceptés, du plus rapide au plus précis.
 WHISPER_MODELS = ["tiny", "base", "small", "medium", "large-v3"]
@@ -152,6 +156,26 @@ class Settings:
     # --- Divers ---
     keep_media: bool = True
 
+    # --- NotebookLM / Google Drive (optionnel) ---
+    # Synchronise un Google Doc maître (compilation de tous les cours relus)
+    # après chaque fin de chaîne, pour que NotebookLM le retrouve à jour via
+    # sa synchro automatique Drive→NotebookLM. Désactivé par défaut : marche
+    # en local sans rien configurer, et la suite de tests ne fait aucun appel
+    # réseau tant que ce réglage n'est pas activé explicitement.
+    notebooklm_sync_enabled: bool = False
+    # Dossier Drive où créer le Doc maître (python -m app.notebooklm_sync
+    # --init). Vide : créé à la racine de « Mon Drive ».
+    notebooklm_drive_folder_id: str = ""
+    # Identifiant du Doc maître, rempli une fois par --init puis réutilisé :
+    # chaque sync fait un files().update() dessus, jamais un nouveau fichier.
+    notebooklm_master_doc_id: str = ""
+    # Identifiants OAuth « application de bureau » (Google Cloud Console) et
+    # jeton obtenu après le premier consentement — chemins relatifs à la
+    # racine du projet, ou absolus. Le jeton est réutilisé et rafraîchi tout
+    # seul ; --init relance le consentement s'il manque ou n'est plus valide.
+    notebooklm_credentials_path: str = "data/google_credentials.json"
+    notebooklm_token_path: str = "data/google_token.json"
+
     def public_dict(self) -> dict:
         """Version sérialisable pour l'UI : les secrets sont masqués."""
         out: dict = {}
@@ -188,6 +212,16 @@ def _normalize_runpod_endpoint_id(value: str) -> str:
     return cleaned.split("/", 1)[0]
 
 
+# Valeurs acceptées pour un réglage booléen venant de l'environnement — les
+# variables d'environnement n'ont que des chaînes, contrairement à
+# data/config.json qui garde le vrai type JSON.
+_TRUE_STRINGS = {"1", "true", "vrai", "oui", "yes", "on"}
+
+
+def _parse_bool(value: str) -> bool:
+    return value.strip().lower() in _TRUE_STRINGS
+
+
 def _from_env(settings: Settings) -> Settings:
     """Applique les variables d'environnement par-dessus les réglages."""
     env_map = {
@@ -199,6 +233,10 @@ def _from_env(settings: Settings) -> Settings:
         "default_model": "TRANSCRIPTION_MODEL",
         "claude_backend": "CLAUDE_BACKEND",
         "obsidian_vault_path": "TRANSCRIPTION_OBSIDIAN_VAULT",
+        "notebooklm_drive_folder_id": "NOTEBOOKLM_DRIVE_FOLDER_ID",
+        "notebooklm_master_doc_id": "NOTEBOOKLM_MASTER_DOC_ID",
+        "notebooklm_credentials_path": "NOTEBOOKLM_CREDENTIALS_PATH",
+        "notebooklm_token_path": "NOTEBOOKLM_TOKEN_PATH",
     }
     for attr, env_name in env_map.items():
         value = os.environ.get(env_name)
@@ -207,6 +245,13 @@ def _from_env(settings: Settings) -> Settings:
             if attr == "runpod_endpoint_id":
                 value = _normalize_runpod_endpoint_id(value)
             setattr(settings, attr, value)
+
+    # Seul réglage booléen venant de l'environnement pour l'instant : traité
+    # à part plutôt que d'élargir env_map à des types mixtes.
+    sync_enabled = os.environ.get("NOTEBOOKLM_SYNC_ENABLED")
+    if sync_enabled:
+        settings.notebooklm_sync_enabled = _parse_bool(sync_enabled)
+
     return settings
 
 
@@ -283,3 +328,4 @@ def save_settings(updates: dict) -> Settings:
 def ensure_dirs() -> None:
     """Crée l'arborescence de données si besoin."""
     MEDIA_DIR.mkdir(parents=True, exist_ok=True)
+    COURSES_DIR.mkdir(parents=True, exist_ok=True)

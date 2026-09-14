@@ -293,6 +293,66 @@ Les dossiers par défaut (`Formation/Transcriptions`, `Formation/MJPM/…`)
 sont des conjectures, tous modifiables dans les réglages — la première
 publication dira si la convention tombe juste pour votre coffre.
 
+## NotebookLM : un Doc maître sur Drive
+
+Un cinquième point de sortie, indépendant du coffre Obsidian : à chaque fin
+de chaîne (dès la relecture si rien ne suit, sinon la vérification web,
+sinon la publication), l'application écrit un `.md` par cours dans
+`data/cours/` puis compile **tous** les cours relus dans **un seul** Google
+Doc, dont le contenu est intégralement remplacé — jamais un nouveau
+document, jamais un ajout au précédent. NotebookLM sait resynchroniser
+automatiquement les sources Google Docs/Sheets/Slides posées dans Drive :
+une fois ce Doc ajouté comme source, il reste à jour tout seul, sans rien
+recoller à la main à chaque nouveau cours.
+
+Vide (`NOTEBOOKLM_SYNC_ENABLED` non activé), cette étape reste inactive —
+comme le coffre Obsidian, tout le reste de l'application fonctionne
+normalement sans Drive configuré, et la suite de tests ne fait aucun appel
+réseau.
+
+**Mise en place, une fois :**
+
+1. Dans [Google Cloud Console](https://console.cloud.google.com/), créez un
+   projet (ou réutilisez-en un), activez l'**API Google Drive**, puis créez
+   des identifiants OAuth de type **Application de bureau**. Téléchargez le
+   fichier JSON et déposez-le sous `data/google_credentials.json` (chemin
+   par défaut, modifiable — voir plus bas).
+2. Le scope demandé est le plus étroit possible,
+   `https://www.googleapis.com/auth/drive.file` : l'application ne voit que
+   les fichiers qu'elle a elle-même créés, jamais le reste de votre Drive.
+3. Première exécution :
+
+   ```bash
+   python -m app.notebooklm_sync --init
+   ```
+
+   Ouvre le navigateur pour le consentement Google, écrit
+   `data/google_token.json` (réutilisé et rafraîchi automatiquement
+   ensuite), crée le Doc maître s'il n'existe pas encore, et affiche son
+   `fileId` — enregistré directement dans `data/config.json`
+   (`notebooklm_master_doc_id`), rien à recopier à la main.
+4. Si des cours ont déjà été transcrits avant cette fonctionnalité, `data/cours/`
+   est vide : `python -m app.notebooklm_sync --rebuild` le régénère depuis
+   la base, sans appel réseau. `--dry-run` imprime la compilation sur la
+   sortie standard pour la relire avant de l'envoyer.
+5. Activez la synchronisation automatique
+   (`NOTEBOOKLM_SYNC_ENABLED=true`, ou le réglage équivalent dans
+   `data/config.json`), puis lancez un cours normalement — ou
+   `python -m app.notebooklm_sync --sync` pour pousser tout de suite.
+6. Dans NotebookLM : **Ajouter une source → Google Drive**, choisissez le
+   Doc — **une seule fois**. La resynchronisation se fait ensuite du côté de
+   NotebookLM, à son propre rythme.
+
+Le sommaire en tête du Doc pointe vers chaque section par des liens
+`#ancre` : dans un vrai Google Doc, ce ne sont pas des signets cliquables —
+la navigation s'y fait par le volet « Plan du document », alimenté par les
+titres de section. Ces liens restent utiles si le Markdown est lu tel quel
+(aperçu, `--dry-run`).
+
+Un incident Drive (réseau, jeton expiré, bibliothèques absentes) est
+journalisé et n'interrompt jamais le reste du pipeline — les étapes 2 à 4
+se terminent normalement même si la synchronisation Drive échoue.
+
 ## Réglages
 
 Bouton **Réglages**, en haut à droite : accès à Claude (CLI ou clé), clé API
@@ -305,7 +365,10 @@ ils sont renvoyés tels quels.
 
 Les clés et certains réglages peuvent aussi venir de l'environnement
 (`ANTHROPIC_API_KEY`, `RUNPOD_API_KEY`, `RUNPOD_ENDPOINT_ID`,
-`CLAUDE_BACKEND`, `TRANSCRIPTION_OBSIDIAN_VAULT`), qui a la priorité.
+`CLAUDE_BACKEND`, `TRANSCRIPTION_OBSIDIAN_VAULT`,
+`NOTEBOOKLM_SYNC_ENABLED`, `NOTEBOOKLM_DRIVE_FOLDER_ID`,
+`NOTEBOOKLM_MASTER_DOC_ID`, `NOTEBOOKLM_CREDENTIALS_PATH`,
+`NOTEBOOKLM_TOKEN_PATH`), qui a la priorité.
 
 ## Ce que produit l'application
 
@@ -324,6 +387,10 @@ première chose à vérifier quand un résultat est vide.
 Les transcriptions restent dans une base SQLite locale (`data/transcription.db`)
 et la barre de recherche fouille dans leur contenu. Déposer plusieurs fichiers
 d'un coup les met en file : ils sont traités l'un après l'autre.
+
+Chaque cours relu reçoit aussi un `.md` dans `data/cours/`, régénéré à
+chaque fin de chaîne — la matière première de la compilation NotebookLM (voir
+plus haut), indépendante du coffre Obsidian.
 
 ## Ce qui a changé depuis le prototype HTML
 
@@ -578,6 +645,7 @@ tourne en quelques secondes.
 | `app/proofread/factcheck.py` | Vérification externe : recherche web, affirmation par affirmation |
 | `app/lexicon/` | Lexique MJPM : amorçage Whisper, résolution sans recherche, glossaire |
 | `app/obsidian/` | Publication : fiche, fiches d'entités, MOC, glossaire |
+| `app/notebooklm_sync.py` | Compilation des cours relus en un Doc maître Google Drive, pour NotebookLM |
 | `app/exporters.py` | txt, md, srt, vtt, json, fiche Obsidian |
 | `app/db.py` | Historique SQLite |
 | `app/static/` | Interface |
