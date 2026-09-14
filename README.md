@@ -1,37 +1,40 @@
 # Transcription de cours
 
 Application locale qui transforme l'enregistrement d'un cours — vidéo ou
-audio — en **texte relu et lisible**.
+audio — en une **fiche vérifiée, prête à citer, publiée dans Obsidian**.
 
-On dépose le fichier, on attend, on récupère un document ponctué, débarrassé
-des hésitations, découpé en paragraphes, avec un titre, un résumé et des
-intertitres. Les sous-titres horodatés sont produits au passage.
+On dépose le fichier, on clique une fois, et l'application enchaîne quatre
+étapes : extraction audio, transcription, relecture, puis vérification par
+recherche web des noms propres, titres de rapport, statistiques et
+références juridiques cités — pas une simple relecture de plausibilité. Ce
+qui n'a pas pu être confirmé reste visible dans le texte, avec un appel de
+note : rien n'est lissé en une version fluide mais faussement définitive.
+Le résultat est publié dans un coffre Obsidian, avec ses fiches d'entités et
+son glossaire.
 
 Tout tourne sur votre machine. Rien n'est envoyé sur Internet, sauf si vous
-activez explicitement le GPU RunPod ou la relecture par Claude.
+activez explicitement le GPU RunPod, ou la relecture et la vérification par
+Claude — sur votre abonnement (recommandé) ou par clé API, voir
+[Accès à Claude](#accès-à-claude--cli-ou-clé-api).
 
 ```
-  ÉTAPE 1 — TRANSCRIPTION                    │  ÉTAPE 2 — RELECTURE
-  un calcul : rendre ce qui a été dit        │  une lecture : rendre ça lisible
-                                             │
-  ┌────────────┐  ffmpeg   ┌────────────┐    │   ┌──────────────┐   ┌──────────┐
-  │ vidéo/audio│ ────────► │ WAV 16 kHz │    │   │  relecture   │──►│ vérifi-  │
-  │  n'importe │ extraction│ mono 16 b. │    │   │              │   │ cation   │
-  │ quel format│           └─────┬──────┘    │   └──────────────┘   └────┬─────┘
-  └────────────┘                 │ Whisper   │          ▲                │
-                                 ▼           │          │                ▼
-                        ┌─────────────────┐  │  ┌───────┴────────┐  ┌─────────┐
-                        │ texte brut +    │──┼─►│ texte ponctué, │  │ points  │
-                        │ segments datés  │  │  │ structuré,     │  │ à véri- │
-                        └─────────────────┘  │  │ résumé         │  │ fier    │
-                        .txt .srt .vtt .json │  └────────────────┘  └─────────┘
-                        déjà téléchargeables │        .md, .json enrichis
+  1. TRANSCRIPTION        2. RELECTURE          3. VÉRIFICATION        4. PUBLICATION
+  un calcul               une lecture           une recherche          une fiche
+  ┌───────────┐  ffmpeg  ┌──────────┐  Claude   ┌──────────────┐      ┌──────────┐
+  │vidéo/audio│─────────►│texte brut│──────────►│texte relu +  │─────►│  coffre  │
+  │n'importe  │ Whisper  │+segments │ fidélité  │vérification  │Claude│ Obsidian │
+  │quel format│          │datés     │           │web (fait)    │      │          │
+  └───────────┘          └──────────┘           └──────────────┘      └──────────┘
+  .txt .srt .vtt .json    .md, .json enrichis     appels de note       fiche + entités
+  déjà téléchargeables    des points à vérifier    sur l'incertain      + glossaire MOC
 ```
 
-**Les deux étapes sont indépendantes.** La transcription rend le texte brut et
-s'arrête là ; la relecture part de ce texte, plus tard si vous voulez, et peut
-être relancée autant de fois que nécessaire sans jamais refaire tourner le
-moteur de transcription.
+**Les quatre étapes sont indépendantes.** Chacune part de ce que la
+précédente a produit, plus tard si vous voulez, et peut être relancée autant
+de fois que nécessaire sans jamais refaire tourner celles d'avant. Décocher
+une étape dans les options avancées du dépôt arrête la chaîne à la
+précédente — un travail « transcrit », « relu » ou « vérifié » est déjà un
+état exploitable, pas une étape de passage.
 
 ## Démarrer
 
@@ -59,9 +62,10 @@ Options : `--port 9000`, `--host 0.0.0.0` (accès depuis le réseau local),
 `--no-browser`, `--reload` (développement).
 </details>
 
-## Pourquoi deux étapes séparées
+## Pourquoi des étapes séparées
 
-Transcrire et relire sont deux métiers différents, et les mélanger coûte cher.
+Transcrire, relire, vérifier et publier sont quatre métiers différents, et
+les mélanger coûte cher.
 
 **Transcrire est un calcul.** On donne de l'audio, on récupère les mots
 prononcés et leurs horodatages. Whisper fait ça, que ce soit sur votre
@@ -71,27 +75,61 @@ fait rien d'autre, ne reformule rien, ne corrige rien.
 
 **Relire est une lecture.** Il faut comprendre le propos pour savoir qu'« a
 priori » n'était pas « appris ou rit », rétablir la ponctuation, décider où
-commence une nouvelle idée. C'est du travail sur du texte, et il n'a aucune
-raison de se produire au même moment que le calcul.
+commence une nouvelle idée. C'est du travail sur du texte.
 
-Les séparer donne trois choses :
+**Vérifier est une recherche.** Un nom propre, un titre de rapport, une
+statistique plausibles à l'oreille peuvent être faux — la relecture, aussi
+soignée soit-elle, ne peut pas le savoir sans aller voir ailleurs. C'est un
+travail différent, qui suppose d'interroger le monde extérieur, pas
+seulement de relire.
+
+**Publier est une mise en forme.** Écrire une fiche, la classer, la relier
+au reste d'un second brain — encore un métier à part, qui n'a aucune raison
+de bloquer les trois précédents.
+
+Aucune de ces étapes n'a de raison de se produire au même moment que les
+autres. Les séparer donne plusieurs choses :
 
 - **Le texte brut arrive tout de suite** et ne dépend de rien d'autre. Pas de
-  clé API, pas de réseau, pas d'attente supplémentaire. Sous-titres et
-  segments horodatés sont téléchargeables dès la fin de l'étape 1.
-- **La relecture se rejoue.** Pas satisfait du découpage ? Envie d'essayer
-  sans les intertitres, ou avec un effort plus élevé ? On relance l'étape 2
-  seule : quelques secondes d'appels API, au lieu de plusieurs dizaines de
-  minutes de GPU.
-- **Un échec de relecture ne détruit rien.** Clé expirée, quota atteint,
-  panne réseau : le travail retombe à l'état « transcrit », le texte brut est
-  toujours là, et le bouton **Relire** attend.
+  clé, pas de réseau, pas d'attente supplémentaire. Sous-titres et segments
+  horodatés sont téléchargeables dès la fin de l'étape 1.
+- **Chaque étape suivante se rejoue, seule.** Pas satisfait du découpage ?
+  Envie d'essayer sans les intertitres, avec un effort plus élevé, ou de
+  relancer seulement la vérification web sur un texte relu à la main
+  entre-temps ? On relance l'étape voulue seule : quelques secondes ou
+  minutes d'appels, au lieu de tout refaire depuis l'audio.
+- **Un échec à une étape ne détruit rien.** Abonnement non connecté, quota
+  atteint, panne réseau, coffre introuvable : le travail retombe à l'état
+  précédent, ce qu'il avait déjà produit reste là, et le bouton de l'étape
+  concernée attend.
 
-Concrètement : décochez **« Relire dans la foulée »** au dépôt pour ne faire
-que transcrire, puis lancez la relecture quand ça vous arrange — le soir, en
-lot, ou jamais.
+Concrètement : le bouton **« Tout faire »** enchaîne les quatre étapes avec
+les réglages par défaut. Dans les options avancées, décocher une étape
+arrête la chaîne à la précédente — transcrire seulement, ou s'arrêter après
+la relecture, ou vérifier sans publier.
 
-## Les trois choix à faire
+## Accès à Claude : CLI ou clé API
+
+La relecture, le sommaire et la vérification par recherche web passent tous
+par Claude. Deux façons d'y accéder, réglables dans **Réglages → Accès à
+Claude** :
+
+| Back-end | Facturation | Ce qu'il faut |
+|---|---|---|
+| **CLI `claude`** (par défaut) | Sur votre abonnement Claude — pas de compte API séparé | [Claude Code](https://claude.com/claude-code) installé, puis `claude setup-token` une fois sur cette machine |
+| **Clé API Anthropic** | À l'usage, sur un compte API | Une clé `sk-ant-…`, dans les réglages |
+
+Le CLI est le choix par défaut : c'est lui qui permet d'utiliser
+l'abonnement plutôt que de payer un compte API séparé. Chaque appel est un
+processus `claude -p` jetable, isolé de votre configuration personnelle
+(pas de `CLAUDE.md`, pas de skills, pas de serveurs MCP) et sans la moindre
+possibilité d'attendre une confirmation.
+
+Sans back-end disponible, l'application bascule d'elle-même sur la relecture
+simple, et saute la vérification par recherche web avec un message
+explicite : **le texte n'est jamais perdu.**
+
+## Les choix à faire
 
 ### Le moteur de transcription
 
@@ -112,17 +150,17 @@ secondes que le fichier est bien lu.
 
 ### La relecture
 
-| Mode | Ce qu'il fait | Ce qu'il coûte |
+| Mode | Ce qu'il fait | Ce qu'il suppose |
 |---|---|---|
-| **Complète (Claude)** | Ponctuation, orthographe, suppression des hésitations, correction des erreurs de reconnaissance d'après le contexte, paragraphes, titre, résumé, intertitres | Une clé API Anthropic |
+| **Complète (Claude)** | Ponctuation, orthographe, suppression des hésitations, correction des erreurs de reconnaissance d'après le contexte, paragraphes, titre, résumé, intertitres | Un back-end Claude disponible (CLI ou clé) |
 | **Simple** | Hésitations, bégaiements, ponctuation, majuscules, paragraphes — par règles, sans rien « comprendre » | Rien, fonctionne hors ligne |
 | **Aucune** | Le texte de Whisper tel quel, juste regroupé en paragraphes | Rien |
 
-Sans clé Anthropic, l'application bascule d'elle-même sur la relecture simple.
-Si un appel échoue en cours de route, elle fait de même : **le texte n'est
-jamais perdu.**
+Sans back-end disponible, l'application bascule d'elle-même sur la relecture
+simple. Si un appel échoue en cours de route, elle fait de même : **le texte
+n'est jamais perdu.**
 
-### La vérification
+### La vérification de fidélité
 
 Une relecture réussie est invisible — c'est bien le problème. Rien ne
 distingue, à la lecture, un texte fidèle d'un texte où une date a changé ou
@@ -133,31 +171,141 @@ Deux niveaux, complémentaires :
 
 - **Des règles**, gratuites, hors ligne, toujours actives — y compris en
   relecture simple. Elles voient ce qui est objectif : un nombre prononcé et
-  absent du texte relu, un sigle disparu, un passage qui a perdu 40 % de sa
-  longueur. « 1 000 » relu en « 1000 » n'est pas une perte ; « vingt » relu en
-  « 20 » non plus — seul le sens de la disparition compte.
+  absent du texte relu, un sigle disparu (gravité relevée s'il figure au
+  [lexique MJPM](#le-lexique-mjpm)), un passage qui a perdu 40 % de sa
+  longueur, une graphie proche d'un terme du lexique sans lui être
+  identique. « 1 000 » relu en « 1000 » n'est pas une perte ; « vingt » relu
+  en « 20 » non plus — seul le sens de la disparition compte.
 - **Une lecture par Claude**, qui repère ce qu'aucune règle ne voit : un sens
   qui glisse, une nuance perdue, une phrase ajoutée. Elle ignore délibérément
   la ponctuation, les majuscules et le retrait des hésitations, qui sont
   précisément le travail attendu.
 
-Les points relevés partent aussi dans le `.md` et le `.json`. Décochable au
-dépôt : la vérification par Claude double approximativement le coût de la
-relecture, puisqu'elle relit les deux versions.
+C'est une vérification de **fidélité** : elle dit si le texte relu rend
+fidèlement ce qui a été dit, pas si ce qui a été dit est exact — un nom
+propre mal reconnu à l'oral, puis « corrigé » par la relecture d'après le
+contexte, y passera inaperçu puisque rien n'a été perdu. C'est le rôle de
+l'étape suivante.
+
+Les points relevés partent aussi dans le `.md`, le `.json` et la fiche
+Obsidian. Décochable au dépôt : la vérification par Claude double
+approximativement le temps de la relecture, puisqu'elle relit les deux
+versions.
 
 Une vérification automatique reste une aide, pas une garantie. Sur un passage
 décisif, l'audio fait foi — l'onglet segments et le lecteur intégré sont là
 pour ça.
 
+## La vérification externe (recherche web)
+
+C'est l'étape 3, et le cœur de ce que cette application ajoute à une simple
+transcription relue : une recherche web ciblée sur ce que la vérification de
+fidélité ne peut pas voir — un nom propre, un titre de rapport, une
+statistique, une référence juridique plausibles mais faux.
+
+Deux passes :
+
+1. **Repérage.** Un appel identifie, dans le texte relu, ce qui se prête à
+   vérification — pas les notions générales du cours, seulement les faits
+   précis.
+2. **Vérification, une affirmation à la fois.** Un appel par affirmation, avec
+   l'outil de recherche web activé. Le prompt est explicite : répondre sans
+   avoir cherché est une faute, « je n'ai pas trouvé » est une réponse
+   valable, et le modèle ne doit jamais deviner une graphie plausible.
+
+**Le garde-fou est mécanique, pas seulement prompté.** Si la réponse ne porte
+la trace d'aucune recherche web effective — aucun appel constaté, aucune
+source citée — le programme requalifie le verdict de force en
+« introuvable », quoi qu'ait écrit le modèle. Un verdict rendu de mémoire est
+ainsi structurellement impossible.
+
+**Une correction n'est appliquée que par substitution exacte, faite par le
+programme**, et seulement si le verdict est « corrige », la confiance
+« haute » et au moins une source citée. Dans tous les autres cas — infirmé,
+introuvable, ambigu, confiance basse, quota d'abonnement atteint — **le texte
+transcrit reste caractère pour caractère identique**, avec un appel de note
+ajouté :
+
+```markdown
+Le rapport Dupont[^v1] est notre référence sur le sujet.
+
+[^v1]: **« rapport Dupont »** — introuvable. Aucune source ne mentionne ce
+    rapport sur le sujet (2 recherches). Confiance : basse.
+```
+
+C'est le principe directeur de toute cette étape : **le modèle propose, le
+programme dispose.** L'incertitude résiduelle reste visible dans le texte,
+plutôt que lissée en une version fluide mais faussement définitive — utile
+pour n'importe quel usage, indispensable si le document doit servir de
+référence citable.
+
+Les points non confirmés partent aussi dans l'onglet **Sources**, distinct
+de l'onglet **Vérification** (fidélité). Un [lexique du domaine](#le-lexique-mjpm)
+répond sans recherche pour les termes déjà vérifiés. Décochable au dépôt : le
+coût n'est pas un critère de conception ici, mais un cours d'une heure fait
+un appel par affirmation repérée, et l'abonnement Claude a ses propres
+limites d'usage.
+
+## Le lexique MJPM
+
+Un glossaire du domaine (mandataires judiciaires à la protection des
+majeurs), livré non vérifié — mesures de protection, acteurs, actes,
+prestations, textes de référence, avec leurs sigles et variantes.
+`app/lexicon/mjpm.json`.
+
+Il n'est jamais opposé comme référence sur la foi de sa seule rédaction :
+`python -m app.lexicon verify` passe chaque entrée non vérifiée par la même
+recherche web que l'étape 3, et ne la marque vérifiée que si elle est
+confirmée. Une entrée non vérifiée continue à amorcer la reconnaissance
+vocale (le pire risque y est un mot de vocabulaire inutile), mais n'est
+jamais recopiée dans une fiche d'entité du coffre tant qu'elle ne l'est pas.
+
+Cinq points d'usage : amorce de vocabulaire pour Whisper (`initial_prompt`),
+bloc de référence dans le prompt de relecture, gravité relevée dans la
+vérification de fidélité, résolution sans recherche à l'étape 3, note
+« Glossaire MJPM » tenue à jour dans le coffre. Un terme confirmé par
+recherche web pendant un fact-check peut être ajouté au lexique de
+l'utilisateur (`POST /api/lexicon`) — jamais au fichier livré avec le dépôt.
+
+## Le coffre Obsidian
+
+Étape 4 : une fiche écrite directement dans un coffre Obsidian existant,
+chemin configuré dans **Réglages → Coffre Obsidian**. Vide, cette étape reste
+inactive — tout le reste de l'application fonctionne normalement sans coffre
+configuré.
+
+La fiche porte un frontmatter YAML (lisible par Dataview et par les Bases
+d'Obsidian : `statut_verification`, `points_incertains`, métadonnées du
+travail, wikilinks vers les entités), un encart de tête
+(`> [!warning]`/`> [!success]` selon qu'il reste des points incertains), et
+les notes de bas de page posées par l'étape 3.
+
+**Second brain.** Chaque entité confirmée (nom propre, organisme, référence)
+devient un `[[wikilink]]` ; sa fiche est créée si elle n'existe pas, avec ce
+que la recherche web en a appris — et **jamais modifiée si elle existe déjà**
+: rien de ce que vous y avez écrit à la main ne peut être écrasé, les
+backlinks d'Obsidian font le reste. Une note d'index (MOC) reçoit une ligne
+par travail, dans une région balisée : republier met la ligne à jour plutôt
+que de la dupliquer. Republier un travail déjà publié réécrit la même fiche
+(son chemin est mémorisé), n'en crée pas une seconde.
+
+Les dossiers par défaut (`Formation/Transcriptions`, `Formation/MJPM/…`)
+sont des conjectures, tous modifiables dans les réglages — la première
+publication dira si la convention tombe juste pour votre coffre.
+
 ## Réglages
 
-Bouton **Réglages**, en haut à droite. Les clés API sont écrites dans
-`data/config.json`, sur votre disque, en permissions restreintes. Elles ne
-sont jamais renvoyées à la page — l'interface sait seulement si une clé est
-enregistrée ou non. `data/` est exclu du dépôt Git.
+Bouton **Réglages**, en haut à droite : accès à Claude (CLI ou clé), clé API
+RunPod, vérification externe, lexique MJPM, coffre Obsidian. Les clés API
+sont écrites dans `data/config.json`, sur votre disque, en permissions
+restreintes. Elles ne sont jamais renvoyées à la page — l'interface sait
+seulement si une clé est enregistrée ou non. `data/` est exclu du dépôt Git.
+Le chemin du coffre Obsidian et les autres réglages n'ont rien de secret :
+ils sont renvoyés tels quels.
 
-Les clés peuvent aussi venir de l'environnement (`ANTHROPIC_API_KEY`,
-`RUNPOD_API_KEY`, `RUNPOD_ENDPOINT_ID`), qui a la priorité.
+Les clés et certains réglages peuvent aussi venir de l'environnement
+(`ANTHROPIC_API_KEY`, `RUNPOD_API_KEY`, `RUNPOD_ENDPOINT_ID`,
+`CLAUDE_BACKEND`, `TRANSCRIPTION_OBSIDIAN_VAULT`), qui a la priorité.
 
 ## Ce que produit l'application
 
@@ -165,8 +313,9 @@ Les clés peuvent aussi venir de l'environnement (`ANTHROPIC_API_KEY`,
 |---|---|---|
 | `.txt` | Le texte relu — ou le texte brut s'il n'a pas encore été relu | oui |
 | `.srt` / `.vtt` | Sous-titres horodatés | oui |
-| `.json` | Tout : texte relu, texte brut, segments, vérification, métadonnées | oui |
+| `.json` | Tout : texte relu, texte brut, segments, vérification, fact-check, métadonnées | oui |
 | `.md` | Document complet : titre, résumé, intertitres, points à vérifier | oui |
+| Fiche Obsidian | La fiche telle qu'elle serait écrite dans le coffre — frontmatter, encart, notes de bas de page | oui (aperçu) |
 
 L'onglet **Audio extrait** rejoue le WAV réellement envoyé au moteur. S'il est
 muet, le problème vient de l'extraction et non de la transcription — c'est la
@@ -196,7 +345,7 @@ maintenant fait par ffmpeg, côté serveur.
 | Sorties | `.txt` | `.txt` `.md` `.srt` `.vtt` `.json` |
 | Cours d'une heure sur RunPod | Impossible (limite de 10 Mo par appel) | Découpage sur les silences |
 | Clés API | `localStorage`, en clair | Fichier local en permissions restreintes |
-| Tests | Scripts ponctuels | 107 tests automatisés |
+| Tests | Scripts ponctuels | 234 tests automatisés |
 
 ### Bugs du prototype, et comment ils ont disparu
 
@@ -393,8 +542,9 @@ faire. Trois garde-fous :
   titres sont insérés par le programme. Une citation introuvable est ignorée.
   Le texte relu n'est jamais modifié à cette étape, seulement complété.
 
-Modèle par défaut : `claude-opus-5`, effort `medium`, modifiable dans les
-réglages.
+Modèle par défaut : `claude-sonnet-5`, effort `high`, modifiable dans les
+réglages — un seul modèle pour tous les appels (relecture, sommaire,
+vérification de fidélité, extraction des affirmations, fact-check).
 
 ## Développement
 
@@ -404,19 +554,27 @@ réglages.
 ```
 
 Les tests n'ont besoin ni de faster-whisper, ni d'anthropic, ni d'une clé API,
-ni de ffmpeg : les moteurs lourds sont remplacés par des doublures et les
-fichiers audio sont synthétisés. La suite tourne en quelques secondes.
+ni de ffmpeg, ni du CLI `claude` : les moteurs lourds et les back-ends Claude
+sont remplacés par des doublures et les fichiers audio sont synthétisés (le
+back-end est forcé sur « api », sans clé, pour toute la suite — voir
+`tests/conftest.py` — pour ne jamais invoquer le vrai CLI même s'il est
+installé et connecté sur la machine qui fait tourner les tests). La suite
+tourne en quelques secondes.
 
 | Fichier | Rôle |
 |---|---|
 | `run.py` | Point d'entrée |
 | `app/server.py` | API HTTP et page unique |
-| `app/pipeline.py` | Les deux étapes : transcription, puis relecture |
+| `app/pipeline.py` | Les quatre étapes : transcription, relecture, vérification externe, publication |
 | `app/media.py` | ffmpeg, découpage sur les silences |
 | `app/engines/` | Moteurs de transcription (local, RunPod serverless, RunPod pod) |
+| `app/proofread/backends/` | Accès à Claude : CLI (abonnement) ou API (clé) |
 | `app/proofread/` | Relecture : par Claude, ou par règles |
-| `app/proofread/verify.py` | Vérification : règles, puis lecture par Claude |
-| `app/exporters.py` | txt, md, srt, vtt, json |
+| `app/proofread/verify.py` | Vérification de fidélité : règles, puis lecture par Claude |
+| `app/proofread/factcheck.py` | Vérification externe : recherche web, affirmation par affirmation |
+| `app/lexicon/` | Lexique MJPM : amorçage Whisper, résolution sans recherche, glossaire |
+| `app/obsidian/` | Publication : fiche, fiches d'entités, MOC, glossaire |
+| `app/exporters.py` | txt, md, srt, vtt, json, fiche Obsidian |
 | `app/db.py` | Historique SQLite |
 | `app/static/` | Interface |
 | `handler.py`, `Dockerfile` | Worker RunPod Serverless |
@@ -427,12 +585,16 @@ Ajouter un moteur : implémenter le protocole de `app/engines/base.py`
 `app/engines/__init__.py`. Un moteur ne voit que de l'audio et ne rend que des
 segments — la relecture n'est pas son affaire.
 
-Les deux étapes exposées par l'API :
+Les quatre étapes exposées par l'API :
 
 ```
 POST /api/jobs                    dépose un fichier et lance l'étape 1
+                                   (one_click=true : chaîne les quatre étapes)
 POST /api/jobs/{id}/proofread     lance ou relance l'étape 2, seule
+POST /api/jobs/{id}/factcheck     lance ou relance l'étape 3, seule
+POST /api/jobs/{id}/publish       lance ou relance l'étape 4, seule
 POST /api/jobs/{id}/retry         relance l'étape 1 depuis le fichier d'origine
+GET/POST /api/lexicon             consulte le lexique, accepte un ajout
 ```
 
 ## Ce qui n'est pas fait
@@ -443,3 +605,12 @@ POST /api/jobs/{id}/retry         relance l'étape 1 depuis le fichier d'origine
   du reste. Un empaquetage PyInstaller ou Tauri reste à faire.
 - **Repérage des locuteurs.** Un seul orateur est supposé, ce qui convient à un
   cours magistral mais pas à une table ronde.
+- **Acceptation des propositions de lexique dans l'interface.** Un terme
+  confirmé par recherche web pendant un fact-check peut déjà être ajouté au
+  lexique via `POST /api/lexicon` ; la page ne propose pas encore de bouton
+  dédié pour ça — à faire à la main, pour l'instant.
+- **Enveloppe exacte du CLI en mode `--output-format stream-json`.** Le
+  back-end CLI (`app/proofread/backends/cli.py`) l'analyse de façon tolérante
+  (jamais d'échec silencieux, un format inattendu donne un message d'erreur
+  clair) ; un ajustement pourrait s'avérer nécessaire selon la version du
+  CLI installée.
