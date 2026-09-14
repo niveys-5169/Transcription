@@ -9,12 +9,14 @@ from __future__ import annotations
 
 import base64
 import json
+import types
 
 import httpx
 import pytest
 
+from app.engines import runpod_pod as runpod_pod_module
 from app.engines.base import TranscriptionError
-from app.engines.runpod_pod import GRAPHQL_URL, PodFallbackSession, RunPodPodClient
+from app.engines.runpod_pod import GRAPHQL_URL, PodFallbackSession, RunPodPodClient, pod_pool
 
 
 class _Settings:
@@ -301,3 +303,170 @@ def test_transcribe_chunk_leve_une_erreur_si_le_pod_en_renvoie_une():
 
     with pytest.raises(TranscriptionError, match="plus de mémoire GPU"):
         session.transcribe_chunk(b"x", "large-v3", "fr", label="tronçon 1/1")
+
+
+# ------------------------------------------------------------------ PodPool
+#
+# Le pool garde un pod chaud entre plusieurs travaux de la file (voir
+# pipeline.py, un seul thread traite les travaux l'un après l'autre) pour ne
+# pas recréer un pod — donc retélécharger l'image et recharger le modèle —
+# à chaque fichier. Ces tests remplacent PodFallbackSession et
+# threading.Timer par des doublures : pas de réseau, pas d'attente réelle du
+# délai d'inactivité (le "timer" se déclenche à la demande via .fire()).
+
+
+class _FakeSession:
+    """Doublure de PodFallbackSession pour tester PodPool isolément."""
+
+    instances: list["_FakeSession"] = []
+
+    def __init__(self, settings):
+        self.settings = settings
+        self.started = False
+        self.closed = 0
+        self.healthy = True
+        _FakeSession.instances.append(self)
+
+    def start(self):
+        if getattr(self.settings, "_fail_start", False):
+            raise TranscriptionError("le pod n'a jamais répondu")
+        self.started = True
+
+    def is_healthy(self):
+        return self.healthy
+
+    def close(self):
+        self.closed += 1
+
+
+class _FakeTimer:
+    """Doublure de threading.Timer : ne programme rien sur un vrai thread,
+    se déclenche à la demande via ``fire()``."""
+
+    instances: list["_FakeTimer"] = []
+
+    def __init__(self, interval, function):
+        self.interval = interval
+        self.function = function
+        self.cancelled = False
+        self.daemon = False
+        _FakeTimer.instances.append(self)
+
+    def start(self):
+        pass
+
+    def cancel(self):
+        self.cancelled = True
+
+    def fire(self):
+        if not self.cancelled:
+            self.function()
+
+
+def _pod_settings(**overrides):
+    base = dict(
+        runpod_pod_image="repo/transcription-pod:latest",
+        runpod_pod_gpu_type_id="NVIDIA L4",
+        runpod_pod_container_disk_gb=20,
+        runpod_pod_port=8000,
+        runpod_pod_idle_timeout_seconds=300,
+    )
+    base.update(overrides)
+    return types.SimpleNamespace(**base)
+
+
+@pytest.fixture(autouse=True)
+def _isoler_pod_pool(monkeypatch):
+    monkeypatch.setattr(runpod_pod_module, "PodFallbackSession", _FakeSession)
+    monkeypatch.setattr(runpod_pod_module.threading, "Timer", _FakeTimer)
+    pod_pool.shutdown()  # au cas où un test précédent aurait laissé un pod
+    _FakeSession.instances.clear()
+    _FakeTimer.instances.clear()
+    yield
+    pod_pool.shutdown()
+    _FakeSession.instances.clear()
+    _FakeTimer.instances.clear()
+
+
+def test_acquire_reutilise_le_pod_si_rien_n_a_change():
+    settings = _pod_settings()
+    session1 = pod_pool.acquire(settings)
+    pod_pool.release(settings)
+    session2 = pod_pool.acquire(settings)
+
+    assert session1 is session2
+    assert len(_FakeSession.instances) == 1
+    assert session1.closed == 0
+
+
+def test_acquire_recree_le_pod_si_les_reglages_ont_change():
+    settings1 = _pod_settings(runpod_pod_image="repo/a:latest")
+    settings2 = _pod_settings(runpod_pod_image="repo/b:latest")
+
+    session1 = pod_pool.acquire(settings1)
+    pod_pool.release(settings1)
+    session2 = pod_pool.acquire(settings2)
+
+    assert session1 is not session2
+    assert session1.closed == 1  # l'ancien pod, incompatible, est fermé
+    assert len(_FakeSession.instances) == 2
+
+
+def test_acquire_recree_le_pod_si_l_ancien_ne_repond_plus():
+    settings = _pod_settings()
+    session1 = pod_pool.acquire(settings)
+    pod_pool.release(settings)
+    session1.healthy = False
+
+    session2 = pod_pool.acquire(settings)
+
+    assert session1 is not session2
+    assert session1.closed == 1
+    assert len(_FakeSession.instances) == 2
+
+
+def test_acquire_ferme_le_pod_si_le_demarrage_echoue():
+    settings = _pod_settings()
+    settings._fail_start = True
+
+    with pytest.raises(TranscriptionError):
+        pod_pool.acquire(settings)
+
+    assert _FakeSession.instances[0].closed == 1
+
+
+def test_release_arme_un_delai_puis_ferme_le_pod_a_l_echeance():
+    settings = _pod_settings(runpod_pod_idle_timeout_seconds=42)
+    session = pod_pool.acquire(settings)
+    pod_pool.release(settings)
+
+    assert len(_FakeTimer.instances) == 1
+    timer = _FakeTimer.instances[0]
+    assert timer.interval == 42
+    assert session.closed == 0
+
+    timer.fire()
+
+    assert session.closed == 1
+
+
+def test_acquire_annule_le_delai_d_inactivite_en_cours():
+    settings = _pod_settings()
+    session = pod_pool.acquire(settings)
+    pod_pool.release(settings)
+    timer = _FakeTimer.instances[0]
+
+    pod_pool.acquire(settings)  # un nouveau travail arrive avant l'échéance
+
+    assert timer.cancelled
+    assert session.closed == 0
+
+
+def test_shutdown_ferme_le_pod_sans_attendre_le_delai():
+    settings = _pod_settings()
+    session = pod_pool.acquire(settings)
+    pod_pool.release(settings)
+
+    pod_pool.shutdown()
+
+    assert session.closed == 1
