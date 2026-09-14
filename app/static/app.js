@@ -598,6 +598,124 @@ function currentText() {
 
 /* ----------------------------------------------------------- réglages */
 
+/* Présentations toutes faites pour l'organisation du coffre Obsidian : évite
+   de faire taper des chemins à quelqu'un qui n'a aucune raison de savoir ce
+   qu'est un chemin. « Personnalisé » reste disponible pour qui veut choisir. */
+const OBSIDIAN_LAYOUTS = {
+  formation: {
+    notes: "Formation/Transcriptions",
+    entities: "Formation/MJPM/Entités",
+    index: "Formation/MJPM/MOC Formation.md",
+    glossary: "Formation/MJPM/Glossaire MJPM.md",
+  },
+  racine: {
+    notes: "Transcriptions",
+    entities: "Entités",
+    index: "MOC Formation.md",
+    glossary: "Glossaire MJPM.md",
+  },
+};
+
+const OBSIDIAN_FILENAME_STYLES = {
+  "date-titre": "{date} — {titre}",
+  "titre-date": "{titre} — {date}",
+  "titre": "{titre}",
+};
+
+function detectObsidianLayout(settings) {
+  for (const [key, layout] of Object.entries(OBSIDIAN_LAYOUTS)) {
+    if (
+      settings.obsidian_notes_folder === layout.notes &&
+      settings.obsidian_entities_folder === layout.entities &&
+      settings.obsidian_index_note === layout.index &&
+      settings.obsidian_glossary_note === layout.glossary
+    ) {
+      return key;
+    }
+  }
+  return "custom";
+}
+
+function detectFilenameStyle(template) {
+  for (const [key, value] of Object.entries(OBSIDIAN_FILENAME_STYLES)) {
+    if (template === value) return key;
+  }
+  return "custom";
+}
+
+function updateObsidianLayoutUI() {
+  const key = $("obsidian_layout").value;
+  $("obsidian_custom_fields").hidden = key !== "custom";
+  const layout = OBSIDIAN_LAYOUTS[key];
+  if (layout) {
+    $("obsidian_notes_folder").value = layout.notes;
+    $("obsidian_entities_folder").value = layout.entities;
+    $("obsidian_index_note").value = layout.index;
+    $("obsidian_glossary_note").value = layout.glossary;
+  }
+}
+
+function updateObsidianFilenameUI() {
+  const key = $("obsidian_filename_style").value;
+  $("obsidian_filename_custom_field").hidden = key !== "custom";
+  if (OBSIDIAN_FILENAME_STYLES[key]) {
+    $("obsidian_filename_template").value = OBSIDIAN_FILENAME_STYLES[key];
+  }
+}
+
+/* ---------------------------------------------------- navigateur de dossiers */
+
+async function loadFolderBrowser(path) {
+  const query = path ? `?path=${encodeURIComponent(path)}` : "";
+  let data;
+  try {
+    data = await api(`/api/browse${query}`);
+  } catch (error) {
+    toast(error.message, true);
+    return;
+  }
+  renderFolderBrowser(data);
+}
+
+function renderFolderBrowser(data) {
+  const panel = $("folder-browser");
+  panel.dataset.path = data.path;
+  $("folder-browser-path").textContent = data.path;
+
+  const rows = [];
+  if (data.parent) {
+    rows.push(
+      `<li class="folder-item" data-path="${escapeHtml(data.parent)}">` +
+      `<span class="icon">↰</span> Dossier parent</li>`
+    );
+  }
+  if (data.directories.length) {
+    rows.push(...data.directories.map((dir) =>
+      `<li class="folder-item" data-path="${escapeHtml(dir.path)}">` +
+      `<span class="icon">📁</span> ${escapeHtml(dir.name)}</li>`
+    ));
+  } else {
+    rows.push(`<li class="folder-empty">Aucun sous-dossier ici.</li>`);
+  }
+
+  const list = $("folder-browser-list");
+  list.innerHTML = rows.join("");
+  list.querySelectorAll(".folder-item[data-path]").forEach((item) =>
+    item.addEventListener("click", () => loadFolderBrowser(item.dataset.path))
+  );
+}
+
+function openFolderBrowser() {
+  $("folder-browser").hidden = false;
+  loadFolderBrowser($("obsidian_vault_path").value.trim() || null);
+}
+
+function chooseFolderBrowserPath() {
+  const path = $("folder-browser").dataset.path;
+  if (path) $("obsidian_vault_path").value = path;
+  $("folder-browser").hidden = true;
+}
+
 function openSettings() {
   const settings = state.settings;
   $("claude_backend").value = settings.claude_backend || "cli";
@@ -627,6 +745,7 @@ function openSettings() {
   $("lexicon_enabled").checked = Boolean(settings.lexicon_enabled);
   $("lexicon_whisper_prompt").checked = Boolean(settings.lexicon_whisper_prompt);
 
+  $("folder-browser").hidden = true;
   $("obsidian_vault_path").value = settings.obsidian_vault_path || "";
   $("obsidian_notes_folder").value = settings.obsidian_notes_folder || "";
   $("obsidian_entities_folder").value = settings.obsidian_entities_folder || "";
@@ -638,6 +757,14 @@ function openSettings() {
   $("obsidian-state").textContent = settings.obsidian_vault_path
     ? ""
     : "Sans coffre configuré, l'étape de publication reste inactive — le reste du traitement fonctionne normalement.";
+
+  const layoutKey = detectObsidianLayout(settings);
+  $("obsidian_layout").value = layoutKey;
+  $("obsidian_custom_fields").hidden = layoutKey !== "custom";
+
+  const filenameKey = detectFilenameStyle(settings.obsidian_filename_template || "");
+  $("obsidian_filename_style").value = filenameKey;
+  $("obsidian_filename_custom_field").hidden = filenameKey !== "custom";
 
   $("settings-dialog").showModal();
 }
@@ -812,6 +939,12 @@ function initActions() {
   $("open-settings").addEventListener("click", openSettings);
   $("settings-save").addEventListener("click", saveSettings);
   $("settings-cancel").addEventListener("click", () => $("settings-dialog").close());
+
+  $("obsidian_layout").addEventListener("change", updateObsidianLayoutUI);
+  $("obsidian_filename_style").addEventListener("change", updateObsidianFilenameUI);
+  $("browse-vault-btn").addEventListener("click", openFolderBrowser);
+  $("folder-browser-choose").addEventListener("click", chooseFolderBrowserPath);
+  $("folder-browser-cancel").addEventListener("click", () => { $("folder-browser").hidden = true; });
 }
 
 /* ------------------------------------------------------------ init */

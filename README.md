@@ -274,6 +274,16 @@ chemin configuré dans **Réglages → Coffre Obsidian**. Vide, cette étape res
 inactive — tout le reste de l'application fonctionne normalement sans coffre
 configuré.
 
+Le bouton **Parcourir…**, à côté du champ, ouvre l'arborescence des dossiers
+de la machine pour choisir le coffre sans avoir à taper son chemin à la
+main. Le rangement à l'intérieur du coffre se choisit dans un menu déroulant
+(« Formation / MJPM » par défaut, « à la racine du coffre », ou
+« Personnalisé » pour choisir chaque sous-dossier) ; le nom des fiches, de
+même (« Date — Titre » par défaut). C'est ce que voit `GET /api/browse` — en
+lecture seule, il ne renvoie que des noms de dossiers, jamais un contenu de
+fichier — mais lancé avec `--host 0.0.0.0`, l'arborescence des dossiers de la
+machine devient visible à quiconque atteint le port sur le réseau.
+
 La fiche porte un frontmatter YAML (lisible par Dataview et par les Bases
 d'Obsidian : `statut_verification`, `points_incertains`, métadonnées du
 travail, wikilinks vers les entités), un encart de tête
