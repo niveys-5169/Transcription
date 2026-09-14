@@ -104,3 +104,80 @@ VERIFICATION_USER = """\
 
 === VERSION RELUE ===
 {relu}"""
+
+
+# --------------------------------------------------------------- fact-check
+#
+# Deux passes : repérer les affirmations vérifiables, puis les vérifier une
+# à une par une recherche web ciblée — jamais par une relecture de
+# plausibilité. Voir factcheck.py pour le garde-fou mécanique qui empêche
+# tout verdict rendu sans trace de recherche effective.
+
+FACTCHECK_EXTRACTION_SYSTEM = """\
+Tu repères, dans un texte relu de cours de formation, ce qui peut se \
+vérifier par une recherche : noms propres (personnes, organismes), titres \
+de rapports ou de publications, statistiques chiffrées, références \
+juridiques (articles de loi, codes), dates de textes ou d'événements.
+
+Tu ne repères PAS : les notions générales du domaine, les définitions, les \
+explications pédagogiques, ni rien qui ne corresponde pas à un fait précis \
+et vérifiable.
+
+Réponds uniquement par un tableau JSON, sans aucun texte autour et sans \
+bloc de code :
+
+[{"type": "nom_propre|organisme|rapport|statistique|reference_juridique|date", \
+"citation": "...", "question": "..."}]
+
+- "citation" : recopie EXACTE du passage concerné, tel qu'il apparaît dans \
+le texte fourni — mêmes mots, même ponctuation, 15 mots au maximum. Une \
+citation qui ne serait pas recopiée à l'identique est inexploitable : elle \
+ne pourra pas être retrouvée dans le texte.
+- "question" : ce qu'il faut vérifier, en une phrase.
+- Un tableau vide [] si rien ne s'y prête. C'est une réponse parfaitement \
+valable.\
+"""
+
+FACTCHECK_EXTRACTION_USER = """\
+Repère les affirmations vérifiables dans ce passage :
+
+{body}"""
+
+FACTCHECK_VERDICT_SYSTEM = """\
+Tu vérifies UNE affirmation issue d'une transcription de cours, par une \
+recherche web. C'est une obligation, pas une option : répondre sans avoir \
+cherché est une faute. « Je n'ai pas trouvé » après une recherche sincère \
+est une réponse parfaitement valable — largement préférable à une réponse \
+plausible mais non vérifiée.
+
+Ne devine jamais une graphie voisine de ce qui te semblerait plus correct : \
+un nom propre, un titre ou une référence légèrement déformés par la \
+reconnaissance vocale doivent être confirmés ou infirmés par une source, \
+jamais « corrigés » d'après ta seule impression.
+
+Réponds uniquement par un objet JSON, sans aucun texte autour et sans bloc \
+de code :
+
+{"verdict": "confirme|corrige|infirme|introuvable|ambigu", \
+"forme_correcte": "...", "explication": "...", \
+"sources": [{"titre": "...", "url": "..."}], "confiance": "haute|moyenne|basse"}
+
+- "verdict" :
+  - "confirme" : l'affirmation, telle quelle, est exacte.
+  - "corrige" : une graphie ou une valeur légèrement différente est la \
+bonne — "forme_correcte" la donne alors, sous la même forme que la citation \
+(remplacement direct).
+  - "infirme" : l'affirmation est fausse, sans qu'une forme corrigée simple \
+existe.
+  - "introuvable" : la recherche n'a rien donné de probant.
+  - "ambigu" : des sources se contredisent, ou le sujet est incertain.
+- "sources" : les pages effectivement consultées, avec leur URL réelle. Un \
+verdict sans source consultable ne sera pas retenu tel quel.
+- "confiance" : "haute" seulement si les sources sont solides et concordent \
+sans ambiguïté ; "basse" sinon, y compris en cas de doute.\
+"""
+
+FACTCHECK_VERDICT_USER = """\
+Affirmation à vérifier : « {citation} »
+
+{question}"""
