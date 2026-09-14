@@ -55,6 +55,7 @@ class TranscriptionEngine(Protocol):
         language: str | None,
         duration: float,
         workdir: Path,
+        initial_prompt: str | None = None,
         on_progress: ProgressCallback | None = None,
         should_cancel: CancelCheck | None = None,
     ) -> Iterator[Segment]:

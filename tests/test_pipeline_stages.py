@@ -31,7 +31,7 @@ class FauxMoteur:
         return True, "Moteur simulé."
 
     def transcribe(self, wav_path, *, model, language, duration, workdir,
-                   on_progress=None, should_cancel=None):
+                   initial_prompt=None, on_progress=None, should_cancel=None):
         for segment in FAUX_SEGMENTS:
             yield segment
 

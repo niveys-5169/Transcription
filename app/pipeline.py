@@ -30,7 +30,7 @@ import threading
 import time
 from pathlib import Path
 
-from . import config, db, media, obsidian
+from . import config, db, lexicon, media, obsidian
 from .engines import get_engine
 from .engines.base import TranscriptionError
 from .proofread import ProofreadError, ProofreadResult, basic_proofread
@@ -226,12 +226,19 @@ def run_transcription(job_id: str) -> None:
         report = progress.scaled(
             EXTRACTION_SHARE, TRANSCRIPTION_SHARE, "Transcription…"
         )
+        settings = config.load_settings()
+        initial_prompt = (
+            lexicon.whisper_prompt()
+            if settings.lexicon_enabled and settings.lexicon_whisper_prompt
+            else None
+        )
         for segment in engine.transcribe(
             wav_path,
             model=job["model"],
             language=job["language"],
             duration=duration,
             workdir=workdir,
+            initial_prompt=initial_prompt,
             on_progress=report,
             should_cancel=lambda: is_cancelled(job_id),
         ):

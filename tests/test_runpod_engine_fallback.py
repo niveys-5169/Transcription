@@ -53,7 +53,7 @@ class _FausseSessionPod:
     def is_healthy(self):
         return True
 
-    def transcribe_chunk(self, audio_bytes, model, language, *, label):
+    def transcribe_chunk(self, audio_bytes, model, language, *, label, initial_prompt=None):
         if self._echoue_transcription:
             raise TranscriptionError(f"le pod a planté sur le {label}")
         self.chunks_transcrits.append(label)

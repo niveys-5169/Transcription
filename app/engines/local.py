@@ -65,6 +65,7 @@ class LocalWhisperEngine:
         language: str | None,
         duration: float,
         workdir: Path,
+        initial_prompt: str | None = None,
         on_progress: ProgressCallback | None = None,
         should_cancel: CancelCheck | None = None,
     ) -> Iterator[Segment]:
@@ -80,11 +81,17 @@ class LocalWhisperEngine:
         # classé un fichier entier de 10 minutes comme « silence » sur ce
         # projet, renvoyant zéro segment sans la moindre erreur. Mieux vaut
         # traiter un peu de silence que perdre du contenu en silence.
+        #
+        # initial_prompt : amorce de vocabulaire (sigles, noms propres du
+        # domaine — voir app/lexicon). Whisper ne l'applique qu'en début de
+        # fichier et l'oublie au fil des tronçons internes ; ça reste la
+        # seule prise sur son vocabulaire, pour peu que ça aide.
         segments, info = whisper.transcribe(
             str(wav_path),
             language=language or None,
             vad_filter=False,
             beam_size=5,
+            initial_prompt=initial_prompt or None,
         )
 
         total = duration or getattr(info, "duration", 0.0) or 0.0

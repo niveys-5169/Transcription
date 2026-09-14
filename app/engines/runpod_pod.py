@@ -210,12 +210,14 @@ class PodFallbackSession:
         language: str | None,
         *,
         label: str,
+        initial_prompt: str | None = None,
     ) -> dict:
         url = f"{self._client.proxy_url(self.pod_id, self.settings.runpod_pod_port)}/transcribe"
         payload = {
             "audio_base64": base64.b64encode(audio_bytes).decode("ascii"),
             "model": model,
             "language": language or None,
+            "initial_prompt": initial_prompt or None,
         }
         attempts = 3
         for attempt in range(1, attempts + 1):
