@@ -1,14 +1,16 @@
 """Tests de la relecture par Claude, sans appel réseau.
 
-Les échanges avec l'API sont remplacés par une doublure de ``_call`` : ce qui
-est testé ici, c'est la logique autour de l'appel — découpage, contexte,
-garde-fou anti-résumé, sommaire.
+Le back-end (CLI ou API) est remplacé par une doublure de ``backend.complete`` :
+ce qui est testé ici, c'est la logique autour de l'appel — découpage, contexte,
+garde-fou anti-résumé, sommaire — pas le back-end lui-même (voir
+``test_cli_backend.py`` et ``test_api_backend.py`` pour ça).
 """
 import json
 
 import pytest
 
 from app.config import Settings
+from app.proofread.backends.base import BackendResult
 from app.proofread.claude import ClaudeProofreader
 from app.proofread.base import ProofreadError
 
@@ -17,14 +19,16 @@ from conftest import segment
 
 @pytest.fixture
 def relecteur(monkeypatch):
+    # claude_backend="api" : on isole le test du CLI réel éventuellement
+    # présent sur la machine qui fait tourner la suite.
     settings = Settings(
         anthropic_api_key="sk-ant-test",
-        proofread_model="claude-opus-5",
+        claude_backend="api",
+        proofread_model="claude-sonnet-5",
         proofread_chunk_chars=600,
     )
     instance = ClaudeProofreader(settings)
     monkeypatch.setattr(instance, "is_available", lambda: (True, "simulé"))
-    monkeypatch.setattr(instance, "_client", lambda: object())
     return instance
 
 
@@ -36,13 +40,14 @@ def _segments(count=6):
 def test_relecture_assemble_les_blocs(relecteur, monkeypatch):
     appels = []
 
-    def faux_call(client, *, system, user, max_tokens):
+    def faux_complete(*, system, user, max_tokens, schema=None, web_search=False):
         appels.append(user)
         # Réponse de longueur comparable à l'entrée, sinon le garde-fou
         # anti-résumé la remplace par le nettoyage mécanique.
-        return f"BLOC{len(appels)}. " + "Une phrase relue de bonne longueur. " * 30
+        text = f"BLOC{len(appels)}. " + "Une phrase relue de bonne longueur. " * 30
+        return BackendResult(text=text)
 
-    monkeypatch.setattr(relecteur, "_call", faux_call)
+    monkeypatch.setattr(relecteur.backend, "complete", faux_complete)
     resultat = relecteur.proofread(_segments(), structure=False)
 
     assert len(appels) > 1
@@ -56,11 +61,12 @@ def test_relecture_assemble_les_blocs(relecteur, monkeypatch):
 def test_le_contexte_du_bloc_precedent_est_transmis(relecteur, monkeypatch):
     recus = []
 
-    def faux_call(client, *, system, user, max_tokens):
+    def faux_complete(*, system, user, max_tokens, schema=None, web_search=False):
         recus.append(user)
-        return "Un texte relu de longueur tout à fait comparable à l'entrée. " * 6
+        text = "Un texte relu de longueur tout à fait comparable à l'entrée. " * 6
+        return BackendResult(text=text)
 
-    monkeypatch.setattr(relecteur, "_call", faux_call)
+    monkeypatch.setattr(relecteur.backend, "complete", faux_complete)
     relecteur.proofread(_segments(), structure=False)
 
     assert "[CONTEXTE" not in recus[0]
@@ -69,7 +75,9 @@ def test_le_contexte_du_bloc_precedent_est_transmis(relecteur, monkeypatch):
 
 def test_une_reponse_trop_courte_declenche_le_repli_mecanique(relecteur, monkeypatch):
     monkeypatch.setattr(
-        relecteur, "_call", lambda *a, **k: "En résumé : c'est la thermodynamique."
+        relecteur.backend,
+        "complete",
+        lambda **k: BackendResult(text="En résumé : c'est la thermodynamique."),
     )
     resultat = relecteur.proofread(
         [segment(0, 10, "alors euh " + "on parle de conservation de l'énergie. " * 20)],
@@ -100,7 +108,9 @@ def test_le_sommaire_ajoute_titre_resume_et_intertitres(relecteur, monkeypatch):
             }
         ),
     ]
-    monkeypatch.setattr(relecteur, "_call", lambda *a, **k: reponses.pop(0))
+    monkeypatch.setattr(
+        relecteur.backend, "complete", lambda **k: BackendResult(text=reponses.pop(0))
+    )
 
     resultat = relecteur.proofread([segment(0, 10, corps)], structure=True)
     assert resultat.title == "Thermodynamique — séance 1"
@@ -113,13 +123,13 @@ def test_un_sommaire_en_echec_ne_perd_pas_la_relecture(relecteur, monkeypatch):
     corps = "Un contenu relu parfaitement correct et suffisamment long pour passer."
     appels = {"n": 0}
 
-    def faux_call(client, *, system, user, max_tokens):
+    def faux_complete(*, system, user, max_tokens, schema=None, web_search=False):
         appels["n"] += 1
         if appels["n"] == 1:
-            return corps
+            return BackendResult(text=corps)
         raise ProofreadError("API indisponible")
 
-    monkeypatch.setattr(relecteur, "_call", faux_call)
+    monkeypatch.setattr(relecteur.backend, "complete", faux_complete)
     resultat = relecteur.proofread([segment(0, 10, corps)], structure=True)
 
     assert resultat.text == corps
@@ -129,7 +139,9 @@ def test_un_sommaire_en_echec_ne_perd_pas_la_relecture(relecteur, monkeypatch):
 def test_un_sommaire_illisible_est_ignore(relecteur, monkeypatch):
     corps = "Un contenu relu parfaitement correct et suffisamment long pour passer."
     reponses = [corps, "je n'ai pas compris la demande"]
-    monkeypatch.setattr(relecteur, "_call", lambda *a, **k: reponses.pop(0))
+    monkeypatch.setattr(
+        relecteur.backend, "complete", lambda **k: BackendResult(text=reponses.pop(0))
+    )
 
     resultat = relecteur.proofread([segment(0, 10, corps)], structure=True)
     assert resultat.text == corps
@@ -137,13 +149,17 @@ def test_un_sommaire_illisible_est_ignore(relecteur, monkeypatch):
 
 
 def test_annulation_pendant_la_relecture(relecteur, monkeypatch):
-    monkeypatch.setattr(relecteur, "_call", lambda *a, **k: "texte" * 100)
+    monkeypatch.setattr(
+        relecteur.backend, "complete", lambda **k: BackendResult(text="texte" * 100)
+    )
     with pytest.raises(ProofreadError, match="annulée"):
         relecteur.proofread(_segments(), structure=False, should_cancel=lambda: True)
 
 
 def test_indisponible_sans_cle():
-    relecteur = ClaudeProofreader(Settings(anthropic_api_key=""))
+    relecteur = ClaudeProofreader(
+        Settings(anthropic_api_key="", claude_backend="api")
+    )
     disponible, detail = relecteur.is_available()
     assert disponible is False
     assert "clé" in detail.lower() or "installé" in detail.lower()

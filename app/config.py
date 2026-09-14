@@ -43,6 +43,9 @@ RUNPOD_POD_MODES = ["off", "fallback", "always"]
 # Modes de relecture.
 PROOFREAD_MODES = ["claude", "basic", "none"]
 
+# Comment l'application appelle Claude : le CLI (abonnement) ou l'API (clé).
+CLAUDE_BACKENDS = ["cli", "api"]
+
 # Champs considérés comme secrets : jamais renvoyés en clair par l'API.
 SECRET_FIELDS = {"runpod_api_key", "anthropic_api_key"}
 
@@ -103,15 +106,48 @@ class Settings:
     # l'écart entre deux dépôts manuels rapprochés.
     runpod_pod_idle_timeout_seconds: int = 90
 
+    # --- Accès à Claude ---
+    # "cli" (par défaut) : le binaire `claude`, authentifié sur l'abonnement
+    # (`claude setup-token`) — aucun compte API facturé au jeton. "api" : la
+    # clé API Anthropic ci-dessous, comme dans les versions précédentes.
+    claude_backend: str = "cli"
+    # Chemin du binaire `claude`. Vide : cherché dans le PATH.
+    claude_cli_path: str = ""
+
     # --- Relecture (optionnelle) ---
     default_proofread: str = "claude"
     anthropic_api_key: str = ""
-    proofread_model: str = "claude-opus-5"
-    proofread_effort: str = "medium"
+    # Modèle de base de tous les appels à Claude (relecture, sommaire,
+    # vérification, extraction des affirmations, fact-check) : un seul
+    # réglage, pas de modèle différent par étape.
+    proofread_model: str = "claude-sonnet-5"
+    # Relevé par défaut : le coût n'est plus un critère de conception ici.
+    proofread_effort: str = "high"
     # Taille (en caractères) d'un bloc de texte envoyé en relecture.
     proofread_chunk_chars: int = 6000
     # Ajouter titre, intertitres et résumé au texte relu.
     structure_output: bool = True
+
+    # --- Vérification externe (recherche web) ---
+    factcheck: bool = True
+    # Recherches web autorisées par affirmation à vérifier.
+    factcheck_max_searches: int = 8
+
+    # --- Lexique MJPM ---
+    lexicon_enabled: bool = True
+    # Amorcer Whisper avec les sigles et noms propres du lexique
+    # (`initial_prompt`) — voir app/lexicon/.
+    lexicon_whisper_prompt: bool = True
+
+    # --- Coffre Obsidian (optionnel : vide = étape « fiche » inactive) ---
+    obsidian_vault_path: str = ""
+    obsidian_notes_folder: str = "Formation/Transcriptions"
+    obsidian_entities_folder: str = "Formation/MJPM/Entités"
+    obsidian_index_note: str = "Formation/MJPM/MOC Formation.md"
+    obsidian_glossary_note: str = "Formation/MJPM/Glossaire MJPM.md"
+    obsidian_create_entities: bool = True
+    obsidian_tags: str = "formation/MJPM"
+    obsidian_filename_template: str = "{date} — {titre}"
 
     # --- Divers ---
     keep_media: bool = True
@@ -161,6 +197,8 @@ def _from_env(settings: Settings) -> Settings:
         "proofread_model": "TRANSCRIPTION_PROOFREAD_MODEL",
         "default_engine": "TRANSCRIPTION_ENGINE",
         "default_model": "TRANSCRIPTION_MODEL",
+        "claude_backend": "CLAUDE_BACKEND",
+        "obsidian_vault_path": "TRANSCRIPTION_OBSIDIAN_VAULT",
     }
     for attr, env_name in env_map.items():
         value = os.environ.get(env_name)

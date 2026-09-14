@@ -112,11 +112,21 @@ async function loadStatus() {
     ? claude.detail
     : `${claude.detail} La relecture simple reste disponible.`;
 
+  $("factcheck").checked = Boolean(status.settings.factcheck) && claude.available;
+  $("factcheck").disabled = !claude.available;
+  const obsidian = status.obsidian;
+  $("publish").checked = obsidian.available;
+  $("publish").disabled = !obsidian.available;
+  $("one-click-btn").title = obsidian.available
+    ? ""
+    : `Publication Obsidian désactivée : ${obsidian.detail}`;
+
   const pills = [
     pill(status.ffmpeg.available, "Extraction audio", status.ffmpeg.detail),
     pill(status.engines.local.available, "Moteur local", status.engines.local.detail),
     pill(status.engines.runpod.available, "RunPod", status.engines.runpod.detail, true),
-    pill(claude.available, "Relecture Claude", claude.detail, true),
+    pill(claude.available, "Claude", claude.detail, true),
+    pill(obsidian.available, "Obsidian", obsidian.detail, true),
   ];
   $("health").innerHTML = pills.join("");
 }
@@ -146,6 +156,7 @@ function setPending(files) {
     label.textContent = `${state.pending.length} fichiers — ${humanSize(total)}`;
   }
   $("submit-btn").disabled = state.pending.length === 0;
+  $("one-click-btn").disabled = state.pending.length === 0;
 }
 
 function initDropzone() {
@@ -175,18 +186,22 @@ function initDropzone() {
   });
 }
 
-async function submitFiles(event) {
-  event.preventDefault();
+async function submitFiles(event, oneClick = false) {
+  if (event) event.preventDefault();
   if (!state.pending.length) return;
 
-  const button = $("submit-btn");
+  const button = oneClick ? $("one-click-btn") : $("submit-btn");
+  const otherButton = oneClick ? $("submit-btn") : $("one-click-btn");
+  const originalLabel = button.textContent;
   button.disabled = true;
+  otherButton.disabled = true;
   const files = state.pending.slice();
   let sent = 0;
 
   for (const file of files) {
     const form = new FormData();
     form.append("file", file);
+    form.append("one_click", oneClick ? "true" : "false");
     form.append("engine", $("engine").value);
     form.append("model", $("model").value);
     form.append("language", $("language").value);
@@ -194,6 +209,8 @@ async function submitFiles(event) {
     form.append("structure", $("structure").checked ? "true" : "false");
     form.append("verify", $("verify").checked ? "true" : "false");
     form.append("chain", $("chain").checked ? "true" : "false");
+    form.append("factcheck", $("factcheck").checked ? "true" : "false");
+    form.append("publish", $("publish").checked ? "true" : "false");
 
     button.textContent = files.length > 1
       ? `Envoi ${sent + 1}/${files.length}…`
@@ -207,11 +224,11 @@ async function submitFiles(event) {
     }
   }
 
-  button.textContent = "Lancer la transcription";
+  button.textContent = originalLabel;
   setPending([]);
   $("file-input").value = "";
   if (sent) {
-    toast(sent > 1 ? `${sent} fichiers mis en file.` : "Transcription lancée.");
+    toast(sent > 1 ? `${sent} fichiers mis en file.` : "Traitement lancé.");
     refreshJobs();
   }
 }
@@ -223,7 +240,9 @@ function statusLabel(job) {
     queued: "En attente",
     running: job.stage || "En cours",
     transcribed: "Transcrit — à relire",
-    done: "Terminé",
+    done: "Relu",
+    checked: "Vérifié",
+    published: "Publié",
     error: "Erreur",
     canceled: "Annulé",
   }[job.status] || job.status;
@@ -232,7 +251,12 @@ function statusLabel(job) {
 // Un travail transcrit est déjà exploitable : texte brut, segments et
 // sous-titres sont disponibles, la relecture peut venir plus tard.
 function isReadable(job) {
-  return job.status === "transcribed" || job.status === "done";
+  return ["transcribed", "done", "checked", "published"].includes(job.status);
+}
+
+// Un travail relu (ou davantage) a un texte relu à vérifier ou publier.
+function isProofread(job) {
+  return ["done", "checked", "published"].includes(job.status);
 }
 
 function renderJobs() {
@@ -378,13 +402,33 @@ function renderDetail() {
     : `<p class="empty">Aucun segment.</p>`;
 
   renderVerification(job);
+  renderSources(job);
 
-  // La relecture est une étape à part : on peut la lancer, ou la relancer
-  // avec d'autres réglages, sur n'importe quel travail déjà transcrit.
+  // Chaque étape est à part : on peut la lancer, ou la relancer avec
+  // d'autres réglages, sur n'importe quel travail déjà à l'étape d'avant.
   const proofreadBtn = $("proofread-btn");
   proofreadBtn.hidden = !isReadable(job);
-  proofreadBtn.textContent =
-    job.status === "done" ? "Relancer la relecture" : "Relire maintenant";
+  proofreadBtn.textContent = isProofread(job) ? "Relancer la relecture" : "Relire maintenant";
+
+  const factcheckBtn = $("factcheck-btn");
+  factcheckBtn.hidden = !isProofread(job);
+  factcheckBtn.textContent =
+    job.status === "checked" || job.status === "published"
+      ? "Revérifier par recherche web"
+      : "Vérifier par recherche web";
+
+  const publishBtn = $("publish-btn");
+  publishBtn.hidden = !isProofread(job);
+  publishBtn.textContent = job.status === "published" ? "Republier" : "Publier";
+
+  const obsidianLink = $("obsidian-link");
+  if (job.obsidian_path && state.settings.obsidian_vault_path) {
+    obsidianLink.hidden = false;
+    const vaultName = state.settings.obsidian_vault_path.split(/[\\/]/).filter(Boolean).pop() || "";
+    obsidianLink.href = `obsidian://open?vault=${encodeURIComponent(vaultName)}&file=${encodeURIComponent(job.obsidian_path.replace(/\.md$/, ""))}`;
+  } else {
+    obsidianLink.hidden = true;
+  }
 
   const player = $("audio-player");
   const audioUrl = `/api/jobs/${job.id}/audio`;
@@ -403,11 +447,40 @@ const KIND_LABELS = {
   terme: "terme",
   chiffre: "chiffre",
   coupure: "coupure",
+  fait: "fait",
+  source: "source",
+  lexique: "lexique",
 };
+
+const SOURCE_KINDS = new Set(["fait", "source"]);
+
+function sourceLabel(point) {
+  return { claude: "Claude", web: "Recherche web", lexique: "Lexique" }[point.source] || "Règle";
+}
+
+function renderFindingCard(point) {
+  return `
+    <div class="finding ${escapeHtml(point.severity)}">
+      <div class="finding-head">
+        <time>${clock(point.start)}</time>
+        <span class="finding-kind">${escapeHtml(KIND_LABELS[point.kind] || point.kind)}</span>
+        <span class="finding-kind">${escapeHtml(sourceLabel(point))}</span>
+      </div>
+      <p class="finding-message">${escapeHtml(point.message)}</p>
+      ${point.raw_excerpt || point.clean_excerpt ? `
+        <div class="finding-quotes">
+          ${point.raw_excerpt ? `<div class="finding-quote"><b>Brut</b><span>${escapeHtml(point.raw_excerpt)}</span></div>` : ""}
+          ${point.clean_excerpt ? `<div class="finding-quote"><b>Relu</b><span>${escapeHtml(point.clean_excerpt)}</span></div>` : ""}
+        </div>` : ""}
+    </div>`;
+}
 
 function renderVerification(job) {
   const rapport = job.verification || {};
-  const points = Array.isArray(rapport.findings) ? rapport.findings : [];
+  const allPoints = Array.isArray(rapport.findings) ? rapport.findings : [];
+  // Les points de fidélité (règles + lecture par Claude) ici ; le fact-check
+  // par recherche web a son propre onglet (voir renderSources).
+  const points = allPoints.filter((p) => !SOURCE_KINDS.has(p.kind));
   const badge = $("verify-count");
   const graves = points.filter((p) => p.severity === "haute").length;
 
@@ -449,20 +522,56 @@ function renderVerification(job) {
     return;
   }
 
-  panel.innerHTML = entete + points.map((point) => `
-    <div class="finding ${escapeHtml(point.severity)}">
-      <div class="finding-head">
-        <time>${clock(point.start)}</time>
-        <span class="finding-kind">${escapeHtml(KIND_LABELS[point.kind] || point.kind)}</span>
-        <span class="finding-kind">${point.source === "claude" ? "Claude" : "règle"}</span>
-      </div>
-      <p class="finding-message">${escapeHtml(point.message)}</p>
-      ${point.raw_excerpt || point.clean_excerpt ? `
-        <div class="finding-quotes">
-          ${point.raw_excerpt ? `<div class="finding-quote"><b>Brut</b><span>${escapeHtml(point.raw_excerpt)}</span></div>` : ""}
-          ${point.clean_excerpt ? `<div class="finding-quote"><b>Relu</b><span>${escapeHtml(point.clean_excerpt)}</span></div>` : ""}
-        </div>` : ""}
-    </div>`).join("");
+  panel.innerHTML = entete + points.map(renderFindingCard).join("");
+}
+
+function renderSources(job) {
+  const rapport = job.verification || {};
+  const allPoints = Array.isArray(rapport.findings) ? rapport.findings : [];
+  const points = allPoints.filter((p) => SOURCE_KINDS.has(p.kind));
+  const badge = $("sources-count");
+  badge.hidden = points.length === 0;
+  badge.textContent = String(points.length);
+
+  const panel = $("panel-sources");
+  const report = job.factcheck_report;
+
+  if (!isProofread(job)) {
+    panel.innerHTML = `<p class="empty">Vérification par recherche web disponible après la relecture.</p>`;
+    return;
+  }
+  if (!report) {
+    panel.innerHTML = `<p class="empty">
+      Aucune vérification par recherche web n'a encore été lancée pour ce
+      travail. Le texte relu n'est donc pas encore garanti sur les noms
+      propres, rapports, statistiques et références juridiques qu'il cite.
+    </p>`;
+    return;
+  }
+
+  const entete = `
+    <div class="verify-summary">
+      <span class="badge">${report.claims_checked || 0} affirmation${report.claims_checked > 1 ? "s" : ""} vérifiée${report.claims_checked > 1 ? "s" : ""}</span>
+      <span class="badge">${report.corrections || 0} correction${report.corrections > 1 ? "s" : ""} appliquée${report.corrections > 1 ? "s" : ""}</span>
+      ${points.length
+        ? `<span class="badge error">${points.length} point${points.length > 1 ? "s" : ""} non confirmé${points.length > 1 ? "s" : ""}</span>`
+        : `<span class="verify-ok">Tout ce qui a été vérifié est confirmé</span>`}
+    </div>`;
+
+  if (!points.length) {
+    panel.innerHTML = `${entete}
+      <p class="meta">
+        Les notes de bas de page du texte relu détaillent les sources. Une
+        vérification automatique reste une aide, pas une garantie.
+      </p>`;
+    return;
+  }
+
+  panel.innerHTML = entete + `
+    <p class="meta">
+      Le texte relu porte un appel de note (<code>[^v…]</code>) à chacun de
+      ces points ; les sources consultées y sont citées.
+    </p>` + points.map(renderFindingCard).join("");
 }
 
 function showTab(name) {
@@ -470,7 +579,7 @@ function showTab(name) {
   document.querySelectorAll(".tab").forEach((tab) =>
     tab.classList.toggle("is-active", tab.dataset.tab === name)
   );
-  ["clean", "raw", "segments", "verify", "audio"].forEach((key) => {
+  ["clean", "raw", "segments", "verify", "sources", "audio"].forEach((key) => {
     $(`panel-${key}`).hidden = key !== name;
   });
 }
@@ -491,8 +600,10 @@ function currentText() {
 
 function openSettings() {
   const settings = state.settings;
+  $("claude_backend").value = settings.claude_backend || "cli";
+  $("claude_cli_path").value = settings.claude_cli_path || "";
   $("proofread_model").value = settings.proofread_model || "";
-  $("proofread_effort").value = settings.proofread_effort || "medium";
+  $("proofread_effort").value = settings.proofread_effort || "high";
   $("runpod_endpoint_id").value = settings.runpod_endpoint_id || "";
   $("runpod_chunk_seconds").value = settings.runpod_chunk_seconds || 180;
   $("runpod_pod_mode").value = settings.runpod_pod_mode || "off";
@@ -507,11 +618,34 @@ function openSettings() {
   $("runpod-state").textContent = settings.runpod_api_key_set
     ? "Une clé est enregistrée. Laissez vide pour la conserver."
     : "Aucune clé enregistrée.";
+  $("claude-state").textContent = settings.claude_backend === "cli"
+    ? "Lancez « claude setup-token » une fois, sur cette machine, pour connecter l'abonnement."
+    : "Facturé à l'usage sur le compte associé à la clé, indépendamment d'un abonnement Claude.";
+
+  $("factcheck_setting").checked = Boolean(settings.factcheck);
+  $("factcheck_max_searches").value = settings.factcheck_max_searches || 8;
+  $("lexicon_enabled").checked = Boolean(settings.lexicon_enabled);
+  $("lexicon_whisper_prompt").checked = Boolean(settings.lexicon_whisper_prompt);
+
+  $("obsidian_vault_path").value = settings.obsidian_vault_path || "";
+  $("obsidian_notes_folder").value = settings.obsidian_notes_folder || "";
+  $("obsidian_entities_folder").value = settings.obsidian_entities_folder || "";
+  $("obsidian_index_note").value = settings.obsidian_index_note || "";
+  $("obsidian_glossary_note").value = settings.obsidian_glossary_note || "";
+  $("obsidian_tags").value = settings.obsidian_tags || "";
+  $("obsidian_filename_template").value = settings.obsidian_filename_template || "";
+  $("obsidian_create_entities").checked = Boolean(settings.obsidian_create_entities);
+  $("obsidian-state").textContent = settings.obsidian_vault_path
+    ? ""
+    : "Sans coffre configuré, l'étape de publication reste inactive — le reste du traitement fonctionne normalement.";
+
   $("settings-dialog").showModal();
 }
 
 async function saveSettings() {
   const payload = {
+    claude_backend: $("claude_backend").value,
+    claude_cli_path: $("claude_cli_path").value.trim(),
     proofread_model: $("proofread_model").value.trim(),
     proofread_effort: $("proofread_effort").value,
     runpod_endpoint_id: $("runpod_endpoint_id").value.trim(),
@@ -525,6 +659,18 @@ async function saveSettings() {
     language: $("language").value,
     default_proofread: $("proofread").value,
     structure_output: $("structure").checked,
+    factcheck: $("factcheck_setting").checked,
+    factcheck_max_searches: Number($("factcheck_max_searches").value) || 8,
+    lexicon_enabled: $("lexicon_enabled").checked,
+    lexicon_whisper_prompt: $("lexicon_whisper_prompt").checked,
+    obsidian_vault_path: $("obsidian_vault_path").value.trim(),
+    obsidian_notes_folder: $("obsidian_notes_folder").value.trim(),
+    obsidian_entities_folder: $("obsidian_entities_folder").value.trim(),
+    obsidian_index_note: $("obsidian_index_note").value.trim(),
+    obsidian_glossary_note: $("obsidian_glossary_note").value.trim(),
+    obsidian_tags: $("obsidian_tags").value.trim(),
+    obsidian_filename_template: $("obsidian_filename_template").value.trim(),
+    obsidian_create_entities: $("obsidian_create_entities").checked,
   };
   const anthropic = $("anthropic_api_key").value.trim();
   if (anthropic) payload.anthropic_api_key = anthropic;
@@ -548,7 +694,8 @@ async function saveSettings() {
 /* ------------------------------------------------------------- actions */
 
 function initActions() {
-  $("upload-form").addEventListener("submit", submitFiles);
+  $("upload-form").addEventListener("submit", (event) => submitFiles(event, false));
+  $("one-click-btn").addEventListener("click", () => submitFiles(null, true));
   $("engine").addEventListener("change", updateEngineDetail);
 
   document.querySelectorAll(".tab").forEach((tab) =>
@@ -596,6 +743,38 @@ function initActions() {
         }),
       });
       toast("Relecture lancée.");
+      await refreshJobs();
+    } catch (error) {
+      toast(error.message, true);
+    } finally {
+      button.disabled = false;
+    }
+  });
+
+  $("factcheck-btn").addEventListener("click", async () => {
+    const job = state.detail;
+    if (!job) return;
+    const button = $("factcheck-btn");
+    button.disabled = true;
+    try {
+      await api(`/api/jobs/${job.id}/factcheck`, { method: "POST" });
+      toast("Vérification par recherche web lancée.");
+      await refreshJobs();
+    } catch (error) {
+      toast(error.message, true);
+    } finally {
+      button.disabled = false;
+    }
+  });
+
+  $("publish-btn").addEventListener("click", async () => {
+    const job = state.detail;
+    if (!job) return;
+    const button = $("publish-btn");
+    button.disabled = true;
+    try {
+      await api(`/api/jobs/${job.id}/publish`, { method: "POST" });
+      toast("Publication dans Obsidian lancée.");
       await refreshJobs();
     } catch (error) {
       toast(error.message, true);

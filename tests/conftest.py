@@ -19,6 +19,15 @@ os.environ["TRANSCRIPTION_DATA_DIR"] = str(_TMP_DATA)
 # Ne pas laisser une vraie clé de l'environnement déclencher des appels réseau.
 os.environ.pop("ANTHROPIC_API_KEY", None)
 os.environ.pop("RUNPOD_API_KEY", None)
+# Back-end « api » par défaut dans les tests, sans clé : le back-end « cli »
+# (par défaut en production) appellerait le vrai binaire `claude` s'il est
+# installé et connecté sur la machine qui fait tourner la suite — exactement
+# ce que les deux lignes ci-dessus évitent déjà pour l'ancien back-end API.
+# Un test qui veut spécifiquement le back-end CLI le redemande explicitement
+# (voir test_cli_backend.py) : ce réglage global ne l'en empêche pas, il ne
+# fait que changer le défaut pour tout le reste de la suite.
+os.environ["CLAUDE_BACKEND"] = "api"
+os.environ.pop("TRANSCRIPTION_OBSIDIAN_VAULT", None)
 
 SAMPLE_RATE = 16_000
 

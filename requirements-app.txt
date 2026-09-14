@@ -14,5 +14,8 @@ imageio-ffmpeg>=0.5          # ffmpeg embarqué, si absent du système
 # Transcription sur cette machine
 faster-whisper>=1.0
 
-# Relecture par Claude (facultative : sans clé API, repli sur la relecture simple)
+# Relecture par Claude, uniquement pour le back-end "api" (clé API Anthropic).
+# Le back-end par défaut ("cli", sur l'abonnement) appelle le binaire claude
+# en sous-processus et n'a pas besoin de ce paquet. Facultatif dans les deux
+# cas : sans back-end disponible, repli sur la relecture simple.
 anthropic>=0.69

@@ -38,7 +38,9 @@ def get_model(model_size):
     return _model_cache[model_size]
 
 
-def transcribe(audio_b64: str, model_size: str, language: str | None) -> dict:
+def transcribe(
+    audio_b64: str, model_size: str, language: str | None, initial_prompt: str | None = None
+) -> dict:
     if not audio_b64:
         return {"error": "audio_base64 manquant dans la requête."}
 
@@ -63,6 +65,7 @@ def transcribe(audio_b64: str, model_size: str, language: str | None) -> dict:
             language=language,
             vad_filter=False,
             beam_size=5,
+            initial_prompt=initial_prompt or None,
         )
 
         segments = []
@@ -123,6 +126,7 @@ class Handler(BaseHTTPRequestHandler):
             job_input.get("audio_base64"),
             job_input.get("model", "large-v3"),
             job_input.get("language") or None,
+            job_input.get("initial_prompt") or None,
         )
         self._send_json(400 if "error" in result else 200, result)
 

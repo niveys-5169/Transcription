@@ -20,8 +20,11 @@ import logging
 import re
 from dataclasses import asdict, dataclass, field
 
+from .. import config as config_module
+from ..lexicon import lookup as lexicon_lookup
+from ..lexicon import near_misses as lexicon_near_misses
 from . import prompts
-from .anthropic_client import ClaudeClient
+from .backends import get_backend
 from .base import ProofreadError, TextPair
 from .structure import parse_json_array
 
@@ -45,7 +48,18 @@ _SPACES_RE = re.compile(rf"{_THOUSANDS}+")
 _ACRONYM_RE = re.compile(r"(?<![\w-])[A-ZÀ-ÖØ-Þ]{2,}(?![\w-])")
 
 SEVERITIES = ("haute", "moyenne", "basse")
-KINDS = ("omission", "ajout", "sens", "terme", "chiffre", "coupure")
+KINDS = (
+    "omission",
+    "ajout",
+    "sens",
+    "terme",
+    "chiffre",
+    "coupure",
+    # Ajoutés par le fact-check (voir factcheck.py) et le lexique MJPM.
+    "fait",
+    "source",
+    "lexique",
+)
 
 
 @dataclass
@@ -109,7 +123,7 @@ def _excerpt(text: str, around: str = "") -> str:
     return text[:EXCERPT_CHARS] + ("…" if len(text) > EXCERPT_CHARS else "")
 
 
-def rule_findings(pairs: list[TextPair]) -> list[Finding]:
+def rule_findings(pairs: list[TextPair], *, lexicon_enabled: bool = True) -> list[Finding]:
     """Contrôles mécaniques, sans appel réseau."""
     findings: list[Finding] = []
 
@@ -131,14 +145,17 @@ def rule_findings(pairs: list[TextPair]) -> list[Finding]:
             )
 
         # 2. Un sigle qui disparaît : souvent le cœur d'un cours technique.
+        #    Gravité relevée à « haute » quand le sigle figure au lexique
+        #    MJPM — ce n'est alors pas un détail, mais un terme du métier.
         sigles = _multiset_difference(
             _ACRONYM_RE.findall(pair.raw), _ACRONYM_RE.findall(pair.clean)
         )
         for sigle in sigles:
+            connu = lexicon_enabled and lexicon_lookup(sigle, verified_only=False) is not None
             findings.append(
                 Finding(
                     kind="terme",
-                    severity="moyenne",
+                    severity="haute" if connu else "moyenne",
                     message=f"Le sigle « {sigle} » est prononcé mais absent du texte relu.",
                     start=pair.start,
                     raw_excerpt=_excerpt(pair.raw, sigle),
@@ -163,6 +180,28 @@ def rule_findings(pairs: list[TextPair]) -> list[Finding]:
                 )
             )
 
+        # 4. Une graphie proche d'un terme du lexique, sans lui être
+        #    identique : signe possible d'une déformation de reconnaissance
+        #    vocale que la relecture aurait laissée passer (« DIPEM » pour
+        #    « DIPM »). Purement mécanique, aucun appel réseau.
+        if lexicon_enabled:
+            for mot, terme in lexicon_near_misses(pair.clean):
+                findings.append(
+                    Finding(
+                        kind="lexique",
+                        severity="basse",
+                        message=(
+                            f"« {mot} » ressemble à « {terme.terme} »"
+                            + (f" ({'/'.join(terme.sigles)})" if terme.sigles else "")
+                            + " sans lui être identique : graphie à vérifier."
+                        ),
+                        start=pair.start,
+                        raw_excerpt=_excerpt(pair.raw, mot),
+                        clean_excerpt=_excerpt(pair.clean, mot),
+                        source="lexique",
+                    )
+                )
+
     return findings
 
 
@@ -182,10 +221,19 @@ def _multiset_difference(left: list[str], right: list[str]) -> list[str]:
 # ------------------------------------------------------------------ Claude
 
 
-class ClaudeVerifier(ClaudeClient):
+class ClaudeVerifier:
     """Relit la relecture : ce qu'aucune règle ne peut voir."""
 
     name = "verification"
+
+    def __init__(self, settings=None):
+        from ..config import load_settings
+
+        self.settings = settings or load_settings()
+        self.backend = get_backend(self.settings)
+
+    def is_available(self) -> tuple[bool, str]:
+        return self.backend.is_available()
 
     def verify(
         self,
@@ -198,7 +246,6 @@ class ClaudeVerifier(ClaudeClient):
         if not available:
             raise ProofreadError(detail)
 
-        client = self._client()
         findings: list[Finding] = []
 
         for index, pair in enumerate(pairs):
@@ -212,14 +259,13 @@ class ClaudeVerifier(ClaudeClient):
             if not pair.raw.strip() or not pair.clean.strip():
                 continue
 
-            reponse = self._call(
-                client,
+            reponse = self.backend.complete(
                 system=prompts.VERIFICATION_SYSTEM,
                 user=prompts.VERIFICATION_USER.format(
                     brut=pair.raw, relu=pair.clean
                 ),
                 max_tokens=MAX_TOKENS_VERIFICATION,
-            )
+            ).text
             findings.extend(self._parse(reponse, pair))
 
         return findings
@@ -269,7 +315,11 @@ def verify(
     le rapport des règles est rendu tel quel, et l'utilisateur garde son
     texte. Vérifier est un service, pas une condition.
     """
-    report = VerificationReport(findings=rule_findings(pairs), checked_pairs=len(pairs))
+    lexicon_enabled = (settings or config_module.load_settings()).lexicon_enabled
+    report = VerificationReport(
+        findings=rule_findings(pairs, lexicon_enabled=lexicon_enabled),
+        checked_pairs=len(pairs),
+    )
 
     if use_claude and pairs:
         verifier = ClaudeVerifier(settings)

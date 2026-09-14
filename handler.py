@@ -34,6 +34,9 @@ def handler(job):
     audio_b64 = job_input.get("audio_base64")
     model_size = job_input.get("model", "large-v3")
     language = job_input.get("language", "fr") or None
+    # Champ optionnel : un worker plus ancien qui ne le connaît pas
+    # l'ignorerait de toute façon (job_input.get renvoie None ci-dessous).
+    initial_prompt = job_input.get("initial_prompt") or None
 
     if not audio_b64:
         return {"error": "audio_base64 manquant dans l'entree du job."}
@@ -58,6 +61,7 @@ def handler(job):
             language=language,
             vad_filter=False,
             beam_size=5,
+            initial_prompt=initial_prompt,
         )
 
         segments = []

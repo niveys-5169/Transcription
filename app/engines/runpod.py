@@ -64,6 +64,7 @@ class RunPodEngine:
         language: str | None,
         duration: float,
         workdir: Path,
+        initial_prompt: str | None = None,
         on_progress: ProgressCallback | None = None,
         should_cancel: CancelCheck | None = None,
     ) -> Iterator[Segment]:
@@ -118,7 +119,8 @@ class RunPodEngine:
 
                     if pod_session is not None:
                         output = pod_session.transcribe_chunk(
-                            audio_bytes, model, language, label=label
+                            audio_bytes, model, language, label=label,
+                            initial_prompt=initial_prompt,
                         )
                     else:
                         payload = {
@@ -128,6 +130,9 @@ class RunPodEngine:
                                 ),
                                 "model": model,
                                 "language": language or None,
+                                # Champ optionnel côté worker (handler.py) :
+                                # un worker déployé avant son ajout l'ignore.
+                                "initial_prompt": initial_prompt or None,
                             }
                         }
                         try:
@@ -168,7 +173,8 @@ class RunPodEngine:
                                 )
                             pod_session = pod_pool.acquire(settings)
                             output = pod_session.transcribe_chunk(
-                                audio_bytes, model, language, label=label
+                                audio_bytes, model, language, label=label,
+                                initial_prompt=initial_prompt,
                             )
 
                     for raw in output.get("segments") or []:

@@ -28,7 +28,7 @@ class FauxMoteur:
         return True, "Moteur simulé."
 
     def transcribe(self, wav_path, *, model, language, duration, workdir,
-                   on_progress=None, should_cancel=None):
+                   initial_prompt=None, on_progress=None, should_cancel=None):
         for index, segment in enumerate(FAUX_SEGMENTS, start=1):
             if should_cancel is not None and should_cancel():
                 return
@@ -76,8 +76,12 @@ def client(monkeypatch):
 
 
 def _deposer(client, nom="cours.mp4", **champs):
+    # factcheck/publish à « false » par défaut : ces étapes appellent Claude
+    # et le coffre Obsidian, hors du périmètre de la plupart de ces tests
+    # (voir test_pipeline_stages.py pour leur test dédié).
     donnees = {"engine": "local", "model": "tiny", "language": "fr",
-               "proofread": "basic", "structure": "false"}
+               "proofread": "basic", "structure": "false",
+               "factcheck": "false", "publish": "false"}
     donnees.update(champs)
     reponse = client.post(
         "/api/jobs",

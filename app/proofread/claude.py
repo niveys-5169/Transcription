@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import logging
 
+from ..config import Settings, load_settings
+from ..lexicon import glossary_block
 from . import prompts
-from .anthropic_client import ClaudeClient
+from .backends import get_backend
 from .base import ProofreadError, ProofreadResult, TextPair
 from .basic import clean_line
 from .chunking import build_chunks, tail
@@ -24,10 +26,17 @@ MAX_TOKENS_STRUCTURE = 4_000
 STRUCTURE_INPUT_LIMIT = 200_000
 
 
-class ClaudeProofreader(ClaudeClient):
+class ClaudeProofreader:
     """Relit une transcription bloc par bloc, puis en dresse le sommaire."""
 
     name = "claude"
+
+    def __init__(self, settings: Settings | None = None):
+        self.settings = settings or load_settings()
+        self.backend = get_backend(self.settings)
+
+    def is_available(self) -> tuple[bool, str]:
+        return self.backend.is_available()
 
     # ------------------------------------------------------------- relecture
 
@@ -47,7 +56,6 @@ class ClaudeProofreader(ClaudeClient):
         if not chunks:
             return ProofreadResult(text="", mode="claude")
 
-        client = self._client()
         cleaned: list[str] = []
         pairs: list[TextPair] = []
 
@@ -61,7 +69,7 @@ class ClaudeProofreader(ClaudeClient):
                 )
 
             context = tail(cleaned[-1], CONTEXT_CHARS) if cleaned else ""
-            text = self._proofread_chunk(client, chunk, len(chunks), context)
+            text = self._proofread_chunk(chunk, len(chunks), context)
             cleaned.append(text)
             pairs.append(
                 TextPair(
@@ -76,7 +84,7 @@ class ClaudeProofreader(ClaudeClient):
             if on_progress:
                 on_progress(0.9, "Rédaction du sommaire…")
             try:
-                self._apply_structure(client, result)
+                self._apply_structure(result)
             except Exception as exc:  # le sommaire est un bonus, pas un dû
                 logger.warning("Sommaire non généré : %s", exc)
 
@@ -84,7 +92,7 @@ class ClaudeProofreader(ClaudeClient):
             on_progress(1.0, "Relecture terminée.")
         return result
 
-    def _proofread_chunk(self, client, chunk, total: int, context: str) -> str:
+    def _proofread_chunk(self, chunk, total: int, context: str) -> str:
         header = (
             prompts.RELECTURE_CONTEXT.format(context=context) if context else ""
         )
@@ -94,13 +102,16 @@ class ClaudeProofreader(ClaudeClient):
             total=total,
             body=chunk.text,
         )
+        system = prompts.RELECTURE_SYSTEM
+        glossary = glossary_block(self.settings) if self.settings.lexicon_enabled else ""
+        if glossary:
+            system = f"{system}\n\n{glossary}"
 
-        text = self._call(
-            client,
-            system=prompts.RELECTURE_SYSTEM,
+        text = self.backend.complete(
+            system=system,
             user=user,
             max_tokens=MAX_TOKENS_RELECTURE,
-        ).strip()
+        ).text.strip()
 
         # Garde-fou : une réponse nettement plus courte que l'entrée signifie
         # que le passage a été résumé. On préfère alors le nettoyage mécanique,
@@ -116,18 +127,17 @@ class ClaudeProofreader(ClaudeClient):
             return clean_line(chunk.text)
         return text
 
-    def _apply_structure(self, client, result: ProofreadResult) -> None:
+    def _apply_structure(self, result: ProofreadResult) -> None:
         body = result.text
         if len(body) > STRUCTURE_INPUT_LIMIT:
             half = STRUCTURE_INPUT_LIMIT // 2
             body = f"{body[:half]}\n\n[…]\n\n{body[-half:]}"
 
-        raw = self._call(
-            client,
+        raw = self.backend.complete(
             system=prompts.STRUCTURE_SYSTEM,
             user=prompts.STRUCTURE_USER.format(body=body),
             max_tokens=MAX_TOKENS_STRUCTURE,
-        )
+        ).text
         data = parse_json_object(raw)
         if not data:
             return
@@ -147,4 +157,3 @@ class ClaudeProofreader(ClaudeClient):
             result.text = insert_headings(
                 result.text, [s for s in sections if isinstance(s, dict)]
             )
-

@@ -1,0 +1,302 @@
+[
+  {
+    "terme": "Sauvegarde de justice",
+    "categorie": "mesure",
+    "sigles": [],
+    "variantes": ["sauvegarde de justice avec mandataire spécial"],
+    "definition": "Mesure de protection juridique la plus légère et la plus courte, destinée aux personnes qui ont besoin d'être protégées temporairement ou représentées pour certains actes.",
+    "reference": "Code civil, art. 433 à 439",
+    "wikilink": "Sauvegarde de justice",
+    "sources": [], "verifie": false, "verifie_le": null
+  },
+  {
+    "terme": "Curatelle simple",
+    "categorie": "mesure",
+    "sigles": [],
+    "variantes": [],
+    "definition": "Mesure de protection dans laquelle la personne protégée agit seule pour les actes de gestion courante (actes d'administration) et doit être assistée du curateur pour les actes plus graves (actes de disposition).",
+    "reference": "Code civil, art. 440, 467 sqq.",
+    "wikilink": "Curatelle simple",
+    "sources": [], "verifie": false, "verifie_le": null
+  },
+  {
+    "terme": "Curatelle renforcée",
+    "categorie": "mesure",
+    "sigles": [],
+    "variantes": [],
+    "definition": "Variante de la curatelle dans laquelle le curateur perçoit les revenus de la personne protégée et règle les dépenses courantes à sa place.",
+    "reference": "Code civil, art. 472",
+    "wikilink": "Curatelle renforcée",
+    "sources": [], "verifie": false, "verifie_le": null
+  },
+  {
+    "terme": "Tutelle",
+    "categorie": "mesure",
+    "sigles": [],
+    "variantes": [],
+    "definition": "Mesure de protection la plus complète, dans laquelle le tuteur représente la personne protégée pour tous les actes de la vie civile.",
+    "reference": "Code civil, art. 440, 496 sqq.",
+    "wikilink": "Tutelle",
+    "sources": [], "verifie": false, "verifie_le": null
+  },
+  {
+    "terme": "Habilitation familiale",
+    "categorie": "mesure",
+    "sigles": [],
+    "variantes": [],
+    "definition": "Mesure de protection confiée à un ou plusieurs proches, sans mandataire judiciaire professionnel, autorisée par le juge des contentieux de la protection.",
+    "reference": "Code civil, art. 494-1 à 494-12",
+    "wikilink": "Habilitation familiale",
+    "sources": [], "verifie": false, "verifie_le": null
+  },
+  {
+    "terme": "Mandat de protection future",
+    "categorie": "mesure",
+    "sigles": [],
+    "variantes": [],
+    "definition": "Contrat par lequel une personne organise à l'avance sa propre protection, ou celle de son enfant handicapé, pour le jour où elle ne pourra plus pourvoir seule à ses intérêts.",
+    "reference": "Code civil, art. 477 à 494",
+    "wikilink": "Mandat de protection future",
+    "sources": [], "verifie": false, "verifie_le": null
+  },
+  {
+    "terme": "Mandataire judiciaire à la protection des majeurs",
+    "categorie": "acteur",
+    "sigles": ["MJPM"],
+    "variantes": ["mandataire judiciaire", "M.J.P.M."],
+    "definition": "Professionnel habilité à exercer les mesures de protection juridique (curatelle, tutelle...) confiées par le juge, à titre individuel, associatif ou en tant que préposé d'établissement.",
+    "reference": "CASF, art. L. 471-1 à L. 471-9",
+    "wikilink": "MJPM",
+    "sources": [], "verifie": false, "verifie_le": null
+  },
+  {
+    "terme": "Juge des contentieux de la protection",
+    "categorie": "acteur",
+    "sigles": ["JCP"],
+    "variantes": ["juge des tutelles"],
+    "definition": "Magistrat du tribunal judiciaire compétent pour ouvrir, réviser et clore les mesures de protection juridique des majeurs.",
+    "reference": "Code de l'organisation judiciaire, art. L. 213-4-1",
+    "wikilink": "Juge des contentieux de la protection",
+    "sources": [], "verifie": false, "verifie_le": null
+  },
+  {
+    "terme": "Préposé d'établissement",
+    "categorie": "acteur",
+    "sigles": [],
+    "variantes": [],
+    "definition": "Agent d'un établissement de santé ou médico-social désigné pour exercer les mesures de protection des personnes qui y sont accueillies.",
+    "reference": "CASF, art. L. 472-6",
+    "wikilink": "Préposé d'établissement",
+    "sources": [], "verifie": false, "verifie_le": null
+  },
+  {
+    "terme": "Union départementale des associations familiales",
+    "categorie": "acteur",
+    "sigles": ["UDAF"],
+    "variantes": ["U.D.A.F."],
+    "definition": "Association habilitée à exercer des mesures de protection juridique des majeurs, fédérée au niveau national par l'UNAF.",
+    "reference": "",
+    "wikilink": "UDAF",
+    "sources": [], "verifie": false, "verifie_le": null
+  },
+  {
+    "terme": "Direction départementale de l'emploi, du travail et des solidarités",
+    "categorie": "acteur",
+    "sigles": ["DDETS"],
+    "variantes": ["D.D.E.T.S."],
+    "definition": "Service déconcentré de l'État qui délivre et contrôle l'agrément et l'autorisation des mandataires judiciaires à la protection des majeurs.",
+    "reference": "",
+    "wikilink": "DDETS",
+    "sources": [], "verifie": false, "verifie_le": null
+  },
+  {
+    "terme": "Agence régionale de santé",
+    "categorie": "acteur",
+    "sigles": ["ARS"],
+    "variantes": ["A.R.S."],
+    "definition": "Établissement public administratif chargé de la mise en œuvre régionale de la politique de santé.",
+    "reference": "",
+    "wikilink": "ARS",
+    "sources": [], "verifie": false, "verifie_le": null
+  },
+  {
+    "terme": "Document individuel de protection des majeurs",
+    "categorie": "acte",
+    "sigles": ["DIPM"],
+    "variantes": ["dipem", "D.I.P.M.", "document individuel de protection du majeur"],
+    "definition": "Document remis à la personne protégée par le mandataire, précisant la nature et les objectifs de la mesure ainsi que les prestations mises en œuvre.",
+    "reference": "CASF, art. L. 471-6, art. D. 471-6",
+    "wikilink": "DIPM",
+    "sources": [], "verifie": false, "verifie_le": null
+  },
+  {
+    "terme": "Compte rendu de gestion",
+    "categorie": "acte",
+    "sigles": ["CRG"],
+    "variantes": ["C.R.G."],
+    "definition": "Document annuel par lequel le mandataire rend compte au greffe du tribunal de la gestion des biens de la personne protégée.",
+    "reference": "Code civil, art. 511",
+    "wikilink": "Compte rendu de gestion",
+    "sources": [], "verifie": false, "verifie_le": null
+  },
+  {
+    "terme": "Certificat médical circonstancié",
+    "categorie": "acte",
+    "sigles": ["CMC"],
+    "variantes": ["C.M.C."],
+    "definition": "Certificat établi par un médecin inscrit sur une liste spéciale, requis pour l'ouverture d'une mesure de protection juridique.",
+    "reference": "Code civil, art. 431",
+    "wikilink": "Certificat médical circonstancié",
+    "sources": [], "verifie": false, "verifie_le": null
+  },
+  {
+    "terme": "Notice d'information",
+    "categorie": "acte",
+    "sigles": [],
+    "variantes": [],
+    "definition": "Document remis à la personne protégée avec le DIPM, rappelant ses droits fondamentaux et les voies de recours.",
+    "reference": "CASF, art. L. 311-4, art. D. 471-6",
+    "wikilink": "Notice d'information",
+    "sources": [], "verifie": false, "verifie_le": null
+  },
+  {
+    "terme": "Charte des droits et libertés de la personne accueillie",
+    "categorie": "acte",
+    "sigles": [],
+    "variantes": [],
+    "definition": "Charte remise à toute personne prise en charge par un établissement ou service social ou médico-social, rappelant ses droits fondamentaux.",
+    "reference": "CASF, art. L. 311-4",
+    "wikilink": "Charte des droits et libertés de la personne accueillie",
+    "sources": [], "verifie": false, "verifie_le": null
+  },
+  {
+    "terme": "Requête aux fins de protection",
+    "categorie": "acte",
+    "sigles": [],
+    "variantes": ["requête aux fins d'ouverture de mesure de protection"],
+    "definition": "Acte par lequel une mesure de protection juridique est demandée au juge des contentieux de la protection.",
+    "reference": "Code civil, art. 430",
+    "wikilink": "Requête aux fins de protection",
+    "sources": [], "verifie": false, "verifie_le": null
+  },
+  {
+    "terme": "Allocation aux adultes handicapés",
+    "categorie": "prestation",
+    "sigles": ["AAH"],
+    "variantes": ["A.A.H."],
+    "definition": "Prestation sociale versée par la CAF ou la MSA aux personnes handicapées disposant de ressources limitées.",
+    "reference": "Code de la sécurité sociale, art. L. 821-1",
+    "wikilink": "AAH",
+    "sources": [], "verifie": false, "verifie_le": null
+  },
+  {
+    "terme": "Allocation supplémentaire d'invalidité",
+    "categorie": "prestation",
+    "sigles": ["ASI"],
+    "variantes": ["A.S.I."],
+    "definition": "Prestation qui complète une pension d'invalidité ou de vieillesse pour porter les ressources à un minimum garanti.",
+    "reference": "Code de la sécurité sociale, art. L. 815-24",
+    "wikilink": "ASI",
+    "sources": [], "verifie": false, "verifie_le": null
+  },
+  {
+    "terme": "Allocation de solidarité aux personnes âgées",
+    "categorie": "prestation",
+    "sigles": ["ASPA"],
+    "variantes": ["A.S.P.A.", "minimum vieillesse"],
+    "definition": "Prestation qui garantit un revenu minimum aux personnes âgées disposant de faibles ressources.",
+    "reference": "Code de la sécurité sociale, art. L. 815-1",
+    "wikilink": "ASPA",
+    "sources": [], "verifie": false, "verifie_le": null
+  },
+  {
+    "terme": "Prestation de compensation du handicap",
+    "categorie": "prestation",
+    "sigles": ["PCH"],
+    "variantes": ["P.C.H."],
+    "definition": "Aide destinée à financer les besoins liés à la perte d'autonomie des personnes handicapées.",
+    "reference": "Code de l'action sociale et des familles, art. L. 245-1",
+    "wikilink": "PCH",
+    "sources": [], "verifie": false, "verifie_le": null
+  },
+  {
+    "terme": "Allocation personnalisée d'autonomie",
+    "categorie": "prestation",
+    "sigles": ["APA"],
+    "variantes": ["A.P.A."],
+    "definition": "Aide destinée à financer les besoins liés à la perte d'autonomie des personnes âgées.",
+    "reference": "Code de l'action sociale et des familles, art. L. 232-1",
+    "wikilink": "APA",
+    "sources": [], "verifie": false, "verifie_le": null
+  },
+  {
+    "terme": "Mesure d'accompagnement social personnalisé",
+    "categorie": "prestation",
+    "sigles": ["MASP"],
+    "variantes": ["M.A.S.P."],
+    "definition": "Mesure administrative d'accompagnement, contractuelle, pour les personnes en difficulté dans la gestion de leurs prestations sociales.",
+    "reference": "Code de l'action sociale et des familles, art. L. 271-1",
+    "wikilink": "MASP",
+    "sources": [], "verifie": false, "verifie_le": null
+  },
+  {
+    "terme": "Mesure d'accompagnement judiciaire",
+    "categorie": "prestation",
+    "sigles": ["MAJ"],
+    "variantes": ["M.A.J."],
+    "definition": "Mesure judiciaire de gestion des prestations sociales, prononcée lorsqu'une MASP n'a pas suffi.",
+    "reference": "Code de l'action sociale et des familles, art. L. 271-1 ; Code civil, art. 495 à 495-9",
+    "wikilink": "MAJ",
+    "sources": [], "verifie": false, "verifie_le": null
+  },
+  {
+    "terme": "Revenu de solidarité active",
+    "categorie": "prestation",
+    "sigles": ["RSA"],
+    "variantes": ["R.S.A."],
+    "definition": "Prestation qui garantit un revenu minimum aux personnes sans ressources ou à faibles ressources.",
+    "reference": "Code de l'action sociale et des familles, art. L. 262-1",
+    "wikilink": "RSA",
+    "sources": [], "verifie": false, "verifie_le": null
+  },
+  {
+    "terme": "Aide personnalisée au logement",
+    "categorie": "prestation",
+    "sigles": ["APL"],
+    "variantes": ["A.P.L."],
+    "definition": "Aide au logement versée sous conditions de ressources et de nature du logement.",
+    "reference": "Code de la construction et de l'habitation, art. L. 351-1",
+    "wikilink": "APL",
+    "sources": [], "verifie": false, "verifie_le": null
+  },
+  {
+    "terme": "Loi du 5 mars 2007",
+    "categorie": "texte",
+    "sigles": [],
+    "variantes": ["réforme de la protection juridique des majeurs"],
+    "definition": "Loi n° 2007-308 réformant la protection juridique des majeurs : elle pose les principes de nécessité, subsidiarité et proportionnalité des mesures.",
+    "reference": "Loi n° 2007-308 du 5 mars 2007",
+    "wikilink": "Loi du 5 mars 2007",
+    "sources": [], "verifie": false, "verifie_le": null
+  },
+  {
+    "terme": "Loi du 23 mars 2019",
+    "categorie": "texte",
+    "sigles": [],
+    "variantes": ["loi de programmation 2018-2022 et de réforme pour la justice"],
+    "definition": "Loi de programmation 2018-2022 et de réforme pour la justice, qui a notamment transféré au juge des contentieux de la protection les attributions de l'ancien juge des tutelles.",
+    "reference": "Loi n° 2019-222 du 23 mars 2019",
+    "wikilink": "Loi du 23 mars 2019",
+    "sources": [], "verifie": false, "verifie_le": null
+  },
+  {
+    "terme": "Code de l'action sociale et des familles",
+    "categorie": "texte",
+    "sigles": ["CASF"],
+    "variantes": ["C.A.S.F."],
+    "definition": "Code qui régit notamment l'agrément, l'autorisation et le contrôle des mandataires judiciaires à la protection des majeurs.",
+    "reference": "",
+    "wikilink": "CASF",
+    "sources": [], "verifie": false, "verifie_le": null
+  }
+]
