@@ -300,38 +300,74 @@
       <legend>Coffre Obsidian</legend>
       <p class="hint">
         Chemin d'un coffre existant sur cette machine. La fiche y est écrite
-        directement, dans le dossier indiqué ; les fiches d'entités et le
-        glossaire suivent la même logique — voir le README pour le détail
-        de la convention.
+        directement ; les fiches d'entités et le glossaire suivent la même
+        logique.
       </p>
       <label class="field">
-        <span>Chemin du coffre <small>(vide = publication désactivée)</small></span>
-        <input type="text" id="obsidian_vault_path" placeholder="/chemin/vers/MonCoffre">
+        <span>Coffre <small>(vide = publication désactivée)</small></span>
+        <div class="path-picker">
+          <input type="text" id="obsidian_vault_path" placeholder="/chemin/vers/MonCoffre">
+          <button type="button" class="btn btn-ghost" id="browse-vault-btn">Parcourir…</button>
+        </div>
         <small id="obsidian-state"></small>
       </label>
+
+      <div id="folder-browser" class="folder-browser" hidden>
+        <div class="folder-browser-path" id="folder-browser-path"></div>
+        <ul class="folder-list" id="folder-browser-list"></ul>
+        <div class="folder-browser-actions">
+          <button type="button" class="btn btn-ghost" id="folder-browser-cancel">Annuler</button>
+          <button type="button" class="btn btn-primary" id="folder-browser-choose">
+            Choisir ce dossier
+          </button>
+        </div>
+      </div>
+
       <label class="field">
-        <span>Dossier des fiches</span>
-        <input type="text" id="obsidian_notes_folder" placeholder="Formation/Transcriptions">
+        <span>Organisation dans le coffre</span>
+        <select id="obsidian_layout">
+          <option value="formation">Dans « Formation / MJPM » (recommandé)</option>
+          <option value="racine">À la racine du coffre</option>
+          <option value="custom">Personnalisé…</option>
+        </select>
       </label>
+
+      <div id="obsidian_custom_fields" hidden>
+        <label class="field">
+          <span>Dossier des fiches</span>
+          <input type="text" id="obsidian_notes_folder" placeholder="Formation/Transcriptions">
+        </label>
+        <label class="field">
+          <span>Dossier des entités</span>
+          <input type="text" id="obsidian_entities_folder" placeholder="Formation/MJPM/Entités">
+        </label>
+        <label class="field">
+          <span>Note d'index (MOC)</span>
+          <input type="text" id="obsidian_index_note" placeholder="Formation/MJPM/MOC Formation.md">
+        </label>
+        <label class="field">
+          <span>Note de glossaire</span>
+          <input type="text" id="obsidian_glossary_note" placeholder="Formation/MJPM/Glossaire MJPM.md">
+        </label>
+      </div>
+
       <label class="field">
-        <span>Dossier des entités</span>
-        <input type="text" id="obsidian_entities_folder" placeholder="Formation/MJPM/Entités">
+        <span>Nom des fiches</span>
+        <select id="obsidian_filename_style">
+          <option value="date-titre">Date — Titre (recommandé)</option>
+          <option value="titre-date">Titre — Date</option>
+          <option value="titre">Titre seul</option>
+          <option value="custom">Personnalisé…</option>
+        </select>
       </label>
-      <label class="field">
-        <span>Note d'index (MOC)</span>
-        <input type="text" id="obsidian_index_note" placeholder="Formation/MJPM/MOC Formation.md">
+      <label class="field" id="obsidian_filename_custom_field" hidden>
+        <span>Gabarit personnalisé</span>
+        <input type="text" id="obsidian_filename_template" placeholder="{date} — {titre}">
       </label>
-      <label class="field">
-        <span>Note de glossaire</span>
-        <input type="text" id="obsidian_glossary_note" placeholder="Formation/MJPM/Glossaire MJPM.md">
-      </label>
+
       <label class="field">
         <span>Étiquettes <small>(séparées par des virgules)</small></span>
         <input type="text" id="obsidian_tags" placeholder="formation/MJPM">
-      </label>
-      <label class="field">
-        <span>Gabarit de nom de fichier</span>
-        <input type="text" id="obsidian_filename_template" placeholder="{date} — {titre}">
       </label>
       <label class="check">
         <input type="checkbox" id="obsidian_create_entities">

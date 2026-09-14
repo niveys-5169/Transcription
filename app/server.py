@@ -134,6 +134,47 @@ async def post_lexicon(payload: dict = Body(...)) -> dict:
     return {"terms": [t.to_dict() for t in lexicon.load_lexicon()]}
 
 
+# -------------------------------------------------------- navigation de dossiers
+
+
+@app.get("/api/browse")
+async def browse(path: str | None = None) -> dict:
+    """Liste les sous-dossiers d'un chemin, pour le sélecteur de coffre Obsidian.
+
+    Une application locale à un seul utilisateur n'a pas besoin d'un vrai
+    sélecteur de fichiers natif : ce point d'entrée, en lecture seule, en
+    tient lieu — il ne renvoie que des noms de dossiers, jamais un contenu
+    de fichier. Comme le reste de l'application, il suppose un usage local ;
+    lancée avec ``--host 0.0.0.0``, l'arborescence des dossiers devient
+    visible à qui atteint le port sur le réseau (voir le README).
+    """
+    target = Path(path).expanduser() if path else Path.home()
+    try:
+        target = target.resolve()
+    except OSError:
+        target = Path.home().resolve()
+
+    if not target.is_dir():
+        target = Path.home().resolve()
+
+    directories: list[dict] = []
+    try:
+        entries = sorted(
+            (entry for entry in target.iterdir() if entry.is_dir() and not entry.name.startswith(".")),
+            key=lambda entry: entry.name.lower(),
+        )
+        directories = [{"name": entry.name, "path": str(entry)} for entry in entries]
+    except OSError:
+        pass  # dossier illisible (permissions) : liste vide, pas une erreur
+
+    parent = target.parent
+    return {
+        "path": str(target),
+        "parent": str(parent) if parent != target else None,
+        "directories": directories,
+    }
+
+
 # ----------------------------------------------------------------- travaux
 
 

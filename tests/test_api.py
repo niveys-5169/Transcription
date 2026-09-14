@@ -128,6 +128,40 @@ def test_status_ne_divulgue_jamais_les_cles(client):
     assert "anthropic_api_key_set" in settings
 
 
+# --------------------------------------------------------- navigation de dossiers
+
+
+def test_browse_sans_chemin_part_du_dossier_personnel(client):
+    body = client.get("/api/browse").json()
+    assert body["path"]
+    assert isinstance(body["directories"], list)
+
+
+def test_browse_liste_les_sous_dossiers(client, tmp_path):
+    (tmp_path / "MonCoffre").mkdir()
+    (tmp_path / "Autre").mkdir()
+    (tmp_path / ".cache").mkdir()  # dossier caché : ignoré
+    (tmp_path / "un_fichier.txt").write_text("x")  # pas un dossier : ignoré
+
+    body = client.get("/api/browse", params={"path": str(tmp_path)}).json()
+    noms = sorted(d["name"] for d in body["directories"])
+    assert noms == ["Autre", "MonCoffre"]
+    assert body["path"] == str(tmp_path.resolve())
+
+
+def test_browse_expose_le_dossier_parent_pour_remonter(client, tmp_path):
+    sous_dossier = tmp_path / "MonCoffre"
+    sous_dossier.mkdir()
+
+    body = client.get("/api/browse", params={"path": str(sous_dossier)}).json()
+    assert body["parent"] == str(tmp_path.resolve())
+
+
+def test_browse_chemin_inexistant_retombe_proprement(client):
+    body = client.get("/api/browse", params={"path": "/ceci/n-existe-pas/vraiment"}).json()
+    assert body["path"]  # jamais d'erreur : repli sur le dossier personnel
+
+
 def test_reglages_conservent_une_cle_existante(client):
     original = config.load_settings().public_dict()
     try:
