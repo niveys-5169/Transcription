@@ -16,7 +16,13 @@ import pytest
 
 from app.engines import runpod_pod as runpod_pod_module
 from app.engines.base import TranscriptionError
-from app.engines.runpod_pod import GRAPHQL_URL, PodFallbackSession, RunPodPodClient, pod_pool
+from app.engines.runpod_pod import (
+    GRAPHQL_URL,
+    VOLUME_MOUNT_PATH,
+    PodFallbackSession,
+    RunPodPodClient,
+    pod_pool,
+)
 
 
 class _Settings:
@@ -26,6 +32,7 @@ class _Settings:
     runpod_pod_container_disk_gb = 20
     runpod_pod_port = 8000
     runpod_pod_boot_timeout_seconds = 5
+    runpod_pod_network_volume_id = ""
 
 
 def _mock_client(handler) -> RunPodPodClient:
@@ -57,6 +64,39 @@ def test_create_renvoie_l_identifiant_du_pod():
         start_command="python3 -u /pod_server.py",
     )
     assert pod_id == "pod123"
+
+
+def test_create_n_envoie_pas_de_volume_reseau_par_defaut():
+    def handler(request: httpx.Request) -> httpx.Response:
+        entree = json.loads(request.content)["variables"]["input"]
+        assert "networkVolumeId" not in entree
+        assert "volumeMountPath" not in entree
+        return httpx.Response(
+            200, json={"data": {"podFindAndDeployOnDemand": {"id": "pod123"}}}
+        )
+
+    client = _mock_client(handler)
+    client.create(
+        name="test", image="img", gpu_type_id="NVIDIA L4",
+        container_disk_gb=20, port=8000, start_command="cmd",
+    )
+
+
+def test_create_attache_le_volume_reseau_quand_configure():
+    def handler(request: httpx.Request) -> httpx.Response:
+        entree = json.loads(request.content)["variables"]["input"]
+        assert entree["networkVolumeId"] == "vol123"
+        assert entree["volumeMountPath"] == VOLUME_MOUNT_PATH
+        return httpx.Response(
+            200, json={"data": {"podFindAndDeployOnDemand": {"id": "pod123"}}}
+        )
+
+    client = _mock_client(handler)
+    client.create(
+        name="test", image="img", gpu_type_id="NVIDIA L4",
+        container_disk_gb=20, port=8000, start_command="cmd",
+        network_volume_id="vol123",
+    )
 
 
 def test_create_leve_une_erreur_si_aucun_gpu_disponible():
@@ -139,6 +179,26 @@ def test_start_attend_que_le_health_check_reponde(monkeypatch):
 
     assert session.pod_id == "pod123"
     assert creations == [1]
+
+
+def test_start_transmet_le_volume_reseau_configure(monkeypatch):
+    entrees = []
+
+    def graphql(request: httpx.Request) -> httpx.Response:
+        entrees.append(json.loads(request.content)["variables"]["input"])
+        return httpx.Response(200, json={"data": {"podFindAndDeployOnDemand": {"id": "pod123"}}})
+
+    def http(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"status": "ok"})
+
+    class _SettingsAvecVolume(_Settings):
+        runpod_pod_network_volume_id = "vol123"
+
+    session = _session(_SettingsAvecVolume(), graphql, http)
+    session.start()
+
+    assert entrees[0]["networkVolumeId"] == "vol123"
+    assert entrees[0]["volumeMountPath"] == VOLUME_MOUNT_PATH
 
 
 def test_start_leve_une_erreur_si_le_pod_ne_repond_jamais(monkeypatch):
@@ -370,6 +430,7 @@ def _pod_settings(**overrides):
         runpod_pod_container_disk_gb=20,
         runpod_pod_port=8000,
         runpod_pod_idle_timeout_seconds=300,
+        runpod_pod_network_volume_id="",
     )
     base.update(overrides)
     return types.SimpleNamespace(**base)
@@ -409,6 +470,19 @@ def test_acquire_recree_le_pod_si_les_reglages_ont_change():
 
     assert session1 is not session2
     assert session1.closed == 1  # l'ancien pod, incompatible, est fermé
+    assert len(_FakeSession.instances) == 2
+
+
+def test_acquire_recree_le_pod_si_le_volume_reseau_change():
+    settings1 = _pod_settings(runpod_pod_network_volume_id="")
+    settings2 = _pod_settings(runpod_pod_network_volume_id="vol123")
+
+    session1 = pod_pool.acquire(settings1)
+    pod_pool.release(settings1)
+    session2 = pod_pool.acquire(settings2)
+
+    assert session1 is not session2
+    assert session1.closed == 1
     assert len(_FakeSession.instances) == 2
 
 

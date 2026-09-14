@@ -93,6 +93,15 @@ class Settings:
     runpod_pod_mode: str = "off"
     runpod_pod_image: str = ""
     runpod_pod_gpu_type_id: str = "NVIDIA L4"
+    # Volume reseau RunPod (optionnel) : persiste le cache Hugging Face
+    # (modele Whisper) entre deux pods, pour que seul le tout premier
+    # telechargement le paie — sans l'embarquer dans l'image Docker
+    # elle-meme, ce que RunPod doit retelecharger en entier a chaque pod
+    # cree sur un hote qui ne l'a pas deja en cache local. Contrepartie : un
+    # volume reseau est epingle a un datacenter precis, ce qui restreint la
+    # disponibilite GPU du pod de secours a ce seul datacenter (voir le
+    # README, section « Pod : volume reseau »).
+    runpod_pod_network_volume_id: str = ""
     runpod_pod_container_disk_gb: int = 20
     runpod_pod_port: int = 8000
     # Démarrage d'un pod : tirage de l'image + démarrage CUDA + chargement du

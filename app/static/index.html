@@ -429,6 +429,16 @@
         <span>Type de GPU</span>
         <input type="text" id="runpod_pod_gpu_type_id" placeholder="NVIDIA L4">
       </label>
+      <label class="field">
+        <span>Volume réseau (optionnel)</span>
+        <input type="text" id="runpod_pod_network_volume_id" placeholder="ex. l6y182wxyv">
+        <small>
+          Garde le modèle Whisper en cache entre deux pods, au lieu de le
+          retélécharger à chaque fois — voir le README. Restreint aussi le
+          pod à créer dans le datacenter du volume : peut réduire les
+          chances de trouver un GPU libre.
+        </small>
+      </label>
     </fieldset>
 
     <fieldset>

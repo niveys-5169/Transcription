@@ -102,6 +102,25 @@ def test_un_modele_inconnu_retombe_sur_large_v3(worker):
     assert worker._appels["modele"][-1]["taille"] == "large-v3"
 
 
+def test_le_modele_charge_depuis_le_volume_reseau_si_monte(worker, monkeypatch, tmp_path):
+    """Sans volume attaché, aucun cache spécifique n'est imposé (repli sur
+    le cache Hugging Face par défaut de l'image)."""
+    monkeypatch.setattr(worker, "VOLUME_ROOT", str(tmp_path / "absent"))
+    worker.transcribe(base64.b64encode(b"RIFF____WAVE").decode(), "small", "fr")
+    assert worker._appels["modele"][-1]["download_root"] is None
+
+
+def test_le_modele_utilise_le_cache_du_volume_reseau_quand_il_est_monte(
+    worker, monkeypatch, tmp_path
+):
+    volume = tmp_path / "runpod-volume"
+    volume.mkdir()
+    monkeypatch.setattr(worker, "VOLUME_ROOT", str(volume))
+    worker.transcribe(base64.b64encode(b"RIFF____WAVE").decode(), "small", "fr")
+    charge = worker._appels["modele"][-1]
+    assert charge["download_root"] == str(volume / "huggingface-cache" / "hub")
+
+
 def test_le_modele_est_garde_en_cache_entre_deux_appels(worker):
     worker.transcribe(base64.b64encode(b"RIFF____WAVE").decode(), "small", "fr")
     worker.transcribe(base64.b64encode(b"RIFF____WAVE").decode(), "small", "fr")

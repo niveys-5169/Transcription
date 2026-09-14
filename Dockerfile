@@ -12,12 +12,16 @@ COPY requirements.txt /requirements.txt
 RUN python3 -m pip install --no-cache-dir -r /requirements.txt \
     && python3 -c "import faster_whisper, runpod"
 
-# Precharge le modele large-v3 (seul modele utilise en prod) dans le cache
-# Hugging Face de l'image, pour qu'aucun cold start ne le retelecharge.
-# device="cpu" : le build n'a pas de GPU, et le download ne depend pas du
-# device — seul le chargement en memoire au runtime (handler.py/pod_server.py)
-# utilisera cuda/float16.
-RUN python3 -c "from faster_whisper import WhisperModel; WhisperModel('large-v3', device='cpu', compute_type='int8')"
+# Le modele large-v3 n'est plus precharge ici (comme avant) : ca gonflait
+# cette image de plusieurs Go, et RunPod doit la retirer en entier a chaque
+# fois qu'un pod de secours atterrit sur un hote qui ne l'a pas deja en
+# cache local — plus de 10 minutes, largement au-dela du budget prevu pour
+# tout le demarrage (voir runpod_pod_boot_timeout_seconds). L'image reste
+# donc legere ; handler.py/pod_server.py mettent le cache Hugging Face sur
+# le volume reseau RunPod (/runpod-volume) quand un pod ou un endpoint en a
+# un d'attache, pour ne payer le telechargement qu'une seule fois sans
+# alourdir l'image elle-meme (voir le README, section « Pod : volume
+# reseau »).
 
 COPY handler.py /handler.py
 COPY pod_server.py /pod_server.py

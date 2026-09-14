@@ -21,7 +21,23 @@ import tempfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 VALID_MODELS = {"tiny", "base", "small", "medium", "large-v3"}
+VOLUME_ROOT = "/runpod-volume"
 _model_cache: dict[str, object] = {}
+
+
+def _model_cache_dir():
+    """Cache Hugging Face sur le volume reseau RunPod, s'il est monte.
+
+    Voir app/engines/runpod_pod.py (VOLUME_MOUNT_PATH) pour le cote creation
+    du pod : c'est lui qui demande a RunPod de monter le volume a ce meme
+    chemin. Un volume survit a la recreation d'un pod : le modele n'y est
+    telecharge qu'une fois, sans avoir a l'embarquer dans l'image Docker
+    (ce qui la rendrait lourde a tirer). Sans volume configure, on retombe
+    sur le cache Hugging Face par defaut de l'image.
+    """
+    if os.path.isdir(VOLUME_ROOT):
+        return os.path.join(VOLUME_ROOT, "huggingface-cache", "hub")
+    return None
 
 
 def get_model(model_size):
@@ -32,7 +48,8 @@ def get_model(model_size):
 
         print(f"[pod_server] Chargement du modele '{model_size}' sur GPU (float16)...")
         _model_cache[model_size] = WhisperModel(
-            model_size, device="cuda", compute_type="float16"
+            model_size, device="cuda", compute_type="float16",
+            download_root=_model_cache_dir(),
         )
         print(f"[pod_server] Modele '{model_size}' pret.")
     return _model_cache[model_size]
