@@ -10,7 +10,15 @@ EXTENSIONS = {
     "srt": "application/x-subrip; charset=utf-8",
     "vtt": "text/vtt; charset=utf-8",
     "json": "application/json; charset=utf-8",
+    # La fiche telle qu'elle serait écrite dans le coffre Obsidian (étape 4) :
+    # frontmatter, encart de vérification, notes de bas de page comprises.
+    # Téléchargeable même sans coffre configuré — c'est un aperçu.
+    "obsidian": "text/markdown; charset=utf-8",
 }
+
+# Extension de fichier réelle par format : la plupart correspondent au nom du
+# format, sauf « obsidian » qui reste un Markdown ordinaire pour Obsidian.
+DOWNLOAD_EXTENSIONS = {**{fmt: fmt for fmt in EXTENSIONS}, "obsidian": "md"}
 
 _UNSAFE = re.compile(r"[^\w\- ]+", re.UNICODE)
 
@@ -116,6 +124,10 @@ def render(job: dict, fmt: str) -> str:
         return to_vtt(job.get("segments") or [])
     if fmt == "json":
         return to_json(job)
+    if fmt == "obsidian":
+        from .obsidian.notes import render_note
+
+        return render_note(job)
     raise ValueError(f"Format inconnu : {fmt}")
 
 

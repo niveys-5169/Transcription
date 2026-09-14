@@ -54,26 +54,51 @@ MIGRATIONS = {
     "chain": "INTEGER DEFAULT 1",
     "task": "TEXT",
     "verification": "TEXT",
+    # Étapes 3 (fact-check) et 4 (publication Obsidian).
+    "factcheck": "INTEGER DEFAULT 1",
+    "publish": "INTEGER DEFAULT 1",
+    "factcheck_report": "TEXT",
+    "entities": "TEXT",
+    "obsidian_path": "TEXT",
 }
 
 # Colonnes lourdes, exclues des listes (une transcription d'une heure fait
 # plusieurs centaines de kilo-octets).
-HEAVY_COLUMNS = ("raw_text", "clean_text", "segments", "verification")
+HEAVY_COLUMNS = (
+    "raw_text",
+    "clean_text",
+    "segments",
+    "verification",
+    "factcheck_report",
+    "entities",
+)
 
-# Statuts d'un travail. La transcription et la relecture sont deux étapes
-# distinctes : « transcribed » est un état stable et exploitable, pas une
-# étape intermédiaire — le texte brut est déjà là, la relecture peut être
-# lancée plus tard, relancée, ou jamais.
-STATUSES = ("queued", "running", "transcribed", "done", "error", "canceled")
+# Statuts d'un travail. Chaque étape est un état stable et exploitable, pas
+# une étape intermédiaire : le texte brut est déjà là dès « transcribed », le
+# texte relu dès « done » — chacune des étapes suivantes (vérification
+# externe, publication) peut être lancée plus tard, relancée, ou jamais.
+STATUSES = (
+    "queued",
+    "running",
+    "transcribed",
+    "done",
+    "checked",
+    "published",
+    "error",
+    "canceled",
+)
 
 # Les chemins de fichiers sont inclus : le worker et plusieurs routes en ont
-# besoin sans vouloir charger la transcription entière. Ils sont retirés des
-# réponses HTTP par ``server._decorate`` — l'arborescence du disque de
-# l'utilisateur n'a rien à faire dans le navigateur.
+# besoin sans vouloir charger la transcription entière. Le chemin média est
+# retiré des réponses HTTP par ``server._decorate`` — l'arborescence du
+# disque de l'utilisateur n'a rien à faire dans le navigateur.
+# ``obsidian_path``, lui, est conservé : la page en a besoin pour proposer
+# un lien « Ouvrir dans Obsidian ».
 LIST_COLUMNS = (
     "id, filename, media_path, wav_path, size_bytes, duration, engine, model, "
-    "language, proofread, structure, verify, chain, task, status, stage, "
-    "progress, title, summary, error, created_at, updated_at, finished_at"
+    "language, proofread, structure, verify, chain, factcheck, publish, task, "
+    "status, stage, progress, title, summary, error, obsidian_path, "
+    "created_at, updated_at, finished_at"
 )
 
 
@@ -104,13 +129,21 @@ def init_db(db_path: Path | None = None) -> None:
 
 def _row_to_dict(row: sqlite3.Row) -> dict:
     data = dict(row)
-    for colonne in ("segments", "verification"):
+    for colonne in ("segments", "verification", "factcheck_report", "entities"):
         if colonne in data:
             try:
-                data[colonne] = json.loads(data[colonne]) if data[colonne] else []
+                data[colonne] = json.loads(data[colonne]) if data[colonne] else None
             except (json.JSONDecodeError, TypeError):
-                data[colonne] = []
-    for colonne in ("structure", "verify", "chain"):
+                data[colonne] = None
+    # segments/verification restent des listes/objets par défaut, pour ne
+    # rien casser côté appelants existants.
+    if data.get("segments") is None and "segments" in data:
+        data["segments"] = []
+    if data.get("verification") is None and "verification" in data:
+        data["verification"] = []
+    if data.get("entities") is None and "entities" in data:
+        data["entities"] = []
+    for colonne in ("structure", "verify", "chain", "factcheck", "publish"):
         if colonne in data:
             data[colonne] = bool(data[colonne])
     return data
@@ -128,6 +161,8 @@ def create_job(
     structure: bool,
     verify: bool = True,
     chain: bool = True,
+    factcheck: bool = True,
+    publish: bool = True,
 ) -> str:
     job_id = uuid.uuid4().hex[:12]
     now = _now()
@@ -136,8 +171,9 @@ def create_job(
             """
             INSERT INTO jobs (id, filename, media_path, size_bytes, engine, model,
                               language, proofread, structure, verify, chain,
+                              factcheck, publish,
                               status, stage, progress, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 'En attente', 0, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 'En attente', 0, ?, ?)
             """,
             (
                 job_id,
@@ -151,6 +187,8 @@ def create_job(
                 int(structure),
                 int(verify),
                 int(chain),
+                int(factcheck),
+                int(publish),
                 now,
                 now,
             ),
@@ -161,10 +199,10 @@ def create_job(
 def update_job(job_id: str, **fields: Any) -> None:
     if not fields:
         return
-    for colonne in ("segments", "verification"):
+    for colonne in ("segments", "verification", "factcheck_report", "entities"):
         if colonne in fields and not isinstance(fields[colonne], (str, type(None))):
             fields[colonne] = json.dumps(fields[colonne], ensure_ascii=False)
-    for colonne in ("structure", "verify", "chain"):
+    for colonne in ("structure", "verify", "chain", "factcheck", "publish"):
         if colonne in fields:
             fields[colonne] = int(bool(fields[colonne]))
     fields["updated_at"] = _now()

@@ -13,7 +13,7 @@ from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import __version__, config, db, exporters, media, pipeline
+from . import __version__, config, db, exporters, lexicon, media, obsidian, pipeline
 from .engines import availability as engine_availability
 from .proofread.claude import ClaudeProofreader
 
@@ -56,6 +56,7 @@ async def status() -> dict:
     proofreader = ClaudeProofreader(settings)
     claude_ok, claude_detail = proofreader.is_available()
     ffmpeg_ok = media.ffmpeg_available()
+    obsidian_ok, obsidian_detail = _obsidian_status(settings)
 
     return {
         "version": __version__,
@@ -70,9 +71,20 @@ async def status() -> dict:
         },
         "engines": engine_availability(),
         "proofread": {"claude": {"available": claude_ok, "detail": claude_detail}},
+        "obsidian": {"available": obsidian_ok, "detail": obsidian_detail},
         "models": config.WHISPER_MODELS,
         "settings": settings.public_dict(),
     }
+
+
+def _obsidian_status(settings) -> tuple[bool, str]:
+    if not settings.obsidian_vault_path:
+        return False, "Aucun coffre Obsidian configuré dans les réglages."
+    try:
+        obsidian.resolve(settings.obsidian_vault_path, ".")
+    except obsidian.ObsidianError as exc:
+        return False, str(exc)
+    return True, f"Coffre trouvé : {settings.obsidian_vault_path}"
 
 
 @app.get("/api/settings")
@@ -84,6 +96,42 @@ async def get_settings() -> dict:
 async def post_settings(payload: dict = Body(...)) -> dict:
     settings = config.save_settings(payload)
     return settings.public_dict()
+
+
+# ------------------------------------------------------------------ lexique
+
+
+@app.get("/api/lexicon")
+async def get_lexicon() -> dict:
+    """Le lexique MJPM courant — livré, plus les ajouts de l'utilisateur."""
+    return {"terms": [term.to_dict() for term in lexicon.load_lexicon()]}
+
+
+@app.post("/api/lexicon")
+async def post_lexicon(payload: dict = Body(...)) -> dict:
+    """Ajoute (ou remplace) une entrée du lexique utilisateur.
+
+    Sert notamment à accepter une entité confirmée par une recherche web
+    pendant un fact-check : voir ``jobs/{id}`` → ``entities``.
+    """
+    terme = str(payload.get("terme") or "").strip()
+    if not terme:
+        raise HTTPException(400, "Le champ « terme » est obligatoire.")
+
+    term = lexicon.Term(
+        terme=terme,
+        categorie=str(payload.get("categorie") or "autre"),
+        sigles=[str(s) for s in payload.get("sigles") or []],
+        variantes=[str(v) for v in payload.get("variantes") or []],
+        definition=str(payload.get("definition") or ""),
+        reference=str(payload.get("reference") or ""),
+        wikilink=str(payload.get("wikilink") or terme),
+        sources=list(payload.get("sources") or []),
+        verifie=bool(payload.get("verifie", False)),
+        verifie_le=payload.get("verifie_le"),
+    )
+    lexicon.save_user_term(term)
+    return {"terms": [t.to_dict() for t in lexicon.load_lexicon()]}
 
 
 # ----------------------------------------------------------------- travaux
@@ -105,12 +153,25 @@ async def create_job(
     structure: bool = Form(True),
     verify: bool = Form(True),
     chain: bool = Form(True),
+    factcheck: bool = Form(True),
+    publish: bool = Form(True),
+    one_click: bool = Form(False),
 ) -> dict:
     settings = config.load_settings()
     engine = engine or settings.default_engine
     model = model or settings.default_model
     language = (language if language is not None else settings.language) or ""
     proofread = proofread or settings.default_proofread
+
+    # « Tout faire » : le bouton principal de la page. Il n'ajoute aucune
+    # option nouvelle — chain/factcheck/publish sont déjà les valeurs par
+    # défaut de ce formulaire — mais force la relecture Claude si elle est
+    # disponible, pour qu'un simple dépôt donne la chaîne complète sans
+    # avoir à déplier les options avancées.
+    if one_click:
+        chain, factcheck, publish = True, True, True
+        if proofread == "none":
+            proofread = settings.default_proofread
 
     if engine not in config.ENGINES:
         raise HTTPException(400, f"Moteur inconnu : {engine}")
@@ -152,6 +213,8 @@ async def create_job(
         structure=structure,
         verify=verify,
         chain=chain,
+        factcheck=factcheck,
+        publish=publish,
     )
 
     # Ranger le média dans le dossier du travail, maintenant qu'on a son id.
@@ -198,7 +261,9 @@ async def proofread_job(job_id: str, payload: dict = Body(default={})) -> dict:
         raise HTTPException(404, "Travail introuvable.")
     if job["status"] == "running":
         raise HTTPException(409, "Ce travail est déjà en cours.")
-    if job["status"] not in {"transcribed", "done", "error", "canceled"}:
+    if job["status"] not in {
+        "transcribed", "done", "checked", "published", "error", "canceled",
+    }:
         raise HTTPException(409, "Ce travail n'est pas encore transcrit.")
 
     complet = db.get_job(job_id)
@@ -222,6 +287,68 @@ async def proofread_job(job_id: str, payload: dict = Body(default={})) -> dict:
         error=None,
     )
     pipeline.enqueue(job_id, pipeline.TASK_PROOFREAD)
+    return _decorate(db.get_job(job_id, with_content=False))
+
+
+@app.post("/api/jobs/{job_id}/factcheck")
+async def factcheck_job(job_id: str) -> dict:
+    """Lance (ou relance) la vérification externe d'un travail déjà relu.
+
+    C'est l'étape 3, indépendante : elle repart du texte relu déjà en base,
+    sans refaire tourner ni la transcription ni la relecture.
+    """
+    job = db.get_job(job_id, with_content=False)
+    if job is None:
+        raise HTTPException(404, "Travail introuvable.")
+    if job["status"] == "running":
+        raise HTTPException(409, "Ce travail est déjà en cours.")
+    if job["status"] not in {"done", "checked", "published", "error", "canceled"}:
+        raise HTTPException(409, "Ce travail n'est pas encore relu.")
+
+    complet = db.get_job(job_id)
+    if not (complet and complet.get("clean_text")):
+        raise HTTPException(
+            409, "Aucun texte relu à vérifier : relancez d'abord la relecture."
+        )
+
+    db.update_job(
+        job_id,
+        status="queued",
+        stage="Vérification externe en attente",
+        progress=0.0,
+        error=None,
+    )
+    pipeline.enqueue(job_id, pipeline.TASK_FACTCHECK)
+    return _decorate(db.get_job(job_id, with_content=False))
+
+
+@app.post("/api/jobs/{job_id}/publish")
+async def publish_job(job_id: str) -> dict:
+    """Écrit (ou réécrit) la fiche du travail dans le coffre Obsidian.
+
+    C'est l'étape 4, indépendante : elle repart du texte déjà en base — relu,
+    vérifié ou non — sans rien recalculer.
+    """
+    job = db.get_job(job_id, with_content=False)
+    if job is None:
+        raise HTTPException(404, "Travail introuvable.")
+    if job["status"] == "running":
+        raise HTTPException(409, "Ce travail est déjà en cours.")
+    if job["status"] not in {"done", "checked", "published", "error", "canceled"}:
+        raise HTTPException(409, "Ce travail n'est pas encore relu.")
+
+    settings = config.load_settings()
+    if not settings.obsidian_vault_path:
+        raise HTTPException(409, "Aucun coffre Obsidian configuré dans les réglages.")
+
+    db.update_job(
+        job_id,
+        status="queued",
+        stage="Publication en attente",
+        progress=0.0,
+        error=None,
+    )
+    pipeline.enqueue(job_id, pipeline.TASK_PUBLISH)
     return _decorate(db.get_job(job_id, with_content=False))
 
 
@@ -277,11 +404,11 @@ async def download(job_id: str, fmt: str) -> Response:
         raise HTTPException(404, "Travail introuvable.")
     # Un travail transcrit mais pas encore relu est déjà téléchargeable : le
     # texte brut, les segments et les sous-titres sont là. C'est tout l'objet
-    # de la séparation des deux étapes.
-    if job["status"] not in {"transcribed", "done"}:
+    # de la séparation des étapes.
+    if job["status"] not in {"transcribed", "done", "checked", "published"}:
         raise HTTPException(409, "La transcription n'est pas terminée.")
 
-    filename = exporters.safe_filename(job["filename"], fmt)
+    filename = exporters.safe_filename(job["filename"], exporters.DOWNLOAD_EXTENSIONS[fmt])
     return Response(
         content=exporters.render(job, fmt),
         media_type=exporters.EXTENSIONS[fmt],

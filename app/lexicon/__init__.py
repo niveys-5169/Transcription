@@ -94,6 +94,27 @@ def load_lexicon(refresh: bool = False) -> list[Term]:
 _cache: list[Term] | None = None
 
 
+def save_user_term(term: Term) -> None:
+    """Ajoute ou remplace une entrée dans le lexique de l'utilisateur.
+
+    Écrit dans ``data/lexique_utilisateur.json`` (hors dépôt), jamais dans le
+    lexique livré (``mjpm.json``) : une entrée acceptée depuis un fact-check
+    est une proposition retenue par l'utilisateur, pas un ajout au lexique de
+    référence de l'application.
+    """
+    path = _user_lexicon_path()
+    entries = _load_file(path)
+    entries = [e for e in entries if str(e.get("terme") or "") != term.terme]
+    entries.append(term.to_dict())
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(entries, indent=2, ensure_ascii=False), encoding="utf-8")
+    tmp.replace(path)
+
+    load_lexicon(refresh=True)
+
+
 def _from_dict(raw: dict) -> Term | None:
     terme = str(raw.get("terme") or "").strip()
     if not terme:

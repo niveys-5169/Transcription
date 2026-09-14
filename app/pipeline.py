@@ -1,20 +1,25 @@
-"""Chaîne de traitement, en deux étapes indépendantes.
+"""Chaîne de traitement, en quatre étapes indépendantes.
 
     1. TRANSCRIPTION   fichier → audio → texte brut + segments horodatés
-    2. RELECTURE       texte brut → texte relu, structuré, vérifié
+    2. RELECTURE       texte brut → texte relu, structuré, vérifié (fidélité)
+    3. VÉRIFICATION    noms propres, rapports, statistiques → recherche web
+    4. PUBLICATION     fiche écrite dans le coffre Obsidian
 
-Les deux sont séparées à dessein. La transcription est un calcul : elle rend
-ce qui a été dit, mot pour mot, et le moteur — qu'il tourne sur cette machine
-ou sur un GPU RunPod — ne fait que cela. La relecture est un travail de
-lecture : elle intervient après, sur du texte, et peut être lancée plus tard,
-relancée avec d'autres réglages, ou jamais.
+Chacune est séparée à dessein. La transcription est un calcul : elle rend ce
+qui a été dit, mot pour mot, et le moteur — qu'il tourne sur cette machine ou
+sur un GPU RunPod — ne fait que cela. Les trois étapes suivantes sont des
+travaux de lecture et de recherche : elles interviennent après, sur du texte,
+et peuvent être lancées plus tard, relancées avec d'autres réglages, ou
+jamais.
 
-Un travail « transcribed » est donc un état stable et exploitable, pas une
-étape intermédiaire : le texte brut, les segments et les sous-titres sont déjà
-disponibles au téléchargement.
+Chaque état intermédiaire (« transcribed », « done », « checked ») est donc
+stable et exploitable, pas une étape de passage : le texte brut, les segments
+et les sous-titres sont déjà disponibles au téléchargement dès
+« transcribed » ; le texte relu, dès « done ».
 
 Un seul thread dépile la file : les moteurs Whisper saturent déjà la machine,
-en lancer deux en parallèle ne ferait que les ralentir tous les deux.
+en lancer deux en parallèle ne ferait que les ralentir tous les deux — et un
+appel à Claude, CLI ou API, n'a aucune raison d'être plus pressé qu'un autre.
 """
 from __future__ import annotations
 
@@ -25,20 +30,23 @@ import threading
 import time
 from pathlib import Path
 
-from . import config, db, media
+from . import config, db, media, obsidian
 from .engines import get_engine
 from .engines.base import TranscriptionError
 from .proofread import ProofreadError, ProofreadResult, basic_proofread
+from .proofread import factcheck as factcheck_module
 from .proofread.base import TextPair
 from .proofread.basic import split_paragraph_spans
 from .proofread.chunking import segments_to_text
 from .proofread.claude import ClaudeProofreader
-from .proofread.verify import verify
+from .proofread.verify import SEVERITIES, verify
 
 logger = logging.getLogger(__name__)
 
 TASK_TRANSCRIPTION = "transcription"
 TASK_PROOFREAD = "relecture"
+TASK_FACTCHECK = "verification_web"
+TASK_PUBLISH = "publication"
 
 # Poids de chaque phase dans la barre de progression, par étape.
 EXTRACTION_SHARE = 0.15
@@ -92,14 +100,14 @@ def live_state(job_id: str) -> dict | None:
         return dict(state) if state else None
 
 
+_RUNNERS = {}  # peuplé plus bas, une fois les fonctions run_* définies
+
+
 def _loop() -> None:
     while True:
         job_id, task = _queue.get()
         try:
-            if task == TASK_PROOFREAD:
-                run_proofread(job_id)
-            else:
-                run_transcription(job_id)
+            _RUNNERS.get(task, run_transcription)(job_id)
         except Exception:  # ne jamais laisser mourir le worker
             logger.exception("Échec inattendu du travail %s (%s)", job_id, task)
         finally:
@@ -167,7 +175,7 @@ def run_transcription(job_id: str) -> None:
     if job is None:
         logger.warning("Travail %s introuvable", job_id)
         return
-    if job["status"] in {"done", "transcribed", "canceled"}:
+    if job["status"] in {"done", "transcribed", "checked", "published", "canceled"}:
         return
 
     progress = _Progress(job_id)
@@ -345,6 +353,7 @@ def run_proofread(job_id: str) -> None:
             error=str(exc),
         )
         logger.info("Relecture %s : %s (%s)", job_id, exc, status)
+        return
     except Exception as exc:  # pragma: no cover - garde-fou
         logger.exception("Relecture %s en échec", job_id)
         db.mark_finished(
@@ -354,8 +363,20 @@ def run_proofread(job_id: str) -> None:
             task=None,
             error=str(exc),
         )
+        return
     finally:
         _release(job_id)
+
+    # Comme pour la transcription : chaque étape suivante est enfilée plutôt
+    # qu'appelée, et seulement si demandée. Le fact-check saute directement
+    # à la publication s'il n'est pas demandé, pour qu'un enchaînement
+    # « relecture puis publication, sans vérification externe » reste
+    # possible en un clic.
+    if job.get("chain", True):
+        if job.get("factcheck", True):
+            enqueue(job_id, TASK_FACTCHECK)
+        elif job.get("publish", True):
+            enqueue(job_id, TASK_PUBLISH)
 
 
 def _proofread(job: dict, segments: list[dict], *, on_progress, should_cancel):
@@ -400,3 +421,213 @@ def _proofread(job: dict, segments: list[dict], *, on_progress, should_cancel):
     result = basic_proofread(segments)
     on_progress(1.0, "Relecture terminée.")
     return result
+
+
+# ------------------------------------------------------ étape 3 : vérification
+
+
+def run_factcheck(job_id: str) -> None:
+    """Texte relu → recherche web ciblée sur ce qui peut se vérifier.
+
+    Ne retouche ni l'audio ni la relecture de fidélité : repart du texte relu
+    déjà en base, comme la relecture repart des segments déjà en base.
+    """
+    job = db.get_job(job_id)
+    if job is None:
+        logger.warning("Travail %s introuvable", job_id)
+        return
+
+    clean_text = job.get("clean_text") or ""
+    if not clean_text.strip():
+        db.update_job(
+            job_id,
+            status="error",
+            stage="Erreur",
+            task=None,
+            error="Aucun texte relu à vérifier : lancez d'abord la relecture.",
+        )
+        return
+
+    progress = _Progress(job_id)
+    db.update_job(
+        job_id,
+        status="running",
+        task=TASK_FACTCHECK,
+        stage="Préparation de la vérification externe…",
+        progress=0.0,
+        error=None,
+    )
+
+    try:
+        if is_cancelled(job_id):
+            raise ProofreadError("Vérification externe annulée.")
+
+        settings = config.load_settings()
+        new_text, report, entities = factcheck_module.factcheck(
+            clean_text,
+            duration=float(job.get("duration") or 0.0),
+            settings=settings,
+            on_progress=progress.scaled(0.0, 1.0, "Vérification externe…"),
+            should_cancel=lambda: is_cancelled(job_id),
+        )
+
+        db.mark_finished(
+            job_id,
+            status="checked",
+            stage="Vérifié",
+            progress=1.0,
+            task=None,
+            clean_text=new_text,
+            verification=_merge_verification(job.get("verification"), report.findings),
+            factcheck_report=report.to_dict(),
+            entities=entities,
+        )
+
+    except ProofreadError as exc:
+        # Le texte relu reste intact : on retombe sur l'état « relu » plutôt
+        # que de marquer tout le travail en erreur.
+        status = "canceled" if is_cancelled(job_id) else "done"
+        db.mark_finished(
+            job_id,
+            status=status,
+            stage="Annulé" if status == "canceled" else "Relu — vérification externe en échec",
+            task=None,
+            progress=1.0,
+            error=str(exc),
+        )
+        logger.info("Vérification externe %s : %s (%s)", job_id, exc, status)
+        return
+    except Exception as exc:  # pragma: no cover - garde-fou
+        logger.exception("Vérification externe %s en échec", job_id)
+        db.mark_finished(
+            job_id,
+            status="done",
+            stage="Relu — vérification externe en échec",
+            task=None,
+            error=str(exc),
+        )
+        return
+    finally:
+        _release(job_id)
+
+    if job.get("chain", True) and job.get("publish", True):
+        enqueue(job_id, TASK_PUBLISH)
+
+
+def _merge_verification(existing, new_findings: list) -> dict:
+    """Fusionne les points du fact-check dans le rapport de vérification existant.
+
+    Les règles et la lecture par Claude tournent à la relecture ; le
+    fact-check tourne après, sur le texte déjà relu. Un seul rapport, dans
+    l'ordre habituel — gravité, puis horodatage.
+    """
+    if isinstance(existing, dict):
+        findings = list(existing.get("findings") or [])
+        mode = existing.get("mode", "regles")
+        checked_pairs = existing.get("checked_pairs", 0)
+    else:
+        findings, mode, checked_pairs = [], "regles", 0
+
+    findings.extend(f.to_dict() for f in new_findings)
+    order = {severity: index for index, severity in enumerate(SEVERITIES)}
+    findings.sort(key=lambda f: (order.get(f.get("severity"), len(SEVERITIES)), f.get("start", 0.0)))
+    counts = {
+        severity: sum(1 for f in findings if f.get("severity") == severity)
+        for severity in SEVERITIES
+    }
+    return {
+        "findings": findings,
+        "checked_pairs": checked_pairs,
+        "mode": mode,
+        "counts": counts,
+    }
+
+
+# -------------------------------------------------------- étape 4 : publication
+
+
+def run_publish(job_id: str) -> None:
+    """Écrit la fiche dans le coffre Obsidian, à partir du texte déjà en base.
+
+    Peut partir d'un travail « done » (fact-check non demandé : la fiche
+    porte alors le statut « non vérifié ») ou « checked » (fiche « incertain »
+    ou « vérifié » selon ce que le fact-check a trouvé). Ne recalcule rien.
+    """
+    job = db.get_job(job_id)
+    if job is None:
+        logger.warning("Travail %s introuvable", job_id)
+        return
+
+    if not (job.get("clean_text") or job.get("raw_text")):
+        db.update_job(
+            job_id,
+            status="error",
+            stage="Erreur",
+            task=None,
+            error="Aucun texte à publier : lancez d'abord la transcription.",
+        )
+        return
+
+    # Repli en cas d'échec : l'état d'avant cette tentative de publication —
+    # capturé ici, avant que le « running » ci-dessous n'écrase la ligne.
+    fallback_status = job.get("status") or "done"
+
+    progress = _Progress(job_id)
+    db.update_job(
+        job_id,
+        status="running",
+        task=TASK_PUBLISH,
+        stage="Publication dans Obsidian…",
+        progress=0.0,
+        error=None,
+    )
+
+    try:
+        if is_cancelled(job_id):
+            raise obsidian.ObsidianError("Publication annulée.")
+
+        progress(0.2, "Écriture de la fiche…")
+        settings = config.load_settings()
+        relative_path = obsidian.publish(job, settings=settings)
+
+        db.mark_finished(
+            job_id,
+            status="published",
+            stage="Publié",
+            progress=1.0,
+            task=None,
+            obsidian_path=relative_path,
+        )
+
+    except obsidian.ObsidianError as exc:
+        status = "canceled" if is_cancelled(job_id) else fallback_status
+        db.mark_finished(
+            job_id,
+            status=status,
+            stage="Annulé" if status == "canceled" else "Publication Obsidian en échec",
+            task=None,
+            progress=1.0,
+            error=str(exc),
+        )
+        logger.info("Publication %s : %s (%s)", job_id, exc, status)
+    except Exception as exc:  # pragma: no cover - garde-fou
+        logger.exception("Publication %s en échec", job_id)
+        db.mark_finished(
+            job_id,
+            status=fallback_status,
+            stage="Publication Obsidian en échec",
+            task=None,
+            error=str(exc),
+        )
+    finally:
+        _release(job_id)
+
+
+_RUNNERS.update(
+    {
+        TASK_TRANSCRIPTION: run_transcription,
+        TASK_PROOFREAD: run_proofread,
+        TASK_FACTCHECK: run_factcheck,
+        TASK_PUBLISH: run_publish,
+    }
+)
