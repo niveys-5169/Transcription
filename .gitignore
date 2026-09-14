@@ -12,6 +12,10 @@ __pycache__/
 .venv/
 venv/
 env/
+Lib/
+Scripts/
+Include/
+pyvenv.cfg
 *.egg-info/
 .pytest_cache/
 .coverage
