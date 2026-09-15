@@ -183,7 +183,7 @@ async def browse(path: str | None = None) -> dict:
 @app.get("/api/jobs")
 async def list_jobs(q: str | None = None, limit: int = 100) -> dict:
     jobs = db.search_jobs(q, limit) if q else db.list_jobs(limit)
-    return {"jobs": [_decorate(job) for job in jobs]}
+    return {"jobs": _decorate_list(jobs)}
 
 
 @app.get("/api/search")
@@ -661,7 +661,7 @@ async def events() -> StreamingResponse:
         previous = None
         idle = 0
         while True:
-            snapshot = [_decorate(job) for job in db.list_jobs(50)]
+            snapshot = _decorate_list(db.list_jobs(50))
             payload = json.dumps({"jobs": snapshot}, ensure_ascii=False)
             if payload != previous:
                 previous = payload
@@ -701,3 +701,29 @@ def _decorate(job: dict | None) -> dict:
     job.pop("media_path", None)
     job.pop("wav_path", None)
     return job
+
+
+def _decorate_list(jobs: list[dict]) -> list[dict]:
+    """Décore une liste de travaux pour la bibliothèque : avancement en
+    direct, plus le compteur de points à vérifier et l'état de publication
+    utilisés par les cartes (voir _publication_status)."""
+    decorated = [_decorate(job) for job in jobs]
+    counts = db.pending_annotation_counts(job["id"] for job in decorated)
+    for job in decorated:
+        job["pending_review_count"] = counts.get(job["id"], 0)
+        job["publication_status"] = _publication_status(job)
+    return decorated
+
+
+def _publication_status(job: dict) -> str:
+    """État de publication affiché sur les cartes de bibliothèque.
+
+    Valeurs : ``publie`` (une note Obsidian existe déjà), ``pret`` (le texte
+    relu est disponible mais rien n'a encore été publié), ``non_disponible``
+    (pas encore de texte relu à publier).
+    """
+    if job.get("obsidian_path"):
+        return "publie"
+    if job.get("status") in ("done", "checked", "published"):
+        return "pret"
+    return "non_disponible"
