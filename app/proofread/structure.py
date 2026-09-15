@@ -11,6 +11,8 @@ from __future__ import annotations
 import json
 import re
 
+from .textloc import fingerprint as _fingerprint
+
 _JSON_FENCE = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.DOTALL)
 
 
@@ -66,22 +68,6 @@ def parse_json_array(raw: str) -> list:
         except json.JSONDecodeError:
             return []
     return []
-
-
-def _fingerprint(text: str) -> tuple[str, list[int]]:
-    """Version alphanumérique du texte + position d'origine de chaque caractère.
-
-    Comparer sur les seuls caractères alphanumériques rend la recherche
-    insensible à la ponctuation, aux espaces et à la casse — le modèle recopie
-    rarement une citation au caractère près.
-    """
-    letters: list[str] = []
-    positions: list[int] = []
-    for index, char in enumerate(text):
-        if char.isalnum():
-            letters.append(char.lower())
-            positions.append(index)
-    return "".join(letters), positions
 
 
 def _paragraph_start(text: str, position: int) -> int:

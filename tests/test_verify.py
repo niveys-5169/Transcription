@@ -89,9 +89,68 @@ def test_aucune_paire_aucun_signalement():
 
 
 def test_les_extraits_situent_le_probleme():
-    findings = rule_findings([pair("on note bien 42 degrés ici", "on note bien ici")])
+    findings = rule_findings([pair("on note bien 42 degrés ici", "on note bien degrés ici")])
     assert "42" in findings[0].raw_excerpt
-    assert findings[0].clean_excerpt
+    # Le voisinage du chiffre disparu (« degrés ici ») est bien resté dans le
+    # texte relu : l'extrait doit pointer dessus, pas sur le début du passage.
+    assert "ici" in findings[0].clean_excerpt
+
+
+def test_deux_chiffres_distincts_ont_des_extraits_distincts():
+    # Les deux chiffres manquants sont loin l'un de l'autre (largement plus de
+    # 120 caractères) : une implémentation qui retomberait sur le début du
+    # passage relu produirait deux fois le même extrait.
+    raw = (
+        "Nous allons évoquer aujourd'hui plusieurs chiffres qui comptent vraiment "
+        "pour la suite de cet exposé avant de passer à autre chose. "
+        "Le premier chiffre à retenir est 12 comme le nombre de jours nécessaires "
+        "pour la première étape du dossier. "
+        "Un peu plus loin dans le raisonnement il faut aussi retenir que le second "
+        "chiffre à retenir est 99 comme le nombre de dossiers traités cette année là."
+    )
+    clean = raw.replace("12 ", "").replace("99 ", "")
+    assert len(clean) > 250  # largement plus que deux fois EXCERPT_CHARS
+
+    findings = rule_findings([pair(raw, clean)])
+    chiffres = [f for f in findings if f.kind == "chiffre"]
+    assert len(chiffres) == 2
+    extraits = {f.clean_excerpt for f in chiffres}
+    assert "" not in extraits
+    # Deux anomalies distinctes doivent afficher deux citations distinctes,
+    # ni l'une ni l'autre égale au simple début du passage relu.
+    assert len(extraits) == 2
+    assert clean[:120] not in extraits
+
+
+def test_extrait_relu_absent_si_le_voisinage_est_introuvable():
+    # « degrés » a lui aussi disparu à la relecture : le voisinage du chiffre
+    # manquant n'est plus dans le texte relu, donc rien de fiable à montrer.
+    findings = rule_findings([pair("on note bien 42 degrés ici", "on note bien ici")])
+    assert findings[0].clean_excerpt == ""
+
+
+def test_coupure_localise_le_passage_disparu():
+    # Le passage supprimé est loin du début (plus de 120 caractères) : un
+    # extrait qui retomberait sur pair.clean[:120] ou pair.raw[:120] ne le
+    # verrait pas du tout.
+    prefixe = (
+        "Nous commençons ce cours par un rapide rappel historique sur "
+        "l'organisation judiciaire en France avant d'entrer dans le vif du sujet. "
+    )
+    passage_disparu = (
+        "Il faut noter en particulier que la procédure disciplinaire devant "
+        "le conseil régional obéit à des règles très strictes et méconnues. "
+    )
+    suite = "Passons maintenant au premier point de notre programme d'aujourd'hui."
+    assert len(prefixe) > 120
+
+    findings = rule_findings([pair(prefixe + passage_disparu + suite, prefixe + suite)])
+    coupures = [f for f in findings if f.kind == "coupure"]
+    assert len(coupures) == 1
+    assert "procédure disciplinaire" in coupures[0].raw_excerpt
+    # Côté relu, l'extrait doit être ancré au point de coupure réel (la
+    # jonction entre le préfixe et la suite), pas au début du passage.
+    assert "Passons" in coupures[0].clean_excerpt
 
 
 # ------------------------------------------------------------------ Claude
@@ -207,8 +266,18 @@ def test_rapport_serialisable():
     data = rapport.to_dict()
     assert data["counts"]["haute"] == 1
     assert data["checked_pairs"] == 1
+    assert data["skipped_pairs"] == 0
     assert isinstance(data["findings"][0], dict)
 
 
 def test_rapport_vide():
     assert VerificationReport().to_dict()["findings"] == []
+
+
+def test_les_paires_vides_sont_comptees_comme_non_verifiees():
+    rapport = verify(
+        [pair("il y a 42 cas", "il y a des cas"), pair("", ""), pair("   ", "aussi vide")],
+        use_claude=False,
+    )
+    assert rapport.skipped_pairs == 2
+    assert rapport.checked_pairs == 3

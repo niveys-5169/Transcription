@@ -33,7 +33,8 @@ from . import prompts
 from .backends import get_backend
 from .backends.cli import QuotaExhausted
 from .base import ProofreadError
-from .structure import _fingerprint, parse_json_array, parse_json_object
+from .structure import parse_json_array, parse_json_object
+from .textloc import locate as _locate
 from .verify import Finding
 
 logger = logging.getLogger(__name__)
@@ -349,24 +350,6 @@ def _verdict_label(verdict: Verdict) -> str:
 def _sources_line(sources: list[Source]) -> str:
     links = [f"[{s.titre or s.url}]({s.url})" for s in sources if s.url]
     return f"\n    Sources : {' · '.join(links)}" if links else ""
-
-
-def _locate(text: str, citation: str) -> tuple[int, int] | None:
-    """Position de ``citation`` dans ``text``, tolérante aux espaces et à la
-    ponctuation — même technique que ``structure.insert_headings``."""
-    citation = citation.strip()
-    if not citation:
-        return None
-    haystack, positions = _fingerprint(text)
-    needle, _ = _fingerprint(citation)
-    if len(needle) < 4:  # trop court pour être un repère fiable
-        return None
-    found = haystack.find(needle)
-    if found == -1:
-        return None
-    start = positions[found]
-    end = positions[found + len(needle) - 1] + 1
-    return start, end
 
 
 def _entity_from_verdict(verdict: Verdict) -> dict:
