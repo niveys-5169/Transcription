@@ -13,12 +13,29 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import threading
 from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 
+
+def _default_data_dir() -> Path:
+    """Racine des données par défaut, hors variable d'environnement.
+
+    En mode "frozen" (exécutable PyInstaller), ``Path.cwd()`` est le dossier
+    depuis lequel l'utilisateur a double-cliqué l'exe (Bureau,
+    Téléchargements...), pas un endroit où écrire des données applicatives —
+    on utilise alors le dossier de données local Windows. En mode source
+    (développement), on garde ``./data`` à côté du dépôt.
+    """
+    if getattr(sys, "frozen", False):
+        local_app_data = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
+        return Path(local_app_data) / "Transcription"
+    return Path.cwd() / "data"
+
+
 # Racine des données : médias extraits, base SQLite, config.
-DATA_DIR = Path(os.environ.get("TRANSCRIPTION_DATA_DIR", Path.cwd() / "data")).resolve()
+DATA_DIR = Path(os.environ.get("TRANSCRIPTION_DATA_DIR", _default_data_dir())).resolve()
 MEDIA_DIR = DATA_DIR / "media"
 CONFIG_PATH = DATA_DIR / "config.json"
 DB_PATH = DATA_DIR / "transcription.db"
@@ -195,8 +212,8 @@ class Settings:
     # jeton obtenu après le premier consentement — chemins relatifs à la
     # racine du projet, ou absolus. Le jeton est réutilisé et rafraîchi tout
     # seul ; --init relance le consentement s'il manque ou n'est plus valide.
-    notebooklm_credentials_path: str = "data/google_credentials.json"
-    notebooklm_token_path: str = "data/google_token.json"
+    notebooklm_credentials_path: str = str(DATA_DIR / "google_credentials.json")
+    notebooklm_token_path: str = str(DATA_DIR / "google_token.json")
 
     def public_dict(self) -> dict:
         """Version sérialisable pour l'UI : les secrets sont masqués."""
@@ -354,3 +371,4 @@ def ensure_dirs() -> None:
     """Crée l'arborescence de données si besoin."""
     MEDIA_DIR.mkdir(parents=True, exist_ok=True)
     COURSES_DIR.mkdir(parents=True, exist_ok=True)
+    (DATA_DIR / "logs").mkdir(parents=True, exist_ok=True)
