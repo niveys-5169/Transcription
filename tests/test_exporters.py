@@ -62,24 +62,25 @@ def test_render_md_contient_titre_resume_et_corps():
     assert "L'énergie se conserve." in markdown
 
 
-def test_course_markdown_ne_garde_que_le_resume_si_disponible():
+def test_course_markdown_inclut_le_resume_et_la_transcription_integrale():
     job = {
         "filename": "cours.mp4",
         "title": "Introduction à la thermodynamique",
         "summary": json.dumps(["Premier principe", "Second principe"]),
-        "clean_text": "## Le premier principe\n\nL'énergie se conserve. " * 50,
+        "clean_text": "## Le premier principe\n\nL'énergie se conserve.",
     }
     markdown = exporters.course_markdown(job)
     assert markdown.startswith("# Introduction à la thermodynamique")
     assert "- Premier principe" in markdown
     assert "- Second principe" in markdown
-    assert "L'énergie se conserve" not in markdown
+    assert "L'énergie se conserve." in markdown
 
 
-def test_course_markdown_retombe_sur_le_texte_complet_sans_resume():
+def test_course_markdown_sans_resume_ne_garde_que_le_texte_complet():
     job = {"title": "Cours sans relecture", "clean_text": "Texte intégral du cours."}
     markdown = exporters.course_markdown(job)
     assert "Texte intégral du cours." in markdown
+    assert "En bref" not in markdown
 
 
 def test_render_json_est_relisable():
