@@ -146,12 +146,12 @@ def _excerpt(text: str, around: str = "") -> str:
     return text[:EXCERPT_CHARS] + ("…" if len(text) > EXCERPT_CHARS else "")
 
 
-def _neighbouring_words(text: str, span: tuple[int, int], *, words: int = _CONTEXT_WORDS) -> str:
-    """Quelques mots de part et d'autre de ``span`` dans ``text``, ``span`` exclu."""
+def _neighbouring_words(text: str, span: tuple[int, int], *, words: int) -> tuple[str, str]:
+    """Mots juste avant et juste après ``span`` dans ``text``, ``span`` exclu."""
     tokens = textloc.tokenize_words(text)
     before = [word for word, _start, end in tokens if end <= span[0]][-words:]
     after = [word for word, start, _end in tokens if start >= span[1]][:words]
-    return " ".join(before + after)
+    return " ".join(before), " ".join(after)
 
 
 def _missing_context_excerpt(raw_text: str, clean_text: str, token: str) -> str:
@@ -163,10 +163,11 @@ def _missing_context_excerpt(raw_text: str, clean_text: str, token: str) -> str:
     Si ce voisinage a lui aussi été reformulé, il n'y a pas de position
     fiable à montrer : l'extrait reste vide plutôt que de pointer ailleurs.
 
-    La fenêtre de voisinage rétrécit si elle échoue : un chiffre trop proche
-    d'une autre anomalie (un second nombre manquant à deux mots de là, par
-    exemple) ferait échouer une fenêtre large en y incluant elle aussi de
-    quoi ne plus se retrouver dans le texte relu.
+    La fenêtre de voisinage rétrécit si elle échoue, et le voisinage avant et
+    après sont aussi essayés séparément avant de rétrécir : un chiffre
+    remplacé par sa forme en lettres (« 9 » devenu « neuf ») rend le
+    voisinage complet (avant + après) introuvable tel quel, alors que
+    chaque moitié prise seule se retrouve très bien.
     """
     raw_norm = " ".join(raw_text.split())
     clean_norm = " ".join(clean_text.split())
@@ -176,12 +177,14 @@ def _missing_context_excerpt(raw_text: str, clean_text: str, token: str) -> str:
     span = (position, position + len(token))
 
     for words in range(_CONTEXT_WORDS, 0, -1):
-        context = _neighbouring_words(raw_norm, span, words=words)
-        if len(context) < _CONTEXT_MIN_LEN:
-            continue
-        located = textloc.locate(clean_norm, context, min_len=_CONTEXT_MIN_LEN)
-        if located is not None:
-            return _excerpt_from_span(clean_norm, located)
+        before, after = _neighbouring_words(raw_norm, span, words=words)
+        candidats = [" ".join(filter(None, (before, after))), after, before]
+        for context in dict.fromkeys(candidats):  # sans doublons, en gardant l'ordre
+            if len(context) < _CONTEXT_MIN_LEN:
+                continue
+            located = textloc.locate(clean_norm, context, min_len=_CONTEXT_MIN_LEN)
+            if located is not None:
+                return _excerpt_from_span(clean_norm, located)
     return ""
 
 

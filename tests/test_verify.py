@@ -123,9 +123,11 @@ def test_deux_chiffres_distincts_ont_des_extraits_distincts():
 
 
 def test_extrait_relu_absent_si_le_voisinage_est_introuvable():
-    # « degrés » a lui aussi disparu à la relecture : le voisinage du chiffre
-    # manquant n'est plus dans le texte relu, donc rien de fiable à montrer.
-    findings = rule_findings([pair("on note bien 42 degrés ici", "on note bien ici")])
+    # La phrase a été intégralement récrite à la relecture : ni le chiffre,
+    # ni son voisinage (avant ou après), ne se retrouvent dans le texte relu.
+    findings = rule_findings(
+        [pair("Le capteur indique 42 degrés précisément", "Une anomalie a été détectée sur le site")]
+    )
     assert findings[0].clean_excerpt == ""
 
 
