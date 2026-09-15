@@ -274,6 +274,7 @@ select:focus, input:focus { outline: 2px solid var(--accent); outline-offset: 1p
 .badge.done { color: var(--ok); }
 .badge.error { color: var(--danger); }
 .badge.running { color: var(--accent); }
+.badge.warn { color: var(--warn); }
 
 .empty { color: var(--text-soft); font-size: 13px; text-align: center; padding: 18px 0; margin: 0; }
 
@@ -396,6 +397,21 @@ select:focus, input:focus { outline: 2px solid var(--accent); outline-offset: 1p
 .finding-quote b { color: var(--text-soft); font-weight: 600; min-width: 42px; font-size: 12px; }
 .finding-quote span { color: var(--text-soft); font-style: italic; }
 
+.finding-expand {
+  margin-left: auto;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-soft);
+  font-size: 12px;
+  padding: 1px 9px;
+  cursor: pointer;
+}
+.finding-expand:hover { background: var(--surface-2); color: var(--text); }
+
+.pending-correction { border-left-color: var(--warn); }
+.pending-actions { display: flex; gap: 8px; margin-top: 10px; }
+
 /* ------------------------------------------------------------ sources */
 
 .verdict {
@@ -467,6 +483,13 @@ dialog {
 }
 dialog::backdrop { background: rgba(0, 0, 0, .45); }
 dialog h2 { font-size: 17px; margin-bottom: 16px; }
+
+#passage-dialog { max-width: 720px; }
+.passage-blocks { display: grid; gap: 16px; margin-bottom: 16px; }
+.passage-block b { display: block; color: var(--text-soft); font-size: 12px; margin-bottom: 4px; }
+.passage-block p { margin: 0; font-size: 14px; line-height: 1.5; }
+.passage-block mark { background: rgba(224, 163, 60, .3); color: var(--warn); border-radius: 3px; padding: 0 2px; }
+.passage-block .empty { color: var(--text-soft); font-style: italic; }
 
 fieldset { border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; margin: 0 0 16px; }
 legend { font-weight: 600; font-size: 13px; padding: 0 6px; }

@@ -384,6 +384,7 @@ function renderDetail() {
   const job = state.detail;
   $("result-empty").hidden = Boolean(job);
   $("result-body").hidden = !job;
+  findingRegistry = [];
   if (!job) return;
 
   $("result-title").textContent = job.title || job.filename;
@@ -473,21 +474,121 @@ function sourceLabel(point) {
   return { claude: "Claude", web: "Recherche web", lexique: "Lexique" }[point.source] || "Règle";
 }
 
+const CLAIM_TYPE_LABELS = {
+  nom_propre: "nom propre",
+  organisme: "organisme",
+  rapport: "rapport",
+  statistique: "statistique",
+  reference_juridique: "référence juridique",
+  date: "date",
+};
+
+function renderPendingCard(item) {
+  const sources = (item.sources || []).filter((s) => s.url);
+  return `
+    <div class="finding pending-correction" data-correction-id="${escapeHtml(item.id)}">
+      <div class="finding-head">
+        <time>${clock(item.start)}</time>
+        <span class="finding-kind">${escapeHtml(CLAIM_TYPE_LABELS[item.claim_type] || item.claim_type)}</span>
+        <span class="finding-kind">confiance ${escapeHtml(item.confiance)}</span>
+      </div>
+      <p class="finding-message">« ${escapeHtml(item.citation)} » → proposé : <b>${escapeHtml(item.proposition)}</b></p>
+      ${item.explication ? `<p class="meta">${escapeHtml(item.explication)}</p>` : ""}
+      ${sources.length ? `
+        <div class="finding-sources">
+          ${sources.map((s) => `<a href="${escapeHtml(s.url)}" target="_blank" rel="noopener">${escapeHtml(s.titre || s.url)}</a>`).join("")}
+        </div>` : ""}
+      <div class="pending-actions">
+        <button type="button" class="btn btn-primary btn-mini" data-pending-action="valider">Valider</button>
+        <button type="button" class="btn btn-ghost btn-mini" data-pending-action="rejeter">Rejeter</button>
+      </div>
+    </div>`;
+}
+
+// Réinitialisé à chaque renderDetail() ; permet au bouton « Voir le passage »
+// de retrouver le point d'origine sans le sérialiser dans le DOM.
+let findingRegistry = [];
+
 function renderFindingCard(point) {
+  const idx = findingRegistry.push(point) - 1;
+  const hasExcerpt = Boolean(point.raw_excerpt || point.clean_excerpt);
   return `
     <div class="finding ${escapeHtml(point.severity)}">
       <div class="finding-head">
         <time>${clock(point.start)}</time>
         <span class="finding-kind">${escapeHtml(KIND_LABELS[point.kind] || point.kind)}</span>
         <span class="finding-kind">${escapeHtml(sourceLabel(point))}</span>
+        ${hasExcerpt ? `<button type="button" class="finding-expand" data-idx="${idx}">✉ Voir le passage</button>` : ""}
       </div>
       <p class="finding-message">${escapeHtml(point.message)}</p>
-      ${point.raw_excerpt || point.clean_excerpt ? `
+      ${hasExcerpt ? `
         <div class="finding-quotes">
           ${point.raw_excerpt ? `<div class="finding-quote"><b>Brut</b><span>${escapeHtml(point.raw_excerpt)}</span></div>` : ""}
           ${point.clean_excerpt ? `<div class="finding-quote"><b>Relu</b><span>${escapeHtml(point.clean_excerpt)}</span></div>` : ""}
         </div>` : ""}
     </div>`;
+}
+
+// Enlève les « … » de troncature ajoutés par les extraits côté serveur —
+// ils ne font pas partie du texte à retrouver.
+function stripEllipses(text) {
+  return String(text ?? "").replace(/^…+/, "").replace(/…+$/, "").trim();
+}
+
+function normalizeForSearch(text) {
+  return String(text ?? "").split(/\s+/).filter(Boolean).join(" ");
+}
+
+// Retrouve ``excerpt`` dans ``fullText`` et renvoie une fenêtre de contexte
+// plus large autour, avec le passage mis en évidence. S'il apparaît plusieurs
+// fois, on garde l'occurrence la plus proche de la position estimée par
+// l'horodatage — le texte complet est déjà chargé côté client, inutile
+// d'appeler le serveur pour ça.
+function findPassageWindow(fullText, excerpt, approxFraction, windowSize = 320) {
+  const haystack = normalizeForSearch(fullText);
+  const needle = stripEllipses(excerpt);
+  if (!haystack || !needle) return null;
+
+  const approxPos = approxFraction == null ? null : approxFraction * haystack.length;
+  let bestIndex = -1;
+  let bestDistance = Infinity;
+  let from = 0;
+  for (;;) {
+    const found = haystack.indexOf(needle, from);
+    if (found === -1) break;
+    const distance = approxPos == null ? 0 : Math.abs(found - approxPos);
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      bestIndex = found;
+    }
+    from = found + 1;
+  }
+  if (bestIndex === -1) return null;
+
+  const start = Math.max(0, bestIndex - windowSize / 2);
+  const end = Math.min(haystack.length, bestIndex + needle.length + windowSize / 2);
+  const before = escapeHtml(haystack.slice(start, bestIndex));
+  const marked = escapeHtml(haystack.slice(bestIndex, bestIndex + needle.length));
+  const after = escapeHtml(haystack.slice(bestIndex + needle.length, end));
+  return (start > 0 ? "…" : "") + before + `<mark>${marked}</mark>` + after + (end < haystack.length ? "…" : "");
+}
+
+function openPassage(point) {
+  const job = state.detail;
+  if (!job) return;
+  const fraction = job.duration ? point.start / job.duration : null;
+
+  $("passage-title").textContent = point.message || "";
+
+  const rawHtml = point.raw_excerpt ? findPassageWindow(job.raw_text, point.raw_excerpt, fraction) : null;
+  const cleanHtml = point.clean_excerpt ? findPassageWindow(job.clean_text, point.clean_excerpt, fraction) : null;
+
+  $("passage-raw").innerHTML = rawHtml
+    || `<span class="empty">${point.raw_excerpt ? "Passage introuvable dans le texte brut complet." : "Rien à comparer côté brut."}</span>`;
+  $("passage-clean").innerHTML = cleanHtml
+    || `<span class="empty">${point.clean_excerpt ? "Passage introuvable dans le texte relu complet." : "Position non localisable dans le texte relu : à vérifier à l'oreille."}</span>`;
+
+  $("passage-dialog").showModal();
 }
 
 function renderVerification(job) {
@@ -544,12 +645,16 @@ function renderSources(job) {
   const rapport = job.verification || {};
   const allPoints = Array.isArray(rapport.findings) ? rapport.findings : [];
   const points = allPoints.filter((p) => SOURCE_KINDS.has(p.kind));
+  const report = job.factcheck_report;
+  const enAttente = (report && Array.isArray(report.pending) ? report.pending : [])
+    .filter((p) => p.status === "attente");
+
   const badge = $("sources-count");
-  badge.hidden = points.length === 0;
-  badge.textContent = String(points.length);
+  const badgeCount = points.length + enAttente.length;
+  badge.hidden = badgeCount === 0;
+  badge.textContent = String(badgeCount);
 
   const panel = $("panel-sources");
-  const report = job.factcheck_report;
 
   if (!isProofread(job)) {
     panel.innerHTML = `<p class="empty">Vérification par recherche web disponible après la relecture.</p>`;
@@ -568,12 +673,21 @@ function renderSources(job) {
     <div class="verify-summary">
       <span class="badge">${report.claims_checked || 0} affirmation${report.claims_checked > 1 ? "s" : ""} vérifiée${report.claims_checked > 1 ? "s" : ""}</span>
       <span class="badge">${report.corrections || 0} correction${report.corrections > 1 ? "s" : ""} appliquée${report.corrections > 1 ? "s" : ""}</span>
+      ${enAttente.length ? `<span class="badge warn">${enAttente.length} en attente de validation</span>` : ""}
       ${points.length
         ? `<span class="badge error">${points.length} point${points.length > 1 ? "s" : ""} non confirmé${points.length > 1 ? "s" : ""}</span>`
         : `<span class="verify-ok">Tout ce qui a été vérifié est confirmé</span>`}
     </div>`;
 
-  if (!points.length) {
+  const pendingSection = enAttente.length ? `
+    <h3>À valider</h3>
+    <p class="meta">
+      Ces corrections ne sont pas assez sûres, ou touchent une catégorie
+      sensible, pour être appliquées seules : elles attendent votre décision.
+    </p>
+    ${enAttente.map(renderPendingCard).join("")}` : "";
+
+  if (!points.length && !enAttente.length) {
     panel.innerHTML = `${entete}
       <p class="meta">
         Les notes de bas de page du texte relu détaillent les sources. Une
@@ -582,11 +696,13 @@ function renderSources(job) {
     return;
   }
 
-  panel.innerHTML = entete + `
+  const pointsSection = points.length ? `
     <p class="meta">
       Le texte relu porte un appel de note (<code>[^v…]</code>) à chacun de
       ces points ; les sources consultées y sont citées.
-    </p>` + points.map(renderFindingCard).join("");
+    </p>` + points.map(renderFindingCard).join("") : "";
+
+  panel.innerHTML = entete + pendingSection + pointsSection;
 }
 
 function showTab(name) {
@@ -962,6 +1078,33 @@ function initActions() {
   $("browse-vault-btn").addEventListener("click", openFolderBrowser);
   $("folder-browser-choose").addEventListener("click", chooseFolderBrowserPath);
   $("folder-browser-cancel").addEventListener("click", () => { $("folder-browser").hidden = true; });
+
+  document.addEventListener("click", (event) => {
+    const button = event.target.closest(".finding-expand");
+    if (!button) return;
+    const point = findingRegistry[Number(button.dataset.idx)];
+    if (point) openPassage(point);
+  });
+  $("passage-close").addEventListener("click", () => $("passage-dialog").close());
+
+  document.addEventListener("click", async (event) => {
+    const button = event.target.closest("[data-pending-action]");
+    if (!button) return;
+    const card = button.closest(".pending-correction");
+    const job = state.detail;
+    if (!card || !job) return;
+    const correctionId = card.dataset.correctionId;
+    const action = button.dataset.pendingAction;
+    card.querySelectorAll("button").forEach((b) => { b.disabled = true; });
+    try {
+      await api(`/api/jobs/${job.id}/corrections/${correctionId}/${action}`, { method: "POST" });
+      toast(action === "valider" ? "Correction validée." : "Correction rejetée.");
+      await selectJob(job.id, true);
+    } catch (error) {
+      toast(error.message, true);
+      card.querySelectorAll("button").forEach((b) => { b.disabled = false; });
+    }
+  });
 }
 
 /* ------------------------------------------------------------ init */

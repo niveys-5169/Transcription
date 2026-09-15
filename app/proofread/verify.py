@@ -24,6 +24,7 @@ from .. import config as config_module
 from ..lexicon import lookup as lexicon_lookup
 from ..lexicon import near_misses as lexicon_near_misses
 from . import prompts
+from . import textloc
 from .backends import get_backend
 from .base import ProofreadError, TextPair
 from .structure import parse_json_array
@@ -37,6 +38,10 @@ LENGTH_ALERT_RATIO = 0.62
 
 MAX_TOKENS_VERIFICATION = 4_000
 EXCERPT_CHARS = 120
+# Nombre de mots voisins pris de part et d'autre d'un élément manquant pour
+# retrouver son contexte dans le texte relu (voir _missing_context_excerpt).
+_CONTEXT_WORDS = 5
+_CONTEXT_MIN_LEN = 8
 
 # Un nombre, avec séparateur de milliers et décimales éventuels :
 # « 2024 », « 1 000 000 », « 10,5 ». Les séparateurs possibles sont
@@ -82,12 +87,16 @@ class Finding:
 class VerificationReport:
     findings: list[Finding] = field(default_factory=list)
     checked_pairs: int = 0
+    # Passages au brut ou au relu vide : ni les règles ni Claude ne peuvent
+    # rien en dire. Rendu visible plutôt que silencieusement ignoré.
+    skipped_pairs: int = 0
     mode: str = "regles"
 
     def to_dict(self) -> dict:
         return {
             "findings": [finding.to_dict() for finding in self.findings],
             "checked_pairs": self.checked_pairs,
+            "skipped_pairs": self.skipped_pairs,
             "mode": self.mode,
             "counts": self.counts(),
         }
@@ -111,16 +120,101 @@ def _numbers(text: str) -> list[str]:
     return [_normalise_number(match.group()) for match in _NUMBER_RE.finditer(text)]
 
 
+def _excerpt_from_span(text: str, span: tuple[int, int] | None) -> str:
+    """Extrait centré sur ``span`` (bornes caractère dans ``text``), ou vide.
+
+    Un extrait absent est plus honnête qu'un extrait qui ne correspond à
+    rien : mieux vaut ne rien montrer que montrer le mauvais endroit.
+    """
+    if span is None:
+        return ""
+    position, _end = span
+    start = max(0, position - EXCERPT_CHARS // 2)
+    fragment = " ".join(text[start : start + EXCERPT_CHARS].split())
+    if not fragment:
+        return ""
+    return ("…" if start else "") + fragment + ("…" if start + EXCERPT_CHARS < len(text) else "")
+
+
 def _excerpt(text: str, around: str = "") -> str:
     """Court extrait, centré sur ``around`` quand on sait où regarder."""
     text = " ".join(text.split())
     if around:
         position = text.find(around)
         if position != -1:
-            start = max(0, position - EXCERPT_CHARS // 2)
-            fragment = text[start : start + EXCERPT_CHARS]
-            return ("…" if start else "") + fragment + ("…" if start + EXCERPT_CHARS < len(text) else "")
+            return _excerpt_from_span(text, (position, position + len(around)))
     return text[:EXCERPT_CHARS] + ("…" if len(text) > EXCERPT_CHARS else "")
+
+
+def _neighbouring_words(text: str, span: tuple[int, int], *, words: int) -> tuple[str, str]:
+    """Mots juste avant et juste après ``span`` dans ``text``, ``span`` exclu."""
+    tokens = textloc.tokenize_words(text)
+    before = [word for word, _start, end in tokens if end <= span[0]][-words:]
+    after = [word for word, start, _end in tokens if start >= span[1]][:words]
+    return " ".join(before), " ".join(after)
+
+
+def _missing_context_excerpt(raw_text: str, clean_text: str, token: str) -> str:
+    """``clean_excerpt`` pour un chiffre/sigle absent du texte relu.
+
+    Puisque l'élément a disparu, impossible de l'ancrer lui-même côté relu :
+    on ancre plutôt sur son voisinage immédiat dans le texte brut, retrouvé
+    dans le texte relu de façon tolérante à la ponctuation (``textloc``).
+    Si ce voisinage a lui aussi été reformulé, il n'y a pas de position
+    fiable à montrer : l'extrait reste vide plutôt que de pointer ailleurs.
+
+    La fenêtre de voisinage rétrécit si elle échoue, et le voisinage avant et
+    après sont aussi essayés séparément avant de rétrécir : un chiffre
+    remplacé par sa forme en lettres (« 9 » devenu « neuf ») rend le
+    voisinage complet (avant + après) introuvable tel quel, alors que
+    chaque moitié prise seule se retrouve très bien.
+    """
+    raw_norm = " ".join(raw_text.split())
+    clean_norm = " ".join(clean_text.split())
+    position = raw_norm.find(token)
+    if position == -1:
+        return ""
+    span = (position, position + len(token))
+
+    for words in range(_CONTEXT_WORDS, 0, -1):
+        before, after = _neighbouring_words(raw_norm, span, words=words)
+        candidats = [" ".join(filter(None, (before, after))), after, before]
+        for context in dict.fromkeys(candidats):  # sans doublons, en gardant l'ordre
+            if len(context) < _CONTEXT_MIN_LEN:
+                continue
+            located = textloc.locate(clean_norm, context, min_len=_CONTEXT_MIN_LEN)
+            if located is not None:
+                return _excerpt_from_span(clean_norm, located)
+    return ""
+
+
+def _coupure_spans(
+    raw_text: str, clean_text: str
+) -> tuple[tuple[int, int] | None, tuple[int, int] | None]:
+    """Bornes du passage réellement disparu à la relecture, brut et relu.
+
+    Plutôt que de deviner, on aligne les deux textes mot à mot (comme un
+    suivi de modifications) et on prend le plus grand bloc supprimé ou
+    remplacé. Côté relu, une suppression pure n'a pas de bornes propres :
+    on retient le point d'insertion (fin du mot précédent) plutôt que le
+    début du passage.
+    """
+    raw_tokens = textloc.tokenize_words(raw_text)
+    clean_tokens = textloc.tokenize_words(clean_text)
+    candidats = [op for op in textloc.word_opcodes(raw_text, clean_text) if op[0] in ("delete", "replace")]
+    if not candidats:
+        return None, None
+
+    _tag, i1, i2, j1, j2 = max(candidats, key=lambda op: op[2] - op[1])
+    raw_span = (raw_tokens[i1][1], raw_tokens[i2 - 1][2]) if i2 > i1 else None
+    if j2 > j1:
+        clean_span = (clean_tokens[j1][1], clean_tokens[j2 - 1][2])
+    elif j1 > 0:
+        point = clean_tokens[j1 - 1][2]
+        clean_span = (point, point)
+    else:
+        clean_span = None
+    return raw_span, clean_span
 
 
 def rule_findings(pairs: list[TextPair], *, lexicon_enabled: bool = True) -> list[Finding]:
@@ -140,7 +234,7 @@ def rule_findings(pairs: list[TextPair], *, lexicon_enabled: bool = True) -> lis
                     message=f"Le nombre « {nombre} » est prononcé mais absent du texte relu.",
                     start=pair.start,
                     raw_excerpt=_excerpt(pair.raw, nombre),
-                    clean_excerpt=_excerpt(pair.clean),
+                    clean_excerpt=_missing_context_excerpt(pair.raw, pair.clean, nombre),
                 )
             )
 
@@ -159,13 +253,14 @@ def rule_findings(pairs: list[TextPair], *, lexicon_enabled: bool = True) -> lis
                     message=f"Le sigle « {sigle} » est prononcé mais absent du texte relu.",
                     start=pair.start,
                     raw_excerpt=_excerpt(pair.raw, sigle),
-                    clean_excerpt=_excerpt(pair.clean),
+                    clean_excerpt=_missing_context_excerpt(pair.raw, pair.clean, sigle),
                 )
             )
 
         # 3. Un passage qui a fondu.
         if pair.raw and len(pair.clean) < len(pair.raw) * LENGTH_ALERT_RATIO:
             perte = round((1 - len(pair.clean) / len(pair.raw)) * 100)
+            raw_span, clean_span = _coupure_spans(pair.raw, pair.clean)
             findings.append(
                 Finding(
                     kind="coupure",
@@ -175,8 +270,8 @@ def rule_findings(pairs: list[TextPair], *, lexicon_enabled: bool = True) -> lis
                         "relecture : à comparer avec le texte brut."
                     ),
                     start=pair.start,
-                    raw_excerpt=_excerpt(pair.raw),
-                    clean_excerpt=_excerpt(pair.clean),
+                    raw_excerpt=_excerpt_from_span(pair.raw, raw_span) if raw_span else _excerpt(pair.raw),
+                    clean_excerpt=_excerpt_from_span(pair.clean, clean_span) if clean_span else "",
                 )
             )
 
@@ -247,6 +342,7 @@ class ClaudeVerifier:
             raise ProofreadError(detail)
 
         findings: list[Finding] = []
+        skipped = 0
 
         for index, pair in enumerate(pairs):
             if should_cancel is not None and should_cancel():
@@ -257,6 +353,7 @@ class ClaudeVerifier:
                     f"Vérification du bloc {index + 1}/{len(pairs)}…",
                 )
             if not pair.raw.strip() or not pair.clean.strip():
+                skipped += 1
                 continue
 
             reponse = self.backend.complete(
@@ -268,6 +365,8 @@ class ClaudeVerifier:
             ).text
             findings.extend(self._parse(reponse, pair))
 
+        if skipped:
+            logger.info("%d passage(s) non vérifié(s) par Claude : brut ou relu vide.", skipped)
         return findings
 
     @staticmethod
@@ -319,6 +418,7 @@ def verify(
     report = VerificationReport(
         findings=rule_findings(pairs, lexicon_enabled=lexicon_enabled),
         checked_pairs=len(pairs),
+        skipped_pairs=sum(1 for p in pairs if not p.raw.strip() or not p.clean.strip()),
     )
 
     if use_claude and pairs:
