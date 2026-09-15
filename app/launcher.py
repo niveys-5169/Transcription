@@ -95,13 +95,21 @@ class ServerHandle:
         self._thread.join(timeout)
 
 
-def start_server(host: str, port: int, reload: bool = False) -> ServerHandle:
-    """Démarre le serveur dans un thread et retourne son ``ServerHandle``."""
+def start_server(host: str, port: int) -> ServerHandle:
+    """Démarre le serveur dans un thread et retourne son ``ServerHandle``.
+
+    Passe l'objet FastAPI directement à uvicorn plutôt que la chaîne
+    ``"app.server:app"`` : PyInstaller ne suit que les vrais ``import`` du
+    code pour décider quoi embarquer, pas les chaînes qu'uvicorn importerait
+    lui-même dynamiquement — avec la chaîne, app/server.py (et tout ce qu'il
+    importe : db, pipeline, exporters...) restait absent du build empaqueté.
+    """
+    from . import server as server_module
+
     config = uvicorn.Config(
-        "app.server:app",
+        server_module.app,
         host=host,
         port=port,
-        reload=reload,
         log_level="warning",
         # On configure déjà le logging nous-mêmes (voir logging_setup.py) :
         # laisser uvicorn appliquer sa propre config par défaut plante en
