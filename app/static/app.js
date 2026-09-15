@@ -368,6 +368,18 @@ function renderTranscript(text, extraClass = "") {
   return `<div class="transcript ${extraClass}">${blocks.join("")}</div>`;
 }
 
+// Chemin absolu (au sens du système de fichiers) de la fiche publiée,
+// pour « obsidian://open?path=… ». job.obsidian_path est relatif au coffre
+// et utilise toujours « / » (voir obsidian.publish côté serveur) ; le coffre
+// lui-même peut être saisi avec des « \ » sous Windows, d'où la conversion.
+function obsidianAbsolutePath(job) {
+  const vaultPath = state.settings.obsidian_vault_path || "";
+  const sep = vaultPath.includes("\\") ? "\\" : "/";
+  const relative = job.obsidian_path.split("/").join(sep);
+  const vault = vaultPath.replace(/[\\/]+$/, "");
+  return `${vault}${sep}${relative}`;
+}
+
 function renderDetail() {
   const job = state.detail;
   $("result-empty").hidden = Boolean(job);
@@ -424,8 +436,11 @@ function renderDetail() {
   const obsidianLink = $("obsidian-link");
   if (job.obsidian_path && state.settings.obsidian_vault_path) {
     obsidianLink.hidden = false;
-    const vaultName = state.settings.obsidian_vault_path.split(/[\\/]/).filter(Boolean).pop() || "";
-    obsidianLink.href = `obsidian://open?vault=${encodeURIComponent(vaultName)}&file=${encodeURIComponent(job.obsidian_path.replace(/\.md$/, ""))}`;
+    // « vault=<nom> » suppose que le nom du coffre dans Obsidian est le nom
+    // du dossier — faux dès que le coffre a été renommé depuis l'appli
+    // (« Vault not found »). « path=<chemin absolu> » identifie le fichier
+    // sans passer par ce nom : Obsidian retrouve seul le coffre concerné.
+    obsidianLink.href = `obsidian://open?path=${encodeURIComponent(obsidianAbsolutePath(job))}`;
   } else {
     obsidianLink.hidden = true;
   }
