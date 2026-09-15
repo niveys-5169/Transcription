@@ -33,6 +33,18 @@ VOLUME_ROOT = "/runpod-volume"
 _model_cache: dict[str, object] = {}
 
 
+def _confidence_from_logprob(avg_logprob: float | None) -> float | None:
+    """Mappage indicatif de avg_logprob (~[-1.5, 0]) vers [0, 1].
+
+    Même formule que app/engines/local.py et handler.py — purement
+    informatif pour la coloration de relecture côté client, jamais utilisé
+    pour modifier le texte transcrit.
+    """
+    if avg_logprob is None:
+        return None
+    return round(max(0.0, min(1.0, 1.0 + avg_logprob / 1.5)), 3)
+
+
 def _model_cache_dir():
     """Cache Hugging Face sur le volume reseau RunPod, s'il est monte.
 
@@ -96,7 +108,14 @@ def transcribe(
         segments = []
         text_parts = []
         for seg in segments_iter:
-            segments.append({"start": seg.start, "end": seg.end, "text": seg.text})
+            segments.append({
+                "start": seg.start,
+                "end": seg.end,
+                "text": seg.text,
+                "confidence": _confidence_from_logprob(
+                    getattr(seg, "avg_logprob", None)
+                ),
+            })
             text_parts.append(seg.text)
 
         return {

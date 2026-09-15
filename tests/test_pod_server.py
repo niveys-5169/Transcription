@@ -24,8 +24,9 @@ POD_SERVER = RACINE / "pod_server.py"
 
 
 class _FauxSegment:
-    def __init__(self, start, end, text):
+    def __init__(self, start, end, text, avg_logprob=None):
         self.start, self.end, self.text = start, end, text
+        self.avg_logprob = avg_logprob
 
 
 class _FauxInfo:
@@ -78,8 +79,27 @@ def test_transcription_rend_le_contrat_attendu(worker):
     )
     assert sortie["text"] == "Bonjour à tous. On commence le cours."
     assert sortie["language"] == "fr"
-    assert sortie["segments"][0] == {"start": 0.0, "end": 2.0, "text": " Bonjour à tous."}
+    assert sortie["segments"][0] == {
+        "start": 0.0, "end": 2.0, "text": " Bonjour à tous.", "confidence": None,
+    }
     assert "error" not in sortie
+
+
+def test_la_confiance_est_deduite_de_avg_logprob(worker, monkeypatch):
+    def transcribe(self, chemin, **kwargs):
+        return (
+            iter([_FauxSegment(0.0, 2.0, "Bonjour.", avg_logprob=-0.2)]),
+            _FauxInfo(),
+        )
+
+    monkeypatch.setattr(
+        sys.modules["faster_whisper"].WhisperModel, "transcribe", transcribe
+    )
+    sortie = worker.transcribe(
+        base64.b64encode(b"RIFF____WAVE").decode(), "large-v3", "fr"
+    )
+    confiance = sortie["segments"][0]["confidence"]
+    assert confiance is not None and 0.0 <= confiance <= 1.0
 
 
 def test_le_filtre_de_voix_reste_desactive(worker):

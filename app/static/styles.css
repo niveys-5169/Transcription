@@ -152,6 +152,11 @@ h1, h2, h3 { margin: 0; line-height: 1.25; }
   .shell-col { display: none; }
   .shell-col.is-shell-active { display: flex; }
   .shell-library, .shell-analysis { position: static; max-height: none; }
+
+  /* Le lecteur flottant (déplacé par l'utilisateur, voir initPlayerDrag)
+     entrerait en collision avec le panneau actif unique de ce layout : on
+     le remet dans le flux normal du document. */
+  .player-zone.is-floating { position: static !important; width: auto !important; }
 }
 
 /* ---------------------------------------------------------- dépôt */
@@ -385,22 +390,6 @@ select:focus, input:focus { outline: 2px solid var(--accent); outline-offset: 1p
 .summary ul { margin: 8px 0 0; padding-left: 20px; }
 .summary li { margin: 4px 0; }
 
-.tabs { display: flex; gap: 4px; margin: 18px 0 0; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
-.tab {
-  font: inherit;
-  font-size: 13.5px;
-  padding: 8px 12px;
-  border: none;
-  background: none;
-  color: var(--text-soft);
-  cursor: pointer;
-  border-bottom: 2px solid transparent;
-  margin-bottom: -1px;
-}
-.tab.is-active { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
-
-.tab-panel { padding-top: 18px; }
-
 .tab-badge {
   display: inline-block;
   min-width: 17px;
@@ -518,21 +507,124 @@ select:focus, input:focus { outline: 2px solid var(--accent); outline-offset: 1p
 .transcript p { margin: 0 0 15px; }
 .transcript.is-raw { color: var(--text-soft); font-size: 14px; }
 
-.segments { max-height: 620px; overflow-y: auto; }
-.segment { display: flex; gap: 12px; padding: 5px 0; border-bottom: 1px solid var(--border); font-size: 14px; }
-.segment time { font-family: var(--mono); font-size: 12px; color: var(--text-soft); min-width: 72px; padding-top: 2px; }
-
-audio { width: 100%; margin-top: 10px; }
-
 /* ------------------------------------------------------------- lecteur */
 
-.player-zone { margin: 4px 0 6px; }
-.media-player { width: 100%; max-height: 360px; border-radius: 10px; background: #000; }
-/* Réservé au découpage de la phase suivante (repères de blocs). */
-.timeline-zone { height: 6px; border-radius: 999px; background: var(--surface-2); margin-top: 8px; }
+.player-zone {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  margin: 4px 0 6px;
+  overflow: hidden;
+}
+.player-zone.is-floating { position: fixed; z-index: 40; width: 360px; }
 
-/* Réservées à l'éditeur synchronisé et à la comparaison IA (phase suivante). */
-.blocks-zone, .comparison-zone { margin-top: 18px; }
+.player-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+  font-size: 12.5px;
+  color: var(--text-soft);
+}
+.player-drag-handle {
+  cursor: grab;
+  background: none;
+  border: none;
+  color: var(--text-soft);
+  font-size: 14px;
+  line-height: 1;
+  padding: 2px 4px;
+}
+.player-drag-handle:active { cursor: grabbing; }
+.player-source-badge { flex: 1; }
+.player-collapse-btn {
+  background: none;
+  border: none;
+  color: var(--accent);
+  font-size: 12.5px;
+  cursor: pointer;
+  padding: 2px 4px;
+}
+
+.player-body { padding: 10px; }
+.player-zone.is-collapsed .player-body > *:not(.player-controls) { display: none; }
+.player-zone.is-collapsed .player-controls { margin-top: 0; }
+
+.media-player { width: 100%; max-height: 360px; border-radius: 8px; background: #000; }
+audio#audio-player { display: block; }
+
+.timeline-zone { margin: 8px 0; padding: 6px 0; cursor: pointer; outline-offset: 4px; }
+.timeline-track { position: relative; height: 8px; border-radius: 999px; background: var(--surface-2); }
+.timeline-progress {
+  position: absolute; inset: 0 auto 0 0; width: 0;
+  background: var(--accent); border-radius: 999px;
+}
+.timeline-markers { position: absolute; inset: 0; }
+.timeline-marker {
+  position: absolute; top: -2px; width: 2px; height: 12px;
+  background: var(--border); pointer-events: none;
+}
+.timeline-handle {
+  position: absolute; top: 50%; left: 0; width: 12px; height: 12px;
+  border-radius: 50%; background: var(--accent);
+  transform: translate(-50%, -50%); pointer-events: none;
+}
+
+.player-controls { display: flex; align-items: center; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+.player-time { font-family: var(--mono); font-size: 12px; color: var(--text-soft); }
+.player-speed { display: flex; gap: 2px; margin-left: auto; }
+.speed-btn {
+  font: inherit; font-size: 11.5px; padding: 3px 7px;
+  border: 1px solid var(--border); background: none; color: var(--text-soft);
+  border-radius: 6px; cursor: pointer;
+}
+.speed-btn.is-active { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
+
+/* -------------------------------------------------------- blocs éditeur */
+
+.blocks-zone { margin-top: 18px; }
+.blocks-header { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; flex-wrap: wrap; }
+.blocks-header h3 { font-size: 14px; margin: 0; }
+.editor-search-input { flex: 1; min-width: 160px; max-width: 260px; font: inherit; }
+.blocks-edited-flag { font-size: 12px; color: var(--ok); font-weight: 600; }
+
+.blocks-list { max-height: 620px; overflow-y: auto; border-top: 1px solid var(--border); }
+.block {
+  display: flex; gap: 12px; padding: 10px 4px;
+  border-bottom: 1px solid var(--border); cursor: pointer;
+}
+.block.is-active-block { background: var(--accent-soft); }
+.block-time {
+  font-family: var(--mono); font-size: 12px; color: var(--text-soft);
+  min-width: 56px; padding-top: 2px; cursor: pointer;
+}
+.block-body { flex: 1; min-width: 0; }
+.block-text { margin: 0; cursor: text; white-space: pre-wrap; }
+.block-edit { width: 100%; min-height: 60px; font: inherit; resize: vertical; }
+.block-edited-badge { font-size: 10.5px; color: var(--ok); margin-left: 6px; font-weight: 600; }
+.block-actions { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+.block-save-status { font-size: 11.5px; color: var(--text-soft); }
+.block-save-status.is-saving { color: var(--warn); }
+.block-save-status.is-saved { color: var(--ok); }
+.block-save-status.is-error { color: var(--danger); }
+
+.conf-mid { color: var(--warn); }
+.conf-low { color: var(--danger); }
+
+/* ------------------------------------------------------ comparaison IA */
+
+.comparison-zone {
+  margin-top: 18px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 4px 14px;
+}
+.comparison-zone summary { cursor: pointer; padding: 10px 0; font-weight: 600; color: var(--text-soft); }
+.comparison-zone[open] summary { color: var(--text); }
+.comparison-body { padding-bottom: 12px; }
 
 /* --------------------------------------------------------- panneau analyse */
 

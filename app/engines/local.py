@@ -112,12 +112,26 @@ class LocalWhisperEngine:
                     start=round(segment.start, 3),
                     end=round(segment.end, 3),
                     text=text,
+                    confidence=_confidence_from_logprob(
+                        getattr(segment, "avg_logprob", None)
+                    ),
                 )
             if on_progress and total > 0:
                 on_progress(
                     min(segment.end / total, 1.0),
                     f"Transcription — {_clock(segment.end)} / {_clock(total)}",
                 )
+
+
+def _confidence_from_logprob(avg_logprob: float | None) -> float | None:
+    """Mappage indicatif de avg_logprob (faster-whisper, ~[-1.5, 0]) vers [0, 1].
+
+    Purement informatif pour l'affichage (coloration de relecture) : ne sert
+    jamais à modifier le texte transcrit.
+    """
+    if avg_logprob is None:
+        return None
+    return round(max(0.0, min(1.0, 1.0 + avg_logprob / 1.5)), 3)
 
 
 def _clock(seconds: float) -> str:

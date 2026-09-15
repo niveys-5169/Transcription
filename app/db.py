@@ -334,6 +334,7 @@ def review_blocks_from_segments(segments: list[dict]) -> list[dict]:
             "start": float(segment.get("start") or 0),
             "end": float(segment.get("end") or 0),
             "text": str(segment.get("text") or "").strip(),
+            "confidence": segment.get("confidence"),
         }
         for index, segment in enumerate(segments, start=1)
     ]

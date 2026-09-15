@@ -172,30 +172,62 @@
 
         <div id="result-error" class="banner banner-error" hidden></div>
 
-        <!-- Zone stable : lecteur média. La vidéo source (phase suivante)
-             prendra le pas sur ce lecteur audio quand le navigateur peut la
-             lire ; sinon on reste sur le WAV extrait, déjà fonctionnel. -->
+        <!-- Lecteur synchronisé : vidéo source prioritaire, repli automatique
+             sur le WAV extrait si elle est absente ou illisible. -->
         <div class="player-zone" id="player-zone">
-          <video id="media-player" class="media-player" playsinline preload="none" hidden></video>
-          <audio id="audio-player" controls preload="none"></audio>
-          <!-- Barre de progression interactive avec repères de blocs : phase 3. -->
-          <div class="timeline-zone" id="timeline-zone" hidden aria-hidden="true"></div>
+          <div class="player-header" id="player-header">
+            <button type="button" class="player-drag-handle" id="player-drag-handle"
+                    aria-label="Déplacer le lecteur" title="Déplacer le lecteur">⠿</button>
+            <span class="player-source-badge" id="player-source-badge">Vidéo source</span>
+            <button type="button" class="player-collapse-btn" id="player-collapse-btn"
+                    aria-expanded="true">Réduire</button>
+          </div>
+          <div class="player-body" id="player-body">
+            <video id="media-player" class="media-player" playsinline preload="none" hidden></video>
+            <audio id="audio-player" preload="none" hidden></audio>
+            <div class="timeline-zone" id="timeline-zone" tabindex="0"
+                 role="slider" aria-label="Position de lecture"
+                 aria-valuemin="0" aria-valuenow="0">
+              <div class="timeline-track">
+                <div class="timeline-progress" id="timeline-progress"></div>
+                <div class="timeline-markers" id="timeline-markers"></div>
+                <div class="timeline-handle" id="timeline-handle"></div>
+              </div>
+            </div>
+            <div class="player-controls" id="player-controls">
+              <button type="button" class="btn btn-ghost btn-mini" id="seek-back-btn">−5s</button>
+              <button type="button" class="btn btn-primary btn-mini" id="play-pause-btn" aria-label="Lecture">▶</button>
+              <button type="button" class="btn btn-ghost btn-mini" id="seek-fwd-btn">+5s</button>
+              <span class="player-time" id="player-time">0:00 / 0:00</span>
+              <div class="player-speed" id="player-speed" role="group" aria-label="Vitesse de lecture">
+                <button type="button" class="speed-btn" data-speed="0.75">0.75×</button>
+                <button type="button" class="speed-btn is-active" data-speed="1">1×</button>
+                <button type="button" class="speed-btn" data-speed="1.25">1.25×</button>
+                <button type="button" class="speed-btn" data-speed="1.5">1.5×</button>
+                <button type="button" class="speed-btn" data-speed="2">2×</button>
+              </div>
+            </div>
+          </div>
         </div>
 
-        <div class="tabs" role="tablist">
-          <button type="button" class="tab is-active" data-tab="clean" role="tab">Texte relu</button>
-          <button type="button" class="tab" data-tab="raw" role="tab">Texte brut</button>
-          <button type="button" class="tab" data-tab="segments" role="tab">Segments horodatés</button>
+        <!-- Éditeur : blocs de révision éditables en ligne, synchronisés
+             avec la lecture, et comparaison repliable avec la version IA. -->
+        <div class="blocks-zone" id="blocks-zone" hidden>
+          <div class="blocks-header">
+            <h3>Transcription</h3>
+            <input type="search" id="editor-search-input" class="editor-search-input"
+                   placeholder="Rechercher dans la transcription (bientôt disponible)" disabled>
+            <span class="blocks-edited-flag" id="blocks-edited-flag" hidden>
+              Version corrigée manuellement — sert désormais de référence
+            </span>
+          </div>
+          <div class="blocks-list" id="blocks-list"></div>
         </div>
 
-        <div class="tab-panel" id="panel-clean"></div>
-        <div class="tab-panel" id="panel-raw" hidden></div>
-        <div class="tab-panel" id="panel-segments" hidden></div>
-
-        <!-- Zones stables : blocs de révision éditables et comparaison avec
-             la version IA (phase 3). -->
-        <div class="blocks-zone" id="blocks-zone" hidden></div>
-        <div class="comparison-zone" id="comparison-zone" hidden></div>
+        <details class="comparison-zone" id="comparison-zone" hidden>
+          <summary>Version IA (texte relu)</summary>
+          <div class="comparison-body" id="comparison-body"></div>
+        </details>
       </div>
     </article>
   </main>
