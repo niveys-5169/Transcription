@@ -130,12 +130,13 @@ async function loadStatus() {
   const nim = status.proofread.nim;
   const proofSelect = $("proofread");
   proofSelect.options[0].disabled = !claude.available && !nim?.available;
-  proofSelect.value = (claude.available || nim?.available)
-    ? status.settings.default_proofread
-    : "basic";
+  proofSelect.options[1].disabled = !nim?.available;
+  const configuredMode = status.settings.default_proofread;
+  proofSelect.value = configuredMode === "nim" && nim?.available
+    ? "nim" : (claude.available || nim?.available) ? configuredMode : "basic";
   $("proofread-detail").textContent = claude.available
-    ? `${claude.detail}${nim?.available ? " — NVIDIA NIM est prêt en repli." : ""}`
-    : `${claude.detail}${nim?.available ? " NVIDIA NIM prendra le relais." : " La relecture simple reste disponible."}`;
+    ? `${claude.detail}${nim?.available ? " — NVIDIA NIM est aussi disponible." : ""}`
+    : `${claude.detail}${nim?.available ? " NVIDIA NIM est disponible pour une relance directe." : " La relecture simple reste disponible."}`;
 
   $("factcheck").checked = Boolean(status.settings.factcheck) && claude.available;
   $("factcheck").disabled = !claude.available;
@@ -492,6 +493,14 @@ function renderDetail() {
   proofreadBtn.hidden = !isReadable(job);
   proofreadBtn.textContent = isProofread(job) ? "Relancer la relecture" : "Relire";
 
+  // Après un incident, deux relances directes évitent de devoir retourner
+  // dans les réglages ou de refaire l'audio. Elles repartent des segments.
+  const retryClaudeBtn = $("retry-claude-btn");
+  const retryNimBtn = $("retry-nim-btn");
+  const canRetryVerification = Boolean(job.error) && isReadable(job);
+  retryClaudeBtn.hidden = !canRetryVerification;
+  retryNimBtn.hidden = !canRetryVerification;
+
   const factcheckBtn = $("factcheck-btn");
   factcheckBtn.hidden = !isProofread(job);
   factcheckBtn.textContent = job.status === "checked" || job.status === "published" ? "Revérifier" : "Vérifier";
@@ -499,8 +508,8 @@ function renderDetail() {
   const publishBtn = $("publish-btn");
   publishBtn.hidden = !isProofread(job);
   publishBtn.textContent = job.status === "published" ? "Republier dans Obsidian" : "Publier dans Obsidian";
-  [proofreadBtn, factcheckBtn, publishBtn].forEach((button) => button.classList.remove("btn-primary"));
-  [proofreadBtn, factcheckBtn, publishBtn].forEach((button) => button.classList.add("btn-ghost"));
+  [proofreadBtn, retryClaudeBtn, retryNimBtn, factcheckBtn, publishBtn].forEach((button) => button.classList.remove("btn-primary"));
+  [proofreadBtn, retryClaudeBtn, retryNimBtn, factcheckBtn, publishBtn].forEach((button) => button.classList.add("btn-ghost"));
   const mainAction = !isProofread(job) ? proofreadBtn
     : job.status === "done" ? factcheckBtn
     : job.status === "published" ? $("notebooklm-btn") : publishBtn;
@@ -1802,28 +1811,37 @@ function initActions() {
     })
   );
 
-  $("proofread-btn").addEventListener("click", async () => {
+  async function launchProofread(button, mode = $("proofread").value) {
     const job = state.detail;
     if (!job) return;
-    const button = $("proofread-btn");
     button.disabled = true;
     try {
       await api(`/api/jobs/${job.id}/proofread`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          proofread: $("proofread").value,
+          proofread: mode,
           structure: $("structure").checked,
           verify: $("verify").checked,
         }),
       });
-      toast("Relecture lancée.");
+      toast(`Relecture ${mode === "nim" ? "NVIDIA NIM" : mode === "claude" ? "Claude" : ""} lancée.`);
       await refreshJobs();
     } catch (error) {
       toast(error.message, true);
     } finally {
       button.disabled = false;
     }
+  }
+
+  $("proofread-btn").addEventListener("click", () => {
+    launchProofread($("proofread-btn"));
+  });
+  $("retry-claude-btn").addEventListener("click", () => {
+    launchProofread($("retry-claude-btn"), "claude");
+  });
+  $("retry-nim-btn").addEventListener("click", () => {
+    launchProofread($("retry-nim-btn"), "nim");
   });
 
   $("factcheck-btn").addEventListener("click", async () => {

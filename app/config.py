@@ -47,7 +47,9 @@ RUNPOD_POD_MODES = ["off", "fallback", "always"]
 # Modes de relecture. NVIDIA NIM reste un repli opt-in de Claude ; il n'est
 # pas proposé comme moteur principal afin de ne pas basculer silencieusement
 # sur un service facturé.
-PROOFREAD_MODES = ["claude", "basic", "none"]
+# « nim » permet une relance explicite sur NVIDIA, indépendamment du repli
+# automatique configuré pour Claude.
+PROOFREAD_MODES = ["claude", "nim", "basic", "none"]
 
 # Comment l'application appelle Claude : le CLI (abonnement) ou l'API (clé).
 CLAUDE_BACKENDS = ["cli", "api"]

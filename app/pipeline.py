@@ -526,6 +526,21 @@ def _proofread(job: dict, segments: list[dict], *, on_progress, should_cancel):
         else:
             logger.info("Repli NVIDIA NIM indisponible (%s).", detail)
 
+    if mode == "nim":
+        # Relance demandée explicitement par l'utilisateur : contrairement au
+        # repli de Claude, on ne bascule pas silencieusement en mode mécanique.
+        nim = NimProofreader()
+        available, detail = nim.is_available()
+        if not available:
+            raise ProofreadError(f"NVIDIA NIM indisponible : {detail}")
+        on_progress(0.05, "Relecture NVIDIA NIM…")
+        return nim.proofread(
+            segments,
+            structure=bool(job.get("structure", True)),
+            on_progress=on_progress,
+            should_cancel=should_cancel,
+        )
+
     on_progress(0.5, "Relecture mécanique…")
     result = basic_proofread(segments)
     on_progress(1.0, "Relecture terminée.")

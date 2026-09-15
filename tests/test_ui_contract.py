@@ -36,3 +36,5 @@ def test_confiance_et_repli_nim_sont_visibles_sans_exposer_la_cle():
     assert "timeline-marker.needs-review" in css
     assert "confidence-badge" in css
     assert "markerLabel" in script
+    assert 'id="retry-claude-btn"' in html
+    assert 'id="retry-nim-btn"' in html

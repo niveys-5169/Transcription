@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 
-from app import config, db, engines, media, server
+from app import config, db, engines, media, pipeline, server
 from app.engines.base import Segment
 from app.proofread.base import ProofreadResult, TextPair
 
@@ -389,6 +389,19 @@ def test_la_relecture_peut_etre_relancee_avec_d_autres_reglages(client):
     second = _attendre(client, job_id)
     assert second["proofread"] == "none"
     assert "euh" in second["clean_text"]
+
+
+def test_la_relecture_peut_etre_relancee_explicitement_avec_nim(client, monkeypatch):
+    job_id = _deposer(client, chain="false")
+    _attendre_statut(client, job_id, {"transcribed"})
+    calls = []
+    monkeypatch.setattr(pipeline, "enqueue", lambda ident, task: calls.append((ident, task)))
+
+    reponse = client.post(f"/api/jobs/{job_id}/proofread", json={"proofread": "nim"})
+
+    assert reponse.status_code == 200
+    assert reponse.json()["proofread"] == "nim"
+    assert calls == [(job_id, pipeline.TASK_PROOFREAD)]
 
 
 def test_relecture_refusee_sans_transcription(client, monkeypatch):

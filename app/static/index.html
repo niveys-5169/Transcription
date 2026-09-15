@@ -87,6 +87,7 @@
               <span>Relecture</span>
               <select id="proofread" name="proofread">
                 <option value="claude">Complète (Claude)</option>
+                <option value="nim">Complète (NVIDIA NIM)</option>
                 <option value="basic">Simple (hors ligne)</option>
                 <option value="none">Aucune</option>
               </select>
@@ -329,6 +330,12 @@
         <div class="publish-actions">
           <button type="button" class="btn btn-primary" id="proofread-btn" hidden>
             Relire avec Claude
+          </button>
+          <button type="button" class="btn btn-ghost" id="retry-claude-btn" hidden>
+            Réessayer avec Claude
+          </button>
+          <button type="button" class="btn btn-ghost" id="retry-nim-btn" hidden>
+            Réessayer avec NVIDIA NIM
           </button>
           <button type="button" class="btn btn-ghost" id="factcheck-btn" hidden>
             Vérifier par recherche web
