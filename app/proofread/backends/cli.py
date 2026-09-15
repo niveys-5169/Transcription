@@ -165,12 +165,21 @@ class CliBackend:
             # "" désactive tous les outils (documenté par --help) ; un seul
             # nommé, ici, jamais Bash ni l'accès aux fichiers — l'app donne à
             # lire à Claude une transcription dont elle ne maîtrise pas le
-            # contenu.
+            # contenu. ``--tools`` ne fait que restreindre l'ensemble
+            # *disponible* : sans ``--allowedTools`` en plus, WebSearch reste
+            # soumis à une confirmation qu'aucune session sans écran ne peut
+            # donner, et se retrouve refusé d'office par
+            # ``--permission-prompts none`` ci-dessous.
             "--tools",
             "WebSearch" if web_search else "",
+        ]
+        if web_search:
+            cmd += ["--allowedTools", "WebSearch"]
+        cmd += [
             # Rien ne doit pouvoir demander confirmation : le thread unique
             # de la file resterait bloqué indéfiniment sans personne pour
-            # répondre.
+            # répondre. La liste ci-dessus pré-approuve WebSearch ; tout le
+            # reste qui tenterait de demander une confirmation est refusé.
             "--permission-prompts",
             "none",
             "--no-session-persistence",
