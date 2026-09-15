@@ -1307,7 +1307,18 @@ async function saveSpeakerField(blockId, fields) {
   const block = state.blocks.find((item) => item.id === blockId);
   if (!job || !block) return;
   const previous = { speaker: block.speaker, role: block.role };
+  // Les blocs qui partagent le même repère (ex. "Speaker 1") sont mis à jour
+  // ensemble : renommer le repère ou lui donner un rôle s'applique à tous.
+  const groupKey = previous.speaker;
+  const grouped = groupKey
+    ? state.blocks.filter((item) => item !== block && item.speaker === groupKey)
+    : [];
+  const groupedPrevious = grouped.map((item) => ({ item, speaker: item.speaker, role: item.role }));
   Object.assign(block, fields);
+  grouped.forEach((item) => {
+    if (Object.prototype.hasOwnProperty.call(fields, "speaker")) item.speaker = block.speaker;
+    if (Object.prototype.hasOwnProperty.call(fields, "role")) item.role = block.role;
+  });
   try {
     const updated = await api(`/api/jobs/${job.id}/review-blocks/${blockId}`, {
       method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(fields),
@@ -1316,6 +1327,7 @@ async function saveSpeakerField(blockId, fields) {
     renderBlocks();
   } catch (error) {
     Object.assign(block, previous);
+    groupedPrevious.forEach(({ item, speaker, role }) => { item.speaker = speaker; item.role = role; });
     renderBlocks();
     toast(error.message, true);
   }

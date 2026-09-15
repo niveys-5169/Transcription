@@ -182,6 +182,24 @@ def _markdown(job: dict) -> str:
     return "\n\n".join(parts).strip() + "\n"
 
 
+def course_markdown(job: dict) -> str:
+    """Version destinée à la compilation NotebookLM : toujours la transcription
+    intégrale, précédée du résumé pédagogique (``## En bref``) quand la
+    relecture IA en a produit un.
+    """
+    parts: list[str] = []
+    title = job.get("title") or job.get("filename") or "Transcription"
+    parts.append(f"# {title}")
+
+    summary = _summary_list(job)
+    if summary:
+        parts.append("## En bref\n\n" + "\n".join(f"- {point}" for point in summary))
+
+    parts.append(editorial_text(job))
+
+    return "\n\n".join(parts).strip() + "\n"
+
+
 def safe_filename(name: str, extension: str) -> str:
     """Nom de fichier de téléchargement, débarrassé de tout caractère gênant.
 
