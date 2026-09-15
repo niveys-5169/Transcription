@@ -301,6 +301,18 @@ def reset_interrupted() -> None:
             "WHERE status = 'running'",
             (_now(),),
         )
+        # La synchro NotebookLM tourne sans faire passer le travail par
+        # « running » (la publication Obsidian reste acquise pendant la
+        # synchro) : pending_tasks() ne la reprend donc jamais après un
+        # redémarrage. Sans ce correctif, notebooklm_status reste bloqué à
+        # « en_cours » pour toujours et le bouton reste grisé (il ne se
+        # rallume que sur un statut différent de « en_cours »).
+        conn.execute(
+            "UPDATE jobs SET notebooklm_status = 'erreur', "
+            "notebooklm_error = 'Synchronisation interrompue par un redémarrage du serveur.', "
+            "updated_at = ? WHERE notebooklm_status = 'en_cours'",
+            (_now(),),
+        )
 
 
 def search_jobs(query: str, limit: int = 50) -> list[dict]:
