@@ -204,7 +204,7 @@ def _export_course_markdown(job_id: str) -> Path | None:
         path = config.COURSES_DIR / f"{date}-{slug}-{job_id}.md"
 
         tmp = path.with_name(path.name + ".tmp")
-        tmp.write_text(exporters.render(job, "md"), encoding="utf-8")
+        tmp.write_text(exporters.course_markdown(job), encoding="utf-8")
         tmp.replace(path)
         return path
     except OSError as exc:

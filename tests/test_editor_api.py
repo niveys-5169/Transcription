@@ -220,3 +220,70 @@ def test_relecture_manuelle_et_identification_des_intervenants(client, tmp_path)
     response = client.post(f"/api/jobs/{job_id}/manual-review", json={"status": "completed"})
     assert response.status_code == 200
     assert response.json()["manual_review_status"] == "completed"
+
+
+def test_renommer_un_repere_de_locuteur_se_propage_a_tous_ses_blocs(tmp_path):
+    """Whisper répète le même repère (« Speaker 1 ») sur plusieurs passages :
+    le renommer sur un bloc doit renommer tous les blocs qui portent encore
+    ce repère, pas seulement celui édité."""
+    job_id = db.create_job(
+        filename="cours.mp4",
+        media_path=str(tmp_path / "cours.mp4"),
+        size_bytes=0,
+        engine="local",
+        model="tiny",
+        language="fr",
+        proofread="basic",
+        structure=False,
+    )
+    db.update_job(
+        job_id,
+        status="transcribed",
+        segments=[
+            {"start": 0.0, "end": 1.0, "text": "Un."},
+            {"start": 1.0, "end": 2.0, "text": "Deux."},
+            {"start": 2.0, "end": 3.0, "text": "Trois."},
+        ],
+    )
+    blocks = db.ensure_review_blocks(job_id)
+    for block in blocks:
+        block["speaker"] = "Speaker 1" if block["id"] != "segment-3" else "Speaker 2"
+    db.update_job(job_id, review_blocks=blocks)
+
+    db.update_review_block(job_id, "segment-1", speaker="Prof")
+
+    updated = db.ensure_review_blocks(job_id)
+    by_id = {block["id"]: block for block in updated}
+    assert by_id["segment-1"]["speaker"] == "Prof"
+    assert by_id["segment-2"]["speaker"] == "Prof"
+    assert by_id["segment-3"]["speaker"] == "Speaker 2"
+
+
+def test_attribuer_un_role_se_propage_aux_blocs_du_meme_locuteur(tmp_path):
+    job_id = db.create_job(
+        filename="cours.mp4",
+        media_path=str(tmp_path / "cours.mp4"),
+        size_bytes=0,
+        engine="local",
+        model="tiny",
+        language="fr",
+        proofread="basic",
+        structure=False,
+    )
+    db.update_job(
+        job_id,
+        status="transcribed",
+        segments=[
+            {"start": 0.0, "end": 1.0, "text": "Un."},
+            {"start": 1.0, "end": 2.0, "text": "Deux."},
+        ],
+    )
+    blocks = db.ensure_review_blocks(job_id)
+    for block in blocks:
+        block["speaker"] = "Prof"
+    db.update_job(job_id, review_blocks=blocks)
+
+    db.update_review_block(job_id, "segment-2", role="professeur")
+
+    updated = db.ensure_review_blocks(job_id)
+    assert all(block["role"] == "professeur" for block in updated)

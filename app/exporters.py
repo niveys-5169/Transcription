@@ -182,6 +182,29 @@ def _markdown(job: dict) -> str:
     return "\n\n".join(parts).strip() + "\n"
 
 
+def course_markdown(job: dict) -> str:
+    """Version destinée à la compilation NotebookLM : l'essentiel du cours.
+
+    Contrairement à ``_markdown`` (export complet, verbatim intégral),
+    NotebookLM n'a pas besoin de la retranscription mot à mot : seul le
+    résumé pédagogique (``## En bref``, produit par la relecture IA)
+    est pertinent pour réviser le cours. Sans résumé disponible (relecture
+    pas encore passée par l'IA), on retombe sur le texte complet plutôt que
+    de ne rien synchroniser du tout.
+    """
+    parts: list[str] = []
+    title = job.get("title") or job.get("filename") or "Transcription"
+    parts.append(f"# {title}")
+
+    summary = _summary_list(job)
+    if summary:
+        parts.append("\n".join(f"- {point}" for point in summary))
+    else:
+        parts.append(editorial_text(job))
+
+    return "\n\n".join(parts).strip() + "\n"
+
+
 def safe_filename(name: str, extension: str) -> str:
     """Nom de fichier de téléchargement, débarrassé de tout caractère gênant.
 

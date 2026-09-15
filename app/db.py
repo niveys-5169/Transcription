@@ -368,21 +368,42 @@ def update_review_block(
     speaker: str | None | object = _UNSET,
     role: str | None | object = _UNSET,
 ) -> dict | None:
-    """Met à jour un bloc de révision sans jamais retoucher les segments bruts."""
+    """Met à jour un bloc de révision sans jamais retoucher les segments bruts.
+
+    Le champ ``speaker`` sert de repère pour regrouper les blocs qui
+    correspondent à la même personne (ex. « Speaker 1 » répété par Whisper
+    sur plusieurs passages). Renommer ce repère, ou lui attribuer un rôle,
+    s'applique donc à tous les blocs qui partagent actuellement le même
+    repère, pas seulement au bloc édité.
+    """
     blocks = ensure_review_blocks(job_id)
-    for block in blocks:
-        if block.get("id") == block_id:
-            if text is not None:
-                block["text"] = text
-            # ``None`` signifie « non renseigné » et efface donc une
-            # attribution précédente ; les anciens blocs restent compatibles.
-            if speaker is not _UNSET:
-                block["speaker"] = speaker
-            if role is not _UNSET:
-                block["role"] = role
-            update_job(job_id, review_blocks=blocks)
-            return block
-    return None
+    target = next((block for block in blocks if block.get("id") == block_id), None)
+    if target is None:
+        return None
+
+    if text is not None:
+        target["text"] = text
+
+    # ``None`` signifie « non renseigné » et efface donc une attribution
+    # précédente ; les anciens blocs restent compatibles.
+    if speaker is not _UNSET:
+        previous_speaker = target.get("speaker")
+        target["speaker"] = speaker
+        if previous_speaker:
+            for block in blocks:
+                if block is not target and block.get("speaker") == previous_speaker:
+                    block["speaker"] = speaker
+
+    if role is not _UNSET:
+        target["role"] = role
+        current_speaker = target.get("speaker")
+        if current_speaker:
+            for block in blocks:
+                if block is not target and block.get("speaker") == current_speaker:
+                    block["role"] = role
+
+    update_job(job_id, review_blocks=blocks)
+    return target
 
 
 def list_annotations(job_id: str) -> list[dict]:
