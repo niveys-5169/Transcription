@@ -69,8 +69,8 @@ def test_blocs_de_revision_sont_crees_a_la_demande_et_editables(client, tmp_path
 
     body = client.get(f"/api/jobs/{job_id}/review-blocks").json()
     assert body["blocks"] == [
-        {"id": "segment-1", "start": 1.0, "end": 3.5, "text": "Bonjour à tous.", "confidence": None},
-        {"id": "segment-2", "start": 4.0, "end": 7.0, "text": "Le second passage.", "confidence": None},
+        {"id": "segment-1", "start": 1.0, "end": 3.5, "text": "Bonjour à tous.", "confidence": None, "speaker": None, "role": None},
+        {"id": "segment-2", "start": 4.0, "end": 7.0, "text": "Le second passage.", "confidence": None, "speaker": None, "role": None},
     ]
 
     response = client.put(
@@ -201,3 +201,22 @@ def test_review_blocks_tolerent_un_segment_sans_confiance():
     confidence retombe simplement à None (pas de coloration côté client)."""
     blocks = db.review_blocks_from_segments([{"start": 0.0, "end": 1.0, "text": "x"}])
     assert blocks[0]["confidence"] is None
+
+
+def test_relecture_manuelle_et_identification_des_intervenants(client, tmp_path):
+    job_id = _job(tmp_path)
+    response = client.post(f"/api/jobs/{job_id}/manual-review", json={"status": "in_progress"})
+    assert response.status_code == 200
+    assert response.json()["manual_review_status"] == "in_progress"
+
+    response = client.put(
+        f"/api/jobs/{job_id}/review-blocks/segment-1",
+        json={"role": "professeur", "speaker": "Mme Martin"},
+    )
+    assert response.status_code == 200
+    assert response.json()["role"] == "professeur"
+    assert response.json()["speaker"] == "Mme Martin"
+
+    response = client.post(f"/api/jobs/{job_id}/manual-review", json={"status": "completed"})
+    assert response.status_code == 200
+    assert response.json()["manual_review_status"] == "completed"
