@@ -66,6 +66,22 @@ le lanceur choisit automatiquement le premier port libre suivant et affiche
 l'URL réellement utilisée.
 </details>
 
+## Application Windows (sans installer Python)
+
+Pour un usage courant sur une machine où l'on ne veut pas installer Python ni
+garder une fenêtre de terminal ouverte, `packaging/build.bat` produit un
+exécutable autonome : `dist/Transcription/Transcription.exe`.
+
+- Pas de fenêtre console : une icône dans la barre système propose
+  « Ouvrir », « Voir les logs » et « Quitter ».
+- Les logs et les données (`data/`) vivent dans
+  `%LOCALAPPDATA%\Transcription`, pas dans le dossier de l'exe.
+- Relancer l'exe pendant qu'il tourne déjà rouvre simplement le navigateur
+  sur l'instance existante, plutôt que d'en démarrer une seconde.
+
+Le build se fait dans un venv dédié (`.venv-build`), avec le même
+interpréteur Python que le reste du projet — voir `packaging/build.bat`.
+
 ## Réviser une transcription
 
 L'interface est organisée en trois panneaux : la **bibliothèque** à gauche,

@@ -31,3 +31,10 @@ anthropic>=0.69
 google-api-python-client>=2.130
 google-auth-oauthlib>=1.2
 google-auth-httplib2>=0.2
+
+# Application de bureau (build PyInstaller, voir packaging/) : icône barre
+# système pour le point d'entrée sans console app/desktop.py. Non requis en
+# mode source (run.py) mais installé quand même pour que le même venv serve
+# aux deux : le fallback dans app/desktop.py gère leur absence.
+pystray>=0.19
+Pillow>=10

@@ -6,6 +6,9 @@ fait échouer tous les appels avec un 404 sans indice sur la cause.
 """
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
 import pytest
 
 from app import config
@@ -47,6 +50,24 @@ def test_env_normalizes_endpoint_id(monkeypatch):
     monkeypatch.setenv("RUNPOD_ENDPOINT_ID", "https://api.runpod.ai/v2/abc123xyz/run")
     settings = config.load_settings(refresh=True)
     assert settings.runpod_endpoint_id == "abc123xyz"
+
+
+def test_default_data_dir_uses_cwd_in_source_mode(monkeypatch):
+    monkeypatch.setattr(sys, "frozen", False, raising=False)
+    assert config._default_data_dir() == Path.cwd() / "data"
+
+
+def test_default_data_dir_uses_localappdata_when_frozen(monkeypatch, tmp_path):
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    assert config._default_data_dir() == tmp_path / "Transcription"
+
+
+def test_default_data_dir_falls_back_without_localappdata(monkeypatch):
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.delenv("LOCALAPPDATA", raising=False)
+    expected = Path.home() / "AppData" / "Local" / "Transcription"
+    assert config._default_data_dir() == expected
 
 
 def test_nim_key_is_masked_in_public_settings():
