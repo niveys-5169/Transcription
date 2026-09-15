@@ -1,7 +1,9 @@
-# Transcription de cours
+# Verbatim — éditeur de transcription
 
-Application locale qui transforme l'enregistrement d'un cours — vidéo ou
-audio — en une **transcription révisée, vérifiée et publiable dans Obsidian**.
+Application locale qui transforme un enregistrement — vidéo ou audio — en une
+**transcription révisée, vérifiée et publiable dans Obsidian**. Verbatim est
+un outil d'édition : le média, le texte horodaté et les décisions de révision
+restent au centre de l'expérience.
 
 On dépose le fichier, on clique une fois, et l'application enchaîne quatre
 étapes : extraction audio, transcription, relecture, puis vérification par
@@ -37,6 +39,31 @@ de fois que nécessaire sans jamais refaire tourner celles d'avant. Décocher
 une étape dans les options avancées du dépôt arrête la chaîne à la
 précédente — un travail « transcrit », « relu » ou « vérifié » est déjà un
 état exploitable, pas une étape de passage.
+
+## Orientation produit et UI
+
+La direction retenue est l'**éditeur professionnel** : une interface sombre,
+calme et dense, conçue pour relire de longues transcriptions sans perdre le
+contexte audio. Toute évolution de l'interface doit préserver cette
+hiérarchie, plutôt que de transformer l'application en tableau de bord.
+
+- **À gauche : projets.** Import, recherche, filtres et bibliothèque de
+  transcriptions.
+- **Au centre : éditeur.** Titre du média, commandes, forme d'onde / timeline
+  synchronisée et blocs de texte éditables.
+- **À droite : révision.** Résumé, vérification, sources, notes, tags et
+  publication ; ces éléments accompagnent l'édition, ils ne doivent pas
+  concurrencer le texte.
+- **Identité visuelle.** Thème sombre permanent, surfaces discrètes et accent
+  violet réservé à la progression, au bloc actif et aux actions principales.
+  Les états de confiance, avertissement et erreur conservent leur couleur
+  sémantique.
+- **Navigation média.** La timeline est une forme d'onde décorative avec une
+  progression lumineuse, un curseur précis et des repères de blocs. Le clic
+  sur un horodatage ou la timeline garde la synchronisation texte / média.
+
+Les fonctionnalités, raccourcis clavier, données locales et APIs existantes
+restent prioritaires sur tout changement esthétique.
 
 ## Démarrer
 
@@ -76,6 +103,10 @@ exécutable autonome : `dist/Transcription/Transcription.exe`.
   « Ouvrir », « Voir les logs » et « Quitter ».
 - Les logs et les données (`data/`) vivent dans
   `%LOCALAPPDATA%\Transcription`, pas dans le dossier de l'exe.
+- Les réglages et clés API vivent dans
+  `%LOCALAPPDATA%\Transcription\config.json`. La base des transcriptions,
+  les médias et les jetons Google sont au même endroit : reconstruire ou
+  remplacer l'exécutable ne les modifie jamais.
 - Relancer l'exe pendant qu'il tourne déjà rouvre simplement le navigateur
   sur l'instance existante, plutôt que d'en démarrer une seconde.
 
@@ -780,7 +811,11 @@ tourne en quelques secondes.
 | `app/notebooklm_sync.py` | Compilation du Doc maître Google après publication, pour NotebookLM |
 | `app/exporters.py` | txt, md, json, fiche Obsidian et version éditoriale canonique |
 | `app/db.py` | Historique SQLite |
-| `app/static/` | Interface |
+| `app/static/` | Interface Verbatim : shell sombre, éditeur, timeline et panneaux de révision |
+| `app/desktop.py` | Démarrage Windows : serveur local, navigateur et icône de barre système |
+| `app/updates.py` | Vérification, téléchargement et remplacement différé d'une version Windows publiée |
+| `app/build_info.py` | Identifiant de build injecté par GitHub Actions dans l'exécutable |
+| `.github/workflows/windows-build.yml` | Build Windows, artefact téléchargeable et release `latest` pour l'auto-update |
 | `handler.py`, `Dockerfile` | Worker RunPod Serverless |
 | `pod_server.py` | Même calcul que `handler.py`, exposé en HTTP pour le pod RunPod |
 
@@ -804,14 +839,13 @@ POST /api/jobs/{id}/notebooklm-sync           synchronisation Google Docs / Note
 POST /api/jobs/{id}/cancel, /retry            interruption ou reprise
 GET  /api/jobs/{id}/download/{fmt}            export txt, md, json ou aperçu Obsidian
 GET/POST /api/lexicon                         consultation et ajout au lexique
+GET/POST /api/update                          vérification puis application d'une mise à jour Windows
 ```
 
 ## Ce qui n'est pas fait
 
 - **Traitement par lot côté GPU.** Les tronçons partent chez RunPod l'un après
   l'autre. Les envoyer par paquets réduirait encore la facture.
-- **Exécutable autonome.** Il faut Python sur la machine ; le lanceur s'occupe
-  du reste. Un empaquetage PyInstaller ou Tauri reste à faire.
 - **Repérage des locuteurs.** Un seul orateur est supposé, ce qui convient à un
   cours magistral mais pas à une table ronde.
 - **Acceptation des propositions de lexique dans l'interface.** Un terme
