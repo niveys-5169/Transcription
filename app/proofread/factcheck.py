@@ -25,7 +25,8 @@ définitive.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+import uuid
+from dataclasses import asdict, dataclass, field
 
 from .. import config as config_module
 from ..lexicon import lookup as lexicon_lookup
@@ -52,6 +53,11 @@ CLAIM_TYPES = (
     "reference_juridique",
     "date",
 )
+
+# Catégories où une correction seule coûte cher si elle se trompe : même à
+# confiance haute, elles passent par une validation manuelle plutôt que
+# d'être appliquées seules (voir apply_verdicts).
+SENSITIVE_CLAIM_TYPES = frozenset({"reference_juridique", "statistique", "date"})
 
 CLAIMS_SCHEMA = {
     "type": "array",
@@ -120,16 +126,41 @@ class Verdict:
 
 
 @dataclass
+class PendingCorrection:
+    """Correction proposée par le fact-check, en attente d'une validation
+    humaine explicite — soit trop incertaine (confiance moyenne ou basse),
+    soit trop sensible (catégorie de ``SENSITIVE_CLAIM_TYPES``) pour être
+    appliquée seule. Voir ``accept_pending``/``reject_pending``.
+    """
+
+    id: str
+    claim_type: str
+    citation: str
+    proposition: str
+    marker: str
+    explication: str = ""
+    sources: list[Source] = field(default_factory=list)
+    confiance: str = "basse"
+    start: float = 0.0
+    status: str = "attente"  # attente | validee | rejetee
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+@dataclass
 class FactCheckReport:
     claims_checked: int = 0
     corrections: int = 0
     findings: list[Finding] = field(default_factory=list)
+    pending: list[PendingCorrection] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
             "claims_checked": self.claims_checked,
             "corrections": self.corrections,
             "findings": [f.to_dict() for f in self.findings],
+            "pending": [p.to_dict() for p in self.pending],
         }
 
 
@@ -340,6 +371,8 @@ _VERDICT_LABELS = {
     "corrige": "correction proposée mais non retenue (confiance insuffisante)",
 }
 
+_PENDING_LABEL = "correction proposée : en attente de validation manuelle"
+
 
 def _verdict_label(verdict: Verdict) -> str:
     if verdict.origine == "quota":
@@ -365,22 +398,30 @@ def _entity_from_verdict(verdict: Verdict) -> dict:
 
 def apply_verdicts(
     clean_text: str, verdicts: list[Verdict], *, duration: float = 0.0
-) -> tuple[str, list[Finding], list[dict]]:
+) -> tuple[str, list[Finding], list[dict], list[PendingCorrection]]:
     """Applique les verdicts au texte relu.
 
-    Une correction n'est appliquée QUE si verdict == "corrige", confiance
-    == "haute" et au moins une source : une substitution exacte, faite ici,
-    jamais par le modèle. Tout le reste laisse le texte transcrit intact et
-    ajoute un appel de note — l'incertitude reste visible dans le texte,
-    plutôt que lissée en une version fluide et faussement définitive.
+    Une correction n'est appliquée seule QUE si verdict == "corrige",
+    confiance == "haute", au moins une source, et que la catégorie n'est pas
+    sensible (``SENSITIVE_CLAIM_TYPES``) : une substitution exacte, faite
+    ici, jamais par le modèle. Une correction qui a une proposition et des
+    sources mais ne remplit pas ces conditions (confiance moindre, ou
+    catégorie sensible même à confiance haute) n'est pas non plus perdue :
+    elle attend une validation humaine explicite (voir
+    ``accept_pending``/``reject_pending``). Tout le reste laisse le texte
+    transcrit intact et ajoute un appel de note — l'incertitude reste
+    visible dans le texte, plutôt que lissée en une version fluide et
+    faussement définitive.
 
     Renvoie (texte annoté, points à vérifier pour le rapport de
-    vérification, entités confirmées pour le second brain).
+    vérification, entités confirmées pour le second brain, corrections en
+    attente de validation manuelle).
     """
     text = clean_text
     findings: list[Finding] = []
     footnotes: list[str] = []
     entities: list[dict] = []
+    pending: list[PendingCorrection] = []
     note_index = 0
 
     for verdict in verdicts:
@@ -399,12 +440,14 @@ def apply_verdicts(
             continue
         start_pos, end_pos = span
 
-        applied_correction = (
+        proposable = (
             verdict.verdict == "corrige"
-            and verdict.confiance == "haute"
             and bool(verdict.sources)
             and bool(verdict.forme_correcte.strip())
         )
+        sensible = verdict.claim.type in SENSITIVE_CLAIM_TYPES
+        applied_correction = proposable and verdict.confiance == "haute" and not sensible
+        awaiting_validation = proposable and not applied_correction
 
         note_index += 1
         marker = f"[^v{note_index}]"
@@ -415,13 +458,28 @@ def apply_verdicts(
             label = f"corrigé en **{verdict.forme_correcte}**"
         else:
             text = text[:end_pos] + marker + text[end_pos:]
-            label = _verdict_label(verdict)
+            label = _PENDING_LABEL if awaiting_validation else _verdict_label(verdict)
 
         footnote = f"{marker}: **« {citation} »** — {label}."
         if verdict.explication:
             footnote += f" {verdict.explication}"
         footnote += _sources_line(verdict.sources)
         footnotes.append(footnote)
+
+        if awaiting_validation:
+            pending.append(
+                PendingCorrection(
+                    id=uuid.uuid4().hex[:12],
+                    claim_type=verdict.claim.type,
+                    citation=citation,
+                    proposition=verdict.forme_correcte,
+                    marker=marker,
+                    explication=verdict.explication,
+                    sources=list(verdict.sources),
+                    confiance=verdict.confiance,
+                    start=verdict.claim.start * duration,
+                )
+            )
 
         if not applied_correction:
             severity = "haute" if verdict.verdict == "infirme" or verdict.confiance == "basse" else "moyenne"
@@ -443,7 +501,39 @@ def apply_verdicts(
     if footnotes:
         text = text.rstrip() + "\n\n" + "\n".join(footnotes) + "\n"
 
-    return text, findings, entities
+    return text, findings, entities, pending
+
+
+def accept_pending(clean_text: str, pending: PendingCorrection) -> str | None:
+    """Applique une correction en attente à ``clean_text``.
+
+    ``None`` si la citation ne s'y retrouve plus (le texte a changé depuis
+    la proposition) : à l'appelant de refuser l'action plutôt que de
+    deviner où l'appliquer.
+    """
+    span = _locate(clean_text, pending.citation)
+    if span is None:
+        return None
+    start_pos, end_pos = span
+    text = clean_text[:start_pos] + pending.proposition + clean_text[end_pos:]
+
+    ancienne = f"{pending.marker}: **« {pending.citation} »** — {_PENDING_LABEL}."
+    nouvelle = (
+        f"{pending.marker}: **« {pending.citation} »** — "
+        f"corrigé en **{pending.proposition}** (validé manuellement)."
+    )
+    return text.replace(ancienne, nouvelle, 1) if ancienne in text else text
+
+
+def reject_pending(clean_text: str, pending: PendingCorrection) -> str:
+    """Met à jour la note de bas de page d'une correction rejetée.
+
+    Le texte transcrit lui-même n'est pas modifié : seule la note change de
+    libellé, pour ne pas laisser croire qu'une validation reste en attente.
+    """
+    ancienne = f"{pending.marker}: **« {pending.citation} »** — {_PENDING_LABEL}."
+    nouvelle = f"{pending.marker}: **« {pending.citation} »** — proposition rejetée après relecture."
+    return clean_text.replace(ancienne, nouvelle, 1) if ancienne in clean_text else clean_text
 
 
 # --------------------------------------------------------- orchestration
@@ -482,14 +572,17 @@ def factcheck(
             )
         verdicts.append(verify_claim(claim, settings=settings))
 
-    text, findings, entities = apply_verdicts(clean_text, verdicts, duration=duration)
+    text, findings, entities, pending = apply_verdicts(clean_text, verdicts, duration=duration)
     corrections = sum(
         1
         for v in verdicts
-        if v.verdict == "corrige" and v.confiance == "haute" and v.sources
+        if v.verdict == "corrige"
+        and v.confiance == "haute"
+        and v.sources
+        and v.claim.type not in SENSITIVE_CLAIM_TYPES
     )
     report = FactCheckReport(
-        claims_checked=len(claims), corrections=corrections, findings=findings
+        claims_checked=len(claims), corrections=corrections, findings=findings, pending=pending
     )
 
     if on_progress:

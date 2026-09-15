@@ -15,6 +15,7 @@ from fastapi.staticfiles import StaticFiles
 
 from . import __version__, config, db, exporters, lexicon, media, obsidian, pipeline
 from .engines import availability as engine_availability
+from .proofread import factcheck as factcheck_module
 from .proofread.claude import ClaudeProofreader
 
 logger = logging.getLogger(__name__)
@@ -361,6 +362,75 @@ async def factcheck_job(job_id: str) -> dict:
     )
     pipeline.enqueue(job_id, pipeline.TASK_FACTCHECK)
     return _decorate(db.get_job(job_id, with_content=False))
+
+
+def _find_pending(job: dict, correction_id: str) -> tuple[dict, dict]:
+    """Le rapport de fact-check du travail, et la correction en attente visée.
+
+    Lève une HTTPException si le travail n'a pas de rapport, ou si la
+    correction n'y figure pas — un ``correction_id`` obsolète (déjà traité
+    ailleurs, ou d'un autre travail) doit être signalé, pas deviné.
+    """
+    report = job.get("factcheck_report")
+    if not isinstance(report, dict):
+        raise HTTPException(409, "Ce travail n'a pas de vérification par recherche web.")
+    for item in report.get("pending") or []:
+        if item.get("id") == correction_id:
+            return report, item
+    raise HTTPException(404, "Correction introuvable.")
+
+
+@app.post("/api/jobs/{job_id}/corrections/{correction_id}/valider")
+async def valider_correction(job_id: str, correction_id: str) -> dict:
+    """Applique une correction du fact-check laissée en attente de validation.
+
+    Ces corrections (confiance insuffisante, ou catégorie sensible même à
+    confiance haute — voir ``factcheck.SENSITIVE_CLAIM_TYPES``) ne sont
+    jamais appliquées seules : cette route est la décision humaine qui
+    manquait.
+    """
+    job = db.get_job(job_id)
+    if job is None:
+        raise HTTPException(404, "Travail introuvable.")
+    report, item = _find_pending(job, correction_id)
+    if item.get("status") != "attente":
+        raise HTTPException(409, "Cette correction a déjà été traitée.")
+
+    correction = factcheck_module.PendingCorrection(**item)
+    nouveau_texte = factcheck_module.accept_pending(job.get("clean_text") or "", correction)
+    if nouveau_texte is None:
+        raise HTTPException(
+            409,
+            "Cette citation ne se retrouve plus dans le texte relu actuel : "
+            "corrigez-la manuellement si nécessaire.",
+        )
+
+    item["status"] = "validee"
+    report["corrections"] = int(report.get("corrections") or 0) + 1
+    db.update_job(job_id, clean_text=nouveau_texte, factcheck_report=report)
+    return _decorate(db.get_job(job_id))
+
+
+@app.post("/api/jobs/{job_id}/corrections/{correction_id}/rejeter")
+async def rejeter_correction(job_id: str, correction_id: str) -> dict:
+    """Rejette une correction du fact-check laissée en attente de validation.
+
+    Le texte relu n'est pas modifié : seule la note de bas de page change de
+    libellé, pour ne pas laisser croire qu'une validation reste en attente.
+    """
+    job = db.get_job(job_id)
+    if job is None:
+        raise HTTPException(404, "Travail introuvable.")
+    report, item = _find_pending(job, correction_id)
+    if item.get("status") != "attente":
+        raise HTTPException(409, "Cette correction a déjà été traitée.")
+
+    correction = factcheck_module.PendingCorrection(**item)
+    nouveau_texte = factcheck_module.reject_pending(job.get("clean_text") or "", correction)
+
+    item["status"] = "rejetee"
+    db.update_job(job_id, clean_text=nouveau_texte, factcheck_report=report)
+    return _decorate(db.get_job(job_id))
 
 
 @app.post("/api/jobs/{job_id}/publish")
