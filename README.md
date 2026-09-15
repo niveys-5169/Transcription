@@ -1,7 +1,7 @@
 # Transcription de cours
 
 Application locale qui transforme l'enregistrement d'un cours — vidéo ou
-audio — en une **fiche vérifiée, prête à citer, publiée dans Obsidian**.
+audio — en une **transcription révisée, vérifiée et publiable dans Obsidian**.
 
 On dépose le fichier, on clique une fois, et l'application enchaîne quatre
 étapes : extraction audio, transcription, relecture, puis vérification par
@@ -9,12 +9,14 @@ recherche web des noms propres, titres de rapport, statistiques et
 références juridiques cités — pas une simple relecture de plausibilité. Ce
 qui n'a pas pu être confirmé reste visible dans le texte, avec un appel de
 note : rien n'est lissé en une version fluide mais faussement définitive.
-Le résultat est publié dans un coffre Obsidian, avec ses fiches d'entités et
-son glossaire.
+L'utilisateur relit ensuite les blocs synchronisés au média, annote les
+passages à revoir, puis publie le résultat dans un coffre Obsidian avec ses
+fiches d'entités et son glossaire. Une publication peut enfin mettre à jour
+un unique document Google Docs, source de NotebookLM.
 
 Tout tourne sur votre machine. Rien n'est envoyé sur Internet, sauf si vous
-activez explicitement le GPU RunPod, ou la relecture et la vérification par
-Claude — sur votre abonnement (recommandé) ou par clé API, voir
+activez explicitement le GPU RunPod, la relecture et la vérification par
+Claude, ou la synchronisation Google Docs — voir
 [Accès à Claude](#accès-à-claude--cli-ou-clé-api).
 
 ```
@@ -25,8 +27,8 @@ Claude — sur votre abonnement (recommandé) ou par clé API, voir
   │n'importe  │ Whisper  │+segments │ fidélité  │vérification  │Claude│ Obsidian │
   │quel format│          │datés     │           │web (fait)    │      │          │
   └───────────┘          └──────────┘           └──────────────┘      └──────────┘
-  .txt .srt .vtt .json    .md, .json enrichis     appels de note       fiche + entités
-  déjà téléchargeables    des points à vérifier    sur l'incertain      + glossaire MOC
+  blocs horodatés         version IA + édition     appels de note       Obsidian → Google Docs
+  immuables               humaine canonique        sur l'incertain      → NotebookLM
 ```
 
 **Les quatre étapes sont indépendantes.** Chacune part de ce que la
@@ -59,8 +61,44 @@ python -m venv .venv
 ```
 
 Options : `--port 9000`, `--host 0.0.0.0` (accès depuis le réseau local),
-`--no-browser`, `--reload` (développement).
+`--no-browser`, `--reload` (développement). Si le port demandé est occupé,
+le lanceur choisit automatiquement le premier port libre suivant et affiche
+l'URL réellement utilisée.
 </details>
+
+## Réviser une transcription
+
+L'interface est organisée en trois panneaux : la **bibliothèque** à gauche,
+l'**éditeur synchronisé** au centre et l'**analyse / publication** à droite.
+Sur petit écran, ces panneaux deviennent des vues repliables qui donnent la
+priorité à l'éditeur.
+
+- Le lecteur essaie d'abord la vidéo source, puis bascule automatiquement sur
+  le WAV extrait. Il propose lecture/pause, sauts de 5 secondes, vitesses,
+  timeline et repères de blocs.
+- Cliquer un horodatage positionne le lecteur ; le bloc en cours est suivi
+  visuellement. Un bloc se modifie en ligne : `Échap` annule et
+  `Ctrl/Cmd+Entrée` enregistre.
+- Les segments peu fiables peuvent être teintés discrètement lorsque le
+  moteur fournit une confiance. La teinte disparaît après une correction
+  humaine et ne change jamais le texte ni ses exports.
+- Une recherche locale met les correspondances en évidence ; la recherche de
+  bibliothèque ouvre directement le travail et son horodatage. Les listes
+  très longues sont rendues par lots de 250 blocs.
+- Notes, surlignages et états « à vérifier / validé / ignoré » sont liés à un
+  bloc et persistent dans SQLite. Les tags de bibliothèque restent locaux au
+  navigateur.
+- Un travail peut être annulé, puis repris depuis le fichier d'origine ; les
+  actions impossibles ou déjà en cours restent explicitement désactivées.
+
+La transcription brute et ses segments ne sont jamais réécrits. Dès qu'un
+bloc est corrigé, la version des blocs devient la source utilisée par TXT,
+Markdown, JSON, Obsidian et Google Docs.
+
+Le détail de la livraison est conservé dans les
+[hand-offs des phases 4 et 5](docs/PHASE4_HANDOFF.md),
+[la recette de la phase 6](docs/RECETTE_PHASE6.md) et le
+[plan réalisé](docs/PLAN.md).
 
 ## Pourquoi des étapes séparées
 
@@ -91,8 +129,8 @@ Aucune de ces étapes n'a de raison de se produire au même moment que les
 autres. Les séparer donne plusieurs choses :
 
 - **Le texte brut arrive tout de suite** et ne dépend de rien d'autre. Pas de
-  clé, pas de réseau, pas d'attente supplémentaire. Sous-titres et segments
-  horodatés sont téléchargeables dès la fin de l'étape 1.
+  clé, pas de réseau, pas d'attente supplémentaire. Les segments horodatés
+  restent conservés, immuables, pour être comparés à la version éditée.
 - **Chaque étape suivante se rejoue, seule.** Pas satisfait du découpage ?
   Envie d'essayer sans les intertitres, avec un effort plus élevé, ou de
   relancer seulement la vérification web sur un texte relu à la main
@@ -103,7 +141,7 @@ autres. Les séparer donne plusieurs choses :
   précédent, ce qu'il avait déjà produit reste là, et le bouton de l'étape
   concernée attend.
 
-Concrètement : le bouton **« Tout faire »** enchaîne les quatre étapes avec
+Concrètement : le bouton **« Importer et transcrire »** enchaîne les quatre étapes avec
 les réglages par défaut. Dans les options avancées, décocher une étape
 arrête la chaîne à la précédente — transcrire seulement, ou s'arrêter après
 la relecture, ou vérifier sans publier.
@@ -165,7 +203,7 @@ n'est jamais perdu.**
 Une relecture réussie est invisible — c'est bien le problème. Rien ne
 distingue, à la lecture, un texte fidèle d'un texte où une date a changé ou
 une phrase a disparu. Chaque passage est donc comparé à sa version brute, et
-ce qui cloche est listé dans l'onglet **Vérification**, horodaté.
+ce qui cloche est listé dans le panneau **Vérification**, horodaté.
 
 Deux niveaux, complémentaires :
 
@@ -193,7 +231,7 @@ approximativement le temps de la relecture, puisqu'elle relit les deux
 versions.
 
 Une vérification automatique reste une aide, pas une garantie. Sur un passage
-décisif, l'audio fait foi — l'onglet segments et le lecteur intégré sont là
+décisif, l'audio fait foi — les blocs horodatés et le lecteur synchronisé sont là
 pour ça.
 
 ## La vérification externe (recherche web)
@@ -239,8 +277,8 @@ plutôt que lissée en une version fluide mais faussement définitive — utile
 pour n'importe quel usage, indispensable si le document doit servir de
 référence citable.
 
-Les points non confirmés partent aussi dans l'onglet **Sources**, distinct
-de l'onglet **Vérification** (fidélité). Un [lexique du domaine](#le-lexique-mjpm)
+Les points non confirmés partent aussi dans le panneau **Sources**, distinct
+du panneau **Vérification** (fidélité). Un [lexique du domaine](#le-lexique-mjpm)
 répond sans recherche pour les termes déjà vérifiés. Décochable au dépôt : le
 coût n'est pas un critère de conception ici, mais un cours d'une heure fait
 un appel par affirmation repérée, et l'abonnement Claude a ses propres
@@ -303,21 +341,20 @@ Les dossiers par défaut (`Formation/Transcriptions`, `Formation/MJPM/…`)
 sont des conjectures, tous modifiables dans les réglages — la première
 publication dira si la convention tombe juste pour votre coffre.
 
-## NotebookLM : un Doc maître sur Drive
+## NotebookLM : un Doc maître Google
 
-Un cinquième point de sortie, indépendant du coffre Obsidian : à chaque fin
-de chaîne (dès la relecture si rien ne suit, sinon la vérification web,
-sinon la publication), l'application écrit un `.md` par cours dans
-`data/cours/` puis compile **tous** les cours relus dans **un seul** Google
-Doc, dont le contenu est intégralement remplacé — jamais un nouveau
-document, jamais un ajout au précédent. NotebookLM sait resynchroniser
-automatiquement les sources Google Docs/Sheets/Slides posées dans Drive :
-une fois ce Doc ajouté comme source, il reste à jour tout seul, sans rien
-recoller à la main à chaque nouveau cours.
+La synchronisation NotebookLM intervient **après une publication Obsidian
+réussie**. La version éditoriale canonique est alors régénérée dans
+`data/cours/`, puis tous les cours sont compilés dans **un seul** Google Doc,
+dont le contenu est intégralement remplacé — jamais un nouveau document,
+jamais un ajout au précédent. Ce Doc peut être ajouté une fois comme source
+dans NotebookLM ; Google et NotebookLM en assurent ensuite la mise à jour.
 
-Vide (`NOTEBOOKLM_SYNC_ENABLED` non activé), cette étape reste inactive —
-comme le coffre Obsidian, tout le reste de l'application fonctionne
-normalement sans Drive configuré, et la suite de tests ne fait aucun appel
+Dans l'interface, l'état est explicite : non configuré, à synchroniser,
+synchronisé ou en erreur. Le bouton **Synchroniser NotebookLM** permet de
+relancer cette dernière étape sans republier le cours. Sans
+`NOTEBOOKLM_SYNC_ENABLED`, elle reste inactive : tout le reste de
+l'application fonctionne localement et la suite de tests ne fait aucun appel
 réseau.
 
 **Mise en place, une fois :**
@@ -345,10 +382,10 @@ réseau.
    est vide : `python -m app.notebooklm_sync --rebuild` le régénère depuis
    la base, sans appel réseau. `--dry-run` imprime la compilation sur la
    sortie standard pour la relire avant de l'envoyer.
-5. Activez la synchronisation automatique
-   (`NOTEBOOKLM_SYNC_ENABLED=true`, ou le réglage équivalent dans
-   `data/config.json`), puis lancez un cours normalement — ou
-   `python -m app.notebooklm_sync --sync` pour pousser tout de suite.
+5. Activez la synchronisation (`NOTEBOOKLM_SYNC_ENABLED=true`, ou le réglage
+   équivalent dans `data/config.json`). Après chaque publication Obsidian
+   réussie, le Doc est mis à jour ; le bouton de l'interface ou
+   `python -m app.notebooklm_sync --sync` permettent aussi une relance.
 6. Dans NotebookLM : **Ajouter une source → Google Drive**, choisissez le
    Doc — **une seule fois**. La resynchronisation se fait ensuite du côté de
    NotebookLM, à son propre rythme.
@@ -359,9 +396,9 @@ la navigation s'y fait par le volet « Plan du document », alimenté par les
 titres de section. Ces liens restent utiles si le Markdown est lu tel quel
 (aperçu, `--dry-run`).
 
-Un incident Drive (réseau, jeton expiré, bibliothèques absentes) est
-journalisé et n'interrompt jamais le reste du pipeline — les étapes 2 à 4
-se terminent normalement même si la synchronisation Drive échoue.
+Un incident Google Drive (réseau, jeton expiré, bibliothèques absentes) est
+journalisé et affiché comme une erreur de synchronisation. Il n'annule pas la
+publication Obsidian déjà effectuée et peut être repris séparément.
 
 ## Réglages
 
@@ -384,23 +421,24 @@ Les clés et certains réglages peuvent aussi venir de l'environnement
 
 | Format | Contenu | Dispo dès l'étape 1 |
 |---|---|---|
-| `.txt` | Le texte relu — ou le texte brut s'il n'a pas encore été relu | oui |
-| `.srt` / `.vtt` | Sous-titres horodatés | oui |
-| `.json` | Tout : texte relu, texte brut, segments, vérification, fact-check, métadonnées | oui |
-| `.md` | Document complet : titre, résumé, intertitres, points à vérifier | oui |
-| Fiche Obsidian | La fiche telle qu'elle serait écrite dans le coffre — frontmatter, encart, notes de bas de page | oui (aperçu) |
+| `.txt` | Texte de travail, relu ou brut selon l'avancement | oui |
+| `.md` | Version éditoriale : titre, résumé, intertitres et points à vérifier | oui |
+| `.json` | Données complètes : texte brut, blocs, annotations, vérifications et métadonnées | oui |
+| Fiche Obsidian | Aperçu de la note à publier : frontmatter, encart et notes de bas de page | oui |
+| Note Obsidian | Fiche, entités, MOC et glossaire écrits dans le coffre choisi | après publication |
+| Doc maître Google | Compilation destinée à NotebookLM | après publication et synchronisation |
 
-L'onglet **Audio extrait** rejoue le WAV réellement envoyé au moteur. S'il est
-muet, le problème vient de l'extraction et non de la transcription — c'est la
-première chose à vérifier quand un résultat est vide.
+Le lecteur utilise la vidéo source lorsqu'elle est exploitable, sinon le WAV
+extrait réellement envoyé au moteur. Si aucun média n'est disponible, l'état
+est signalé au lieu de laisser un lecteur muet.
 
 Les transcriptions restent dans une base SQLite locale (`data/transcription.db`)
 et la barre de recherche fouille dans leur contenu. Déposer plusieurs fichiers
 d'un coup les met en file : ils sont traités l'un après l'autre.
 
-Chaque cours relu reçoit aussi un `.md` dans `data/cours/`, régénéré à
-chaque fin de chaîne — la matière première de la compilation NotebookLM (voir
-plus haut), indépendante du coffre Obsidian.
+Chaque cours dispose aussi d'un `.md` dans `data/cours/`, régénéré depuis la
+version éditoriale. Après publication, il devient la matière première du Doc
+maître NotebookLM décrit plus haut.
 
 ## Ce qui a changé depuis le prototype HTML
 
@@ -419,10 +457,10 @@ maintenant fait par ffmpeg, côté serveur.
 | Relecture | — | Étape séparée, relançable sans refaire le calcul |
 | Plusieurs fichiers | Un par un, à la main | File d'attente |
 | Historique | Aucun | Base locale avec recherche |
-| Sorties | `.txt` | `.txt` `.md` `.srt` `.vtt` `.json` |
+| Sorties | `.txt` | `.txt`, `.md`, `.json`, aperçu et publication Obsidian |
 | Cours d'une heure sur RunPod | Impossible (limite de 10 Mo par appel) | Découpage sur les silences |
 | Clés API | `localStorage`, en clair | Fichier local en permissions restreintes |
-| Tests | Scripts ponctuels | 234 tests automatisés |
+| Tests | Scripts ponctuels | 325 tests automatisés |
 
 ### Bugs du prototype, et comment ils ont disparu
 
@@ -699,7 +737,7 @@ tourne en quelques secondes.
 |---|---|
 | `run.py` | Point d'entrée |
 | `app/server.py` | API HTTP et page unique |
-| `app/pipeline.py` | Les quatre étapes : transcription, relecture, vérification externe, publication |
+| `app/pipeline.py` | Transcription, relecture, vérifications, publication et synchronisation |
 | `app/media.py` | ffmpeg, découpage sur les silences |
 | `app/engines/` | Moteurs de transcription (local, RunPod serverless, RunPod pod) |
 | `app/proofread/backends/` | Accès à Claude : CLI (abonnement) ou API (clé) |
@@ -708,8 +746,8 @@ tourne en quelques secondes.
 | `app/proofread/factcheck.py` | Vérification externe : recherche web, affirmation par affirmation |
 | `app/lexicon/` | Lexique MJPM : amorçage Whisper, résolution sans recherche, glossaire |
 | `app/obsidian/` | Publication : fiche, fiches d'entités, MOC, glossaire |
-| `app/notebooklm_sync.py` | Compilation des cours relus en un Doc maître Google Drive, pour NotebookLM |
-| `app/exporters.py` | txt, md, srt, vtt, json, fiche Obsidian |
+| `app/notebooklm_sync.py` | Compilation du Doc maître Google après publication, pour NotebookLM |
+| `app/exporters.py` | txt, md, json, fiche Obsidian et version éditoriale canonique |
 | `app/db.py` | Historique SQLite |
 | `app/static/` | Interface |
 | `handler.py`, `Dockerfile` | Worker RunPod Serverless |
@@ -720,16 +758,21 @@ Ajouter un moteur : implémenter le protocole de `app/engines/base.py`
 `app/engines/__init__.py`. Un moteur ne voit que de l'audio et ne rend que des
 segments — la relecture n'est pas son affaire.
 
-Les quatre étapes exposées par l'API :
+Les principaux points d'entrée de l'API :
 
 ```
-POST /api/jobs                    dépose un fichier et lance l'étape 1
-                                   (one_click=true : chaîne les quatre étapes)
-POST /api/jobs/{id}/proofread     lance ou relance l'étape 2, seule
-POST /api/jobs/{id}/factcheck     lance ou relance l'étape 3, seule
-POST /api/jobs/{id}/publish       lance ou relance l'étape 4, seule
-POST /api/jobs/{id}/retry         relance l'étape 1 depuis le fichier d'origine
-GET/POST /api/lexicon             consulte le lexique, accepte un ajout
+POST /api/jobs                              dépose un fichier et lance la transcription
+GET  /api/jobs, /api/jobs/{id}, /api/search  historique, détail et recherche globale
+GET  /api/jobs/{id}/media                    média source, sans exposer de chemin local
+GET/PUT /api/jobs/{id}/review-blocks         lecture et édition des blocs horodatés
+GET/POST/PATCH/DELETE /api/jobs/{id}/annotations  annotations persistées
+POST /api/jobs/{id}/proofread                 relecture et vérification de fidélité
+POST /api/jobs/{id}/factcheck                 vérification externe
+POST /api/jobs/{id}/publish                   publication Obsidian
+POST /api/jobs/{id}/notebooklm-sync           synchronisation Google Docs / NotebookLM
+POST /api/jobs/{id}/cancel, /retry            interruption ou reprise
+GET  /api/jobs/{id}/download/{fmt}            export txt, md, json ou aperçu Obsidian
+GET/POST /api/lexicon                         consultation et ajout au lexique
 ```
 
 ## Ce qui n'est pas fait

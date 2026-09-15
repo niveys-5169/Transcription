@@ -49,6 +49,19 @@ def port_is_taken(host: str, port: int) -> bool:
         return sock.connect_ex((probe_host, port)) == 0
 
 
+def find_available_port(host: str, requested_port: int) -> int:
+    """Retourne le premier port disponible à partir de ``requested_port``.
+
+    Le port par défaut peut être utilisé par une autre instance locale. Dans
+    ce cas, démarrer sur le port suivant évite d'imposer à l'utilisateur une
+    relance manuelle avec ``--port``.
+    """
+    for port in range(requested_port, 65536):
+        if not port_is_taken(host, port):
+            return port
+    raise OSError(f"Aucun port libre entre {requested_port} et 65535.")
+
+
 def open_browser_later(url: str, delay: float = 1.5) -> None:
     def opener() -> None:
         time.sleep(delay)
@@ -89,20 +102,20 @@ def main() -> int:
             file=sys.stderr,
         )
 
-    display_host = "127.0.0.1" if args.host in {"0.0.0.0", "::"} else args.host
-    url = f"http://{display_host}:{args.port}"
-
-    if port_is_taken(args.host, args.port):
+    try:
+        selected_port = find_available_port(args.host, args.port)
+    except OSError as exc:
         print(
-            f"\nLe port {args.port} est déjà utilisé.\n"
-            f"L'application tourne peut-être déjà : essayez d'abord d'ouvrir\n"
-            f"    {url}\n"
-            f"dans votre navigateur. Sinon, relancez sur un autre port :\n"
-            f"    lancer.bat --port {args.port + 1}   (Windows)\n"
-            f"    ./lancer.sh --port {args.port + 1}  (macOS/Linux)\n",
+            f"\nLe serveur n'a pas pu trouver de port libre : {exc}\n",
             file=sys.stderr,
         )
         return 1
+
+    if selected_port != args.port:
+        print(f"\nLe port {args.port} est déjà utilisé ; démarrage sur le premier port libre : {selected_port}.")
+    args.port = selected_port
+    display_host = "127.0.0.1" if args.host in {"0.0.0.0", "::"} else args.host
+    url = f"http://{display_host}:{args.port}"
 
     print(f"\n  Transcription de cours  →  {url}")
     print("  (Ctrl+C pour arrêter)\n")
