@@ -259,6 +259,23 @@ function isProofread(job) {
   return ["done", "checked", "published"].includes(job.status);
 }
 
+const PUBLICATION_FLAGS = {
+  publie: "Publié dans Obsidian",
+  pret: "Prêt à publier",
+};
+
+function jobFlags(job) {
+  const flags = [];
+  if (job.pending_review_count) {
+    flags.push(`<span class="flag flag-review">${job.pending_review_count} à vérifier</span>`);
+  }
+  const pubLabel = PUBLICATION_FLAGS[job.publication_status];
+  if (pubLabel) {
+    flags.push(`<span class="flag flag-pub-${job.publication_status}">${pubLabel}</span>`);
+  }
+  return flags.join("");
+}
+
 function renderJobs() {
   const list = $("job-list");
   const jobs = state.jobs;
@@ -275,9 +292,13 @@ function renderJobs() {
         </div>
         <div class="job-meta">
           <span class="job-stage">${escapeHtml(statusLabel(job))}</span>
+          <span class="job-date">${escapeHtml(humanDate(job.created_at))}</span>
+        </div>
+        <div class="job-meta">
           <span class="badge ${job.status}">${
             job.duration ? clock(job.duration) : humanSize(job.size_bytes)
           }</span>
+          ${jobFlags(job)}
         </div>
         ${showBar ? `<div class="bar"><span style="width:${percent}%"></span></div>` : ""}
       </li>`;
@@ -330,7 +351,14 @@ function listenEvents() {
 
 async function selectJob(jobId, keepTab = false) {
   state.selected = jobId;
-  if (!keepTab) state.tab = "clean";
+  if (!keepTab) {
+    state.tab = "clean";
+    // Sur petit écran, choisir un travail bascule vers le panneau éditeur —
+    // mais seulement pour une vraie sélection : un rafraîchissement de fond
+    // (keepTab, déclenché par le SSE quand un statut change) ne doit pas
+    // arracher l'utilisateur du panneau qu'il est en train de lire.
+    document.querySelector('.shell-tab[data-shell="workspace"]')?.click();
+  }
   renderJobs();
   try {
     state.detail = await api(`/api/jobs/${jobId}`);
@@ -710,7 +738,9 @@ function showTab(name) {
   document.querySelectorAll(".tab").forEach((tab) =>
     tab.classList.toggle("is-active", tab.dataset.tab === name)
   );
-  ["clean", "raw", "segments", "verify", "sources", "audio"].forEach((key) => {
+  // Vérification et sources sont désormais des sections permanentes du
+  // panneau « Analyse » (colonne de droite), pas des onglets du centre.
+  ["clean", "raw", "segments"].forEach((key) => {
     $(`panel-${key}`).hidden = key !== name;
   });
 }
@@ -951,6 +981,26 @@ async function saveSettings() {
   }
 }
 
+/* --------------------------------------------------- panneaux (mobile) */
+
+// Sur grand écran les trois colonnes (bibliothèque / éditeur / analyse)
+// sont visibles ensemble ; sur petit écran, un panneau à la fois — voir
+// .shell-tabs en CSS, masquée au-delà du point de rupture desktop.
+function initShellTabs() {
+  const tabs = Array.from(document.querySelectorAll(".shell-tab"));
+  const panels = Array.from(document.querySelectorAll("[data-shell-panel]"));
+
+  function activate(name) {
+    tabs.forEach((tab) => tab.classList.toggle("is-active", tab.dataset.shell === name));
+    panels.forEach((panel) =>
+      panel.classList.toggle("is-shell-active", panel.dataset.shellPanel === name)
+    );
+  }
+
+  tabs.forEach((tab) => tab.addEventListener("click", () => activate(tab.dataset.shell)));
+  activate("workspace");
+}
+
 /* ------------------------------------------------------------- actions */
 
 function initActions() {
@@ -1112,6 +1162,7 @@ function initActions() {
 (async function main() {
   initDropzone();
   initActions();
+  initShellTabs();
   try {
     await loadStatus();
     await refreshJobs();

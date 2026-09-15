@@ -412,6 +412,26 @@ def delete_annotation(annotation_id: str) -> bool:
     return cursor.rowcount > 0
 
 
+def pending_annotation_counts(job_ids: Iterable[str]) -> dict[str, int]:
+    """Nombre d'annotations « à vérifier » par travail, pour les cartes de la
+    bibliothèque — une seule requête groupée plutôt qu'un aller-retour par
+    travail affiché."""
+    ids = list(dict.fromkeys(job_ids))
+    if not ids:
+        return {}
+    placeholders = ", ".join("?" for _ in ids)
+    with connect() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT job_id, COUNT(*) AS n FROM annotations
+            WHERE job_id IN ({placeholders}) AND status = 'a_verifier'
+            GROUP BY job_id
+            """,
+            ids,
+        ).fetchall()
+    return {row["job_id"]: row["n"] for row in rows}
+
+
 def search_transcripts(query: str, limit: int = 50) -> list[dict]:
     """Recherche avec extrait et horodatage quand un bloc éditable correspond."""
     needle = query.strip().casefold()

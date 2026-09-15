@@ -134,6 +134,31 @@ def test_recherche_globale_retourne_un_horodatage_de_bloc(client, tmp_path):
     assert "spécifique" in result["match_text"]
 
 
+def test_liste_des_travaux_expose_compteur_et_statut_de_publication(client, tmp_path):
+    job_id = _job(tmp_path)
+    client.get(f"/api/jobs/{job_id}/review-blocks")
+    client.post(
+        f"/api/jobs/{job_id}/annotations",
+        json={"block_id": "segment-1", "type": "review", "status": "a_verifier"},
+    )
+    client.post(
+        f"/api/jobs/{job_id}/annotations",
+        json={"block_id": "segment-2", "type": "note", "status": "valide"},
+    )
+
+    job = next(j for j in client.get("/api/jobs").json()["jobs"] if j["id"] == job_id)
+    assert job["pending_review_count"] == 1
+    assert job["publication_status"] == "non_disponible"
+
+    db.update_job(job_id, status="done", clean_text="Bonjour tout le monde.")
+    job = next(j for j in client.get("/api/jobs").json()["jobs"] if j["id"] == job_id)
+    assert job["publication_status"] == "pret"
+
+    db.update_job(job_id, obsidian_path="Formation/cours.md")
+    job = next(j for j in client.get("/api/jobs").json()["jobs"] if j["id"] == job_id)
+    assert job["publication_status"] == "publie"
+
+
 def test_media_source_est_servi_sans_divulguer_son_chemin(client, tmp_path):
     job_id = _job(tmp_path)
     response = client.get(f"/api/jobs/{job_id}/media")

@@ -14,7 +14,7 @@
     <span class="brand-mark" aria-hidden="true">🎓</span>
     <div>
       <h1>Transcription de cours</h1>
-      <p class="brand-sub">Déposez l'enregistrement, récupérez le texte relu.</p>
+      <p class="brand-sub">Bibliothèque, éditeur synchronisé et publication Obsidian.</p>
     </div>
   </div>
   <div class="topbar-actions">
@@ -23,119 +23,124 @@
   </div>
 </header>
 
-<main>
-  <!-- ------------------------------------------------ dépôt de fichier -->
-  <section class="panel">
-    <form id="upload-form">
-      <div id="dropzone" class="dropzone" tabindex="0" role="button"
-           aria-label="Déposer un fichier audio ou vidéo">
-        <div class="dropzone-icon" aria-hidden="true">⬆</div>
-        <p class="dropzone-title">Déposez la vidéo ou l'audio du cours</p>
-        <p class="dropzone-hint">
-          ou <span class="link">choisissez un fichier</span> —
-          mp4, mkv, mov, mp3, m4a, wav, ogg… jusqu'à plusieurs heures
-        </p>
-        <input type="file" id="file-input" accept="audio/*,video/*,.mkv,.m4a,.opus" multiple hidden>
-      </div>
+<!-- Sur petit écran, les trois zones deviennent des panneaux repliables ;
+     priorité donnée à l'éditeur (voir shell-workspace plus bas). -->
+<nav class="shell-tabs" aria-label="Zones de l'application">
+  <button type="button" class="shell-tab" data-shell="library">Bibliothèque</button>
+  <button type="button" class="shell-tab is-active" data-shell="workspace">Éditeur</button>
+  <button type="button" class="shell-tab" data-shell="analysis">Analyse</button>
+</nav>
 
-      <div class="upload-actions upload-actions-main">
-        <p id="pending-files" class="pending"></p>
-        <button type="button" id="one-click-btn" class="btn btn-primary btn-big" disabled>
-          Tout faire
-        </button>
-      </div>
-      <p class="one-click-hint">
-        Extraction, transcription, relecture, vérification par recherche web
-        et publication dans Obsidian, à la suite — avec les réglages par
-        défaut. Pour ajuster un réglage pour ce dépôt précis :
-      </p>
+<div class="app-shell">
 
-      <details id="advanced-options">
-        <summary>Options avancées</summary>
-
-        <div class="options">
-          <label class="field">
-            <span>Moteur</span>
-            <select id="engine" name="engine"></select>
-            <small id="engine-detail"></small>
-          </label>
-
-          <label class="field">
-            <span>Modèle Whisper</span>
-            <select id="model" name="model"></select>
-            <small>large-v3 : le plus précis. tiny/base : pour un essai rapide.</small>
-          </label>
-
-          <label class="field">
-            <span>Langue</span>
-            <select id="language" name="language">
-              <option value="fr">Français</option>
-              <option value="en">Anglais</option>
-              <option value="es">Espagnol</option>
-              <option value="de">Allemand</option>
-              <option value="it">Italien</option>
-              <option value="">Détection automatique</option>
-            </select>
-            <small>Forcer la langue évite les faux départs sur les premières secondes.</small>
-          </label>
-
-          <label class="field">
-            <span>Relecture</span>
-            <select id="proofread" name="proofread">
-              <option value="claude">Complète (Claude)</option>
-              <option value="basic">Simple (hors ligne)</option>
-              <option value="none">Aucune</option>
-            </select>
-            <small id="proofread-detail"></small>
-          </label>
-
-          <label class="check">
-            <input type="checkbox" id="structure" checked>
-            <span>Ajouter un titre, un résumé et des intertitres</span>
-          </label>
-
-          <label class="check">
-            <input type="checkbox" id="verify" checked>
-            <span>Vérifier la fidélité au texte brut</span>
-          </label>
-
-          <label class="check">
-            <input type="checkbox" id="chain" checked>
-            <span>Relire dans la foulée <small>(sinon : transcrire seulement)</small></span>
-          </label>
-
-          <label class="check">
-            <input type="checkbox" id="factcheck" checked>
-            <span>Vérifier par recherche web <small>(noms propres, rapports, statistiques)</small></span>
-          </label>
-
-          <label class="check">
-            <input type="checkbox" id="publish" checked>
-            <span>Publier la fiche dans Obsidian <small>(si un coffre est configuré)</small></span>
-          </label>
+  <!-- ============================================================ gauche -->
+  <aside class="shell-col shell-library" id="shell-library" data-shell-panel="library">
+    <section class="panel import-panel">
+      <form id="upload-form">
+        <div id="dropzone" class="dropzone" tabindex="0" role="button"
+             aria-label="Déposer un fichier audio ou vidéo">
+          <div class="dropzone-icon" aria-hidden="true">⬆</div>
+          <p class="dropzone-title">Importer un enregistrement</p>
+          <p class="dropzone-hint">
+            Déposez la vidéo ou l'audio, ou <span class="link">choisissez un fichier</span> —
+            mp4, mkv, mov, mp3, m4a, wav, ogg…
+          </p>
+          <input type="file" id="file-input" accept="audio/*,video/*,.mkv,.m4a,.opus" multiple hidden>
         </div>
 
-        <div class="upload-actions">
-          <span></span>
-          <button type="submit" id="submit-btn" class="btn btn-ghost" disabled>
-            Lancer avec ces réglages
+        <div class="upload-actions upload-actions-main">
+          <p id="pending-files" class="pending"></p>
+          <button type="button" id="one-click-btn" class="btn btn-primary btn-big" disabled>
+            Importer et transcrire
           </button>
         </div>
-      </details>
-    </form>
-  </section>
 
-  <!-- --------------------------------------------------- file + résultat -->
-  <section class="workspace">
-    <aside class="panel jobs">
+        <details id="advanced-options">
+          <summary>Moteur, modèle, RunPod, chaîne de traitement…</summary>
+
+          <div class="options">
+            <label class="field">
+              <span>Moteur</span>
+              <select id="engine" name="engine"></select>
+              <small id="engine-detail"></small>
+            </label>
+
+            <label class="field">
+              <span>Modèle Whisper</span>
+              <select id="model" name="model"></select>
+              <small>large-v3 : le plus précis. tiny/base : pour un essai rapide.</small>
+            </label>
+
+            <label class="field">
+              <span>Langue</span>
+              <select id="language" name="language">
+                <option value="fr">Français</option>
+                <option value="en">Anglais</option>
+                <option value="es">Espagnol</option>
+                <option value="de">Allemand</option>
+                <option value="it">Italien</option>
+                <option value="">Détection automatique</option>
+              </select>
+            </label>
+
+            <label class="field">
+              <span>Relecture</span>
+              <select id="proofread" name="proofread">
+                <option value="claude">Complète (Claude)</option>
+                <option value="basic">Simple (hors ligne)</option>
+                <option value="none">Aucune</option>
+              </select>
+              <small id="proofread-detail"></small>
+            </label>
+
+            <label class="check">
+              <input type="checkbox" id="structure" checked>
+              <span>Ajouter un titre, un résumé et des intertitres</span>
+            </label>
+
+            <label class="check">
+              <input type="checkbox" id="verify" checked>
+              <span>Vérifier la fidélité au texte brut</span>
+            </label>
+
+            <label class="check">
+              <input type="checkbox" id="chain" checked>
+              <span>Relire dans la foulée <small>(sinon : transcrire seulement)</small></span>
+            </label>
+
+            <label class="check">
+              <input type="checkbox" id="factcheck" checked>
+              <span>Vérifier par recherche web <small>(noms propres, rapports, statistiques)</small></span>
+            </label>
+
+            <label class="check">
+              <input type="checkbox" id="publish" checked>
+              <span>Publier la fiche dans Obsidian <small>(si un coffre est configuré)</small></span>
+            </label>
+          </div>
+
+          <div class="upload-actions">
+            <span></span>
+            <button type="submit" id="submit-btn" class="btn btn-ghost" disabled>
+              Lancer avec ces réglages
+            </button>
+          </div>
+        </details>
+      </form>
+    </section>
+
+    <section class="panel jobs-panel">
       <div class="jobs-head">
-        <h2>Transcriptions</h2>
+        <h2>Bibliothèque</h2>
         <input type="search" id="search" placeholder="Rechercher…" aria-label="Rechercher dans les transcriptions">
       </div>
       <ul id="job-list" class="job-list"></ul>
       <p id="jobs-empty" class="empty">Aucune transcription pour l'instant.</p>
-    </aside>
+    </section>
+  </aside>
 
+  <!-- ============================================================ centre -->
+  <main class="shell-col shell-workspace" id="shell-workspace" data-shell-panel="workspace">
     <article class="panel result" id="result">
       <div class="empty-state" id="result-empty">
         <p class="empty-state-icon" aria-hidden="true">📄</p>
@@ -149,14 +154,6 @@
             <p id="result-meta" class="meta"></p>
           </div>
           <div class="result-tools">
-            <a class="btn btn-ghost" id="obsidian-link" href="#" hidden>Ouvrir dans Obsidian</a>
-            <button type="button" class="btn btn-ghost" id="publish-btn" hidden>Publier</button>
-            <button type="button" class="btn btn-ghost" id="factcheck-btn" hidden>
-              Vérifier par recherche web
-            </button>
-            <button type="button" class="btn btn-primary" id="proofread-btn" hidden>
-              Relire avec Claude
-            </button>
             <button type="button" class="btn btn-ghost" id="copy-btn">Copier</button>
             <div class="menu">
               <button type="button" class="btn btn-ghost" id="download-btn" aria-haspopup="true">
@@ -165,8 +162,6 @@
               <div class="menu-items" id="download-menu" hidden>
                 <a data-fmt="txt">Texte relu (.txt)</a>
                 <a data-fmt="md">Document complet (.md)</a>
-                <a data-fmt="srt">Sous-titres (.srt)</a>
-                <a data-fmt="vtt">Sous-titres (.vtt)</a>
                 <a data-fmt="json">Tout, structuré (.json)</a>
                 <a data-fmt="obsidian">Fiche Obsidian (.md)</a>
               </div>
@@ -177,40 +172,79 @@
 
         <div id="result-error" class="banner banner-error" hidden></div>
 
-        <div id="result-summary" class="summary" hidden>
-          <h3>En bref</h3>
-          <ul id="summary-list"></ul>
+        <!-- Zone stable : lecteur média. La vidéo source (phase suivante)
+             prendra le pas sur ce lecteur audio quand le navigateur peut la
+             lire ; sinon on reste sur le WAV extrait, déjà fonctionnel. -->
+        <div class="player-zone" id="player-zone">
+          <video id="media-player" class="media-player" playsinline preload="none" hidden></video>
+          <audio id="audio-player" controls preload="none"></audio>
+          <!-- Barre de progression interactive avec repères de blocs : phase 3. -->
+          <div class="timeline-zone" id="timeline-zone" hidden aria-hidden="true"></div>
         </div>
 
         <div class="tabs" role="tablist">
           <button type="button" class="tab is-active" data-tab="clean" role="tab">Texte relu</button>
           <button type="button" class="tab" data-tab="raw" role="tab">Texte brut</button>
           <button type="button" class="tab" data-tab="segments" role="tab">Segments horodatés</button>
-          <button type="button" class="tab" data-tab="verify" role="tab">
-            Vérification <span id="verify-count" class="tab-badge" hidden></span>
-          </button>
-          <button type="button" class="tab" data-tab="sources" role="tab">
-            Sources <span id="sources-count" class="tab-badge" hidden></span>
-          </button>
-          <button type="button" class="tab" data-tab="audio" role="tab">Audio extrait</button>
         </div>
 
         <div class="tab-panel" id="panel-clean"></div>
         <div class="tab-panel" id="panel-raw" hidden></div>
         <div class="tab-panel" id="panel-segments" hidden></div>
-        <div class="tab-panel" id="panel-verify" hidden></div>
-        <div class="tab-panel" id="panel-sources" hidden></div>
-        <div class="tab-panel" id="panel-audio" hidden>
-          <p class="meta">
-            Le WAV 16 kHz mono effectivement envoyé au moteur. S'il est muet,
-            le problème vient de l'extraction, pas de la transcription.
-          </p>
-          <audio id="audio-player" controls preload="none"></audio>
-        </div>
+
+        <!-- Zones stables : blocs de révision éditables et comparaison avec
+             la version IA (phase 3). -->
+        <div class="blocks-zone" id="blocks-zone" hidden></div>
+        <div class="comparison-zone" id="comparison-zone" hidden></div>
       </div>
     </article>
-  </section>
-</main>
+  </main>
+
+  <!-- ============================================================ droite -->
+  <aside class="shell-col shell-analysis" id="shell-analysis" data-shell-panel="analysis">
+    <section class="panel analysis-panel">
+      <div id="result-summary" class="summary" hidden>
+        <h3>En bref</h3>
+        <ul id="summary-list"></ul>
+      </div>
+
+      <section class="analysis-section">
+        <h3>Vérification de fidélité <span id="verify-count" class="tab-badge" hidden></span></h3>
+        <div id="panel-verify"></div>
+      </section>
+
+      <section class="analysis-section">
+        <h3>Sources <span id="sources-count" class="tab-badge" hidden></span></h3>
+        <div id="panel-sources"></div>
+      </section>
+
+      <!-- Zone stable : notes et surlignages du bloc actif (phase 4). -->
+      <section class="analysis-section" id="annotations-zone">
+        <h3>Notes du bloc actif</h3>
+        <p class="empty">Arrivent avec l'éditeur synchronisé, à l'étape suivante.</p>
+      </section>
+
+      <section class="analysis-section" id="publish-zone">
+        <h3>Publication</h3>
+        <div class="publish-actions">
+          <button type="button" class="btn btn-primary" id="proofread-btn" hidden>
+            Relire avec Claude
+          </button>
+          <button type="button" class="btn btn-ghost" id="factcheck-btn" hidden>
+            Vérifier par recherche web
+          </button>
+          <button type="button" class="btn btn-ghost" id="publish-btn" hidden>Publier dans Obsidian</button>
+          <a class="btn btn-ghost" id="obsidian-link" href="#" hidden>Ouvrir dans Obsidian</a>
+          <!-- Synchronisation NotebookLM : phase 5, zone réservée ici. -->
+          <button type="button" class="btn btn-ghost" id="notebooklm-btn" disabled
+                  title="Disponible après une publication Obsidian réussie (à venir)">
+            Synchroniser NotebookLM
+          </button>
+        </div>
+      </section>
+    </section>
+  </aside>
+</div>
 
 <!-- ---------------------------------------------------------- réglages -->
 <dialog id="settings-dialog">
