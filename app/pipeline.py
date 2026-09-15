@@ -47,6 +47,7 @@ TASK_TRANSCRIPTION = "transcription"
 TASK_PROOFREAD = "relecture"
 TASK_FACTCHECK = "verification_web"
 TASK_PUBLISH = "publication"
+TASK_NOTEBOOKLM = "synchronisation_notebooklm"
 
 # Poids de chaque phase dans la barre de progression, par étape.
 EXTRACTION_SHARE = 0.15
@@ -210,7 +211,7 @@ def _export_course_markdown(job_id: str) -> Path | None:
         return None
 
 
-def _sync_notebooklm() -> None:
+def _sync_notebooklm() -> bool:
     """Pousse la compilation de data/cours/ vers le Doc maître Drive.
 
     Étape non bloquante, comme la publication Obsidian : ``sync_master_doc``
@@ -221,9 +222,26 @@ def _sync_notebooklm() -> None:
     try:
         from . import notebooklm_sync
 
-        notebooklm_sync.sync_master_doc(config.COURSES_DIR)
+        return notebooklm_sync.sync_master_doc(config.COURSES_DIR)
     except Exception:  # pragma: no cover - garde-fou ultime
         logger.exception("Synchronisation NotebookLM en échec de façon inattendue.")
+        return False
+
+
+def _record_notebooklm_result(job_id: str, success: bool) -> None:
+    """Mémorise un résultat de sync sans modifier l'état Obsidian du travail."""
+    if success:
+        db.update_job(
+            job_id, notebooklm_status="synchronise", notebooklm_synced_at=db.now(),
+            notebooklm_error=None,
+        )
+    else:
+        db.update_job(
+            job_id, notebooklm_status="erreur", notebooklm_error=(
+                "La mise à jour du Doc maître a échoué. Vérifiez les identifiants Google "
+                "et la connexion, puis réessayez."
+            ),
+        )
 
 
 # ------------------------------------------------------ étape 1 : transcription
@@ -446,13 +464,11 @@ def run_proofread(job_id: str) -> None:
         elif job.get("publish", True):
             enqueue(job_id, TASK_PUBLISH)
         else:
-            # Rien ne suit : la relecture est la dernière étape de cette
-            # chaîne, c'est donc elle qui exporte et synchronise.
+            # Rien ne suit : le Markdown intermédiaire reste disponible,
+            # mais Google ne reçoit rien avant une publication Obsidian.
             _export_course_markdown(job_id)
-            _sync_notebooklm()
     else:
         _export_course_markdown(job_id)
-        _sync_notebooklm()
 
 
 def _proofread(job: dict, segments: list[dict], *, on_progress, should_cancel):
@@ -591,8 +607,6 @@ def run_factcheck(job_id: str) -> None:
     _export_course_markdown(job_id)
     if job.get("chain", True) and job.get("publish", True):
         enqueue(job_id, TASK_PUBLISH)
-    else:
-        _sync_notebooklm()
 
 
 def _merge_verification(existing, new_findings: list) -> dict:
@@ -676,6 +690,10 @@ def run_publish(job_id: str) -> None:
         progress(0.2, "Écriture de la fiche…")
         settings = config.load_settings()
         relative_path = obsidian.publish(job, settings=settings)
+        # Le statut « publié » ne doit devenir visible qu'une fois son
+        # Markdown intermédiaire disponible. Cela évite une course entre
+        # l'interface (ou une synchronisation) et l'export du cours.
+        _export_course_markdown(job_id)
 
         db.mark_finished(
             job_id,
@@ -684,6 +702,7 @@ def run_publish(job_id: str) -> None:
             progress=1.0,
             task=None,
             obsidian_path=relative_path,
+            obsidian_published_at=db.now(),
         )
         final_status = "published"
 
@@ -716,9 +735,42 @@ def run_publish(job_id: str) -> None:
     # ou 3 : un échec de publication Obsidian n'a aucune raison d'empêcher le
     # cours d'arriver dans le Doc maître NotebookLM. Seule l'annulation
     # explicite du travail le retient.
-    if final_status and final_status != "canceled":
-        _export_course_markdown(job_id)
-        _sync_notebooklm()
+    # Google ne passe qu'après une publication Obsidian effectivement
+    # réussie ; un échec du coffre ne peut donc jamais créer un état de
+    # synchronisation trompeur.
+    if final_status == "published":
+        sync_requested = config.load_settings().notebooklm_sync_enabled
+        synced = _sync_notebooklm()
+        if sync_requested:
+            _record_notebooklm_result(job_id, synced)
+
+
+def run_notebooklm_sync(job_id: str) -> None:
+    """Met à jour le même Doc maître sans défaire une publication Obsidian."""
+    job = db.get_job(job_id, with_content=False)
+    if job is None:
+        return
+    if not job.get("obsidian_path"):
+        db.update_job(
+            job_id, task=None, notebooklm_status="erreur",
+            notebooklm_error="Publiez d’abord cette transcription dans Obsidian.",
+        )
+        return
+
+    progress = _Progress(job_id)
+    progress(0.2, "Synchronisation du Doc maître NotebookLM…")
+    _export_course_markdown(job_id)
+    success = _sync_notebooklm()
+    if success:
+        db.update_job(
+            job_id, task=None, stage="Publié — synchronisé NotebookLM", progress=1.0,
+        )
+    else:
+        db.update_job(
+            job_id, task=None, stage="Publié — synchronisation NotebookLM en échec", progress=1.0,
+        )
+    _record_notebooklm_result(job_id, success)
+    _release(job_id)
 
 
 _RUNNERS.update(
@@ -727,5 +779,6 @@ _RUNNERS.update(
         TASK_PROOFREAD: run_proofread,
         TASK_FACTCHECK: run_factcheck,
         TASK_PUBLISH: run_publish,
+        TASK_NOTEBOOKLM: run_notebooklm_sync,
     }
 )

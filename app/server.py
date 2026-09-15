@@ -59,6 +59,7 @@ async def status() -> dict:
     claude_ok, claude_detail = proofreader.is_available()
     ffmpeg_ok = media.ffmpeg_available()
     obsidian_ok, obsidian_detail = _obsidian_status(settings)
+    notebooklm_ok, notebooklm_detail = _notebooklm_status(settings)
 
     return {
         "version": __version__,
@@ -74,6 +75,7 @@ async def status() -> dict:
         "engines": engine_availability(),
         "proofread": {"claude": {"available": claude_ok, "detail": claude_detail}},
         "obsidian": {"available": obsidian_ok, "detail": obsidian_detail},
+        "notebooklm": {"available": notebooklm_ok, "detail": notebooklm_detail},
         "models": config.WHISPER_MODELS,
         "settings": settings.public_dict(),
     }
@@ -87,6 +89,14 @@ def _obsidian_status(settings) -> tuple[bool, str]:
     except obsidian.ObsidianError as exc:
         return False, str(exc)
     return True, f"Coffre trouvé : {settings.obsidian_vault_path}"
+
+
+def _notebooklm_status(settings) -> tuple[bool, str]:
+    if not settings.notebooklm_sync_enabled:
+        return False, "Synchronisation NotebookLM non configurée."
+    if not settings.notebooklm_master_doc_id:
+        return False, "Doc maître Google non configuré (lancez l’initialisation une fois)."
+    return True, "Doc maître Google prêt à synchroniser."
 
 
 @app.get("/api/settings")
@@ -569,6 +579,32 @@ async def publish_job(job_id: str) -> dict:
         error=None,
     )
     pipeline.enqueue(job_id, pipeline.TASK_PUBLISH)
+    return _decorate(db.get_job(job_id, with_content=False))
+
+
+@app.post("/api/jobs/{job_id}/notebooklm-sync")
+async def sync_notebooklm_job(job_id: str) -> dict:
+    """Synchronise le Doc maître après une publication Obsidian réussie."""
+    job = db.get_job(job_id, with_content=False)
+    if job is None:
+        raise HTTPException(404, "Travail introuvable.")
+    if job["status"] == "running":
+        raise HTTPException(409, "Ce travail est déjà en cours.")
+    if not job.get("obsidian_path"):
+        raise HTTPException(409, "Publiez d’abord cette transcription dans Obsidian.")
+    available, detail = _notebooklm_status(config.load_settings())
+    if not available:
+        raise HTTPException(409, detail)
+
+    db.update_job(
+        job_id,
+        task=pipeline.TASK_NOTEBOOKLM,
+        stage="Synchronisation NotebookLM en attente",
+        progress=0.0,
+        notebooklm_status="en_cours",
+        notebooklm_error=None,
+    )
+    pipeline.enqueue(job_id, pipeline.TASK_NOTEBOOKLM)
     return _decorate(db.get_job(job_id, with_content=False))
 
 

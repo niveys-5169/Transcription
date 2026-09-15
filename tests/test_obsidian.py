@@ -86,6 +86,19 @@ def test_republier_reecrit_la_meme_fiche_sans_duplication(vault, settings):
     assert len(fiches) == 1
 
 
+def test_fiche_obsidian_utilise_les_blocs_corriges_sans_toucher_au_brut(vault, settings):
+    j = job(
+        clean_text="Version IA.", raw_text="Texte brut intact.",
+        segments=[{"text": "Version IA."}],
+        review_blocks=[{"id": "segment-1", "text": "Version humaine."}],
+    )
+    relative = obsidian.publish(j, settings=settings)
+    content = (vault / relative).read_text(encoding="utf-8")
+    assert "Version humaine." in content
+    assert "Texte brut intact." not in content
+    assert j["raw_text"] == "Texte brut intact."
+
+
 def test_encart_warning_si_points_incertains(vault, settings):
     j = job(
         verification={

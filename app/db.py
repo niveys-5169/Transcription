@@ -76,6 +76,10 @@ MIGRATIONS = {
     "entities": "TEXT",
     "obsidian_path": "TEXT",
     "review_blocks": "TEXT",
+    "obsidian_published_at": "TEXT",
+    "notebooklm_status": "TEXT DEFAULT 'non_configure'",
+    "notebooklm_synced_at": "TEXT",
+    "notebooklm_error": "TEXT",
 }
 
 # Colonnes lourdes, exclues des listes (une transcription d'une heure fait
@@ -114,13 +118,19 @@ STATUSES = (
 LIST_COLUMNS = (
     "id, filename, media_path, wav_path, size_bytes, duration, engine, model, "
     "language, proofread, structure, verify, chain, factcheck, publish, task, "
-    "status, stage, progress, title, summary, error, obsidian_path, "
+    "status, stage, progress, title, summary, error, obsidian_path, obsidian_published_at, "
+    "notebooklm_status, notebooklm_synced_at, notebooklm_error, "
     "created_at, updated_at, finished_at"
 )
 
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def now() -> str:
+    """Horodatage UTC commun aux statuts de publication."""
+    return _now()
 
 
 def connect(db_path: Path | None = None) -> sqlite3.Connection:

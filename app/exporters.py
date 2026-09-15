@@ -23,6 +23,26 @@ DOWNLOAD_EXTENSIONS = {**{fmt: fmt for fmt in EXTENSIONS}, "obsidian": "md"}
 _UNSAFE = re.compile(r"[^\w\- ]+", re.UNICODE)
 
 
+def editorial_text(job: dict) -> str:
+    """Retourne la version éditoriale sans jamais modifier le texte brut.
+
+    Les blocs de révision ne deviennent canoniques qu'après une correction
+    humaine, repérée par comparaison avec le segment brut correspondant.
+    Sans correction, garder ``clean_text`` préserve la structure ajoutée par
+    la relecture (titre, intertitres et éventuelles notes de sources).
+    """
+    blocks = job.get("review_blocks") or []
+    segments = job.get("segments") or []
+    if blocks and (len(blocks) != len(segments) or any(
+        str(block.get("text") or "").strip()
+        != str(segments[index].get("text") or "").strip()
+        for index, block in enumerate(blocks)
+        if index < len(segments)
+    )):
+        return "\n\n".join(str(block.get("text") or "").strip() for block in blocks).strip()
+    return (job.get("clean_text") or job.get("raw_text") or "").strip()
+
+
 def timecode(seconds: float, separator: str = ",") -> str:
     """Horodatage ``HH:MM:SS,mmm`` (SRT) ou ``HH:MM:SS.mmm`` (WebVTT)."""
     seconds = max(0.0, float(seconds))
@@ -74,9 +94,10 @@ def to_json(job: dict) -> str:
         "relecture": job.get("proofread"),
         "titre": job.get("title"),
         "resume": _summary_list(job),
-        "texte_relu": job.get("clean_text"),
+        "texte_relu": editorial_text(job),
         "texte_brut": job.get("raw_text"),
         "segments": job.get("segments") or [],
+        "blocs_revision": job.get("review_blocks") or [],
         "verification": _verification(job),
     }
     return json.dumps(payload, ensure_ascii=False, indent=2)
@@ -115,7 +136,7 @@ def _summary_list(job: dict) -> list[str]:
 def render(job: dict, fmt: str) -> str:
     """Contenu du fichier à télécharger, pour le format demandé."""
     if fmt == "txt":
-        return (job.get("clean_text") or job.get("raw_text") or "").strip() + "\n"
+        return editorial_text(job) + "\n"
     if fmt == "md":
         return _markdown(job)
     if fmt == "srt":
@@ -140,7 +161,7 @@ def _markdown(job: dict) -> str:
     if summary:
         parts.append("## En bref\n\n" + "\n".join(f"- {point}" for point in summary))
 
-    body = (job.get("clean_text") or job.get("raw_text") or "").strip()
+    body = editorial_text(job)
     parts.append(body)
 
     points = findings(job)

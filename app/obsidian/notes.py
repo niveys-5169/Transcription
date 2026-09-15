@@ -43,7 +43,12 @@ def render_note(job: dict) -> str:
     if isinstance(summary, list) and summary:
         parts.append("## En bref\n\n" + "\n".join(f"- {point}" for point in summary))
 
-    body = (job.get("clean_text") or job.get("raw_text") or "").strip()
+    # Les corrections humaines des blocs prévalent sur la relecture IA. Le
+    # helper centralise la comparaison avec les segments bruts et ne modifie
+    # jamais ces derniers.
+    from ..exporters import editorial_text
+
+    body = editorial_text(job)
     if body:
         parts.append(body)
 

@@ -17,6 +17,12 @@ const state = {
   playerSource: null, // "video" | "audio" | null
   playerJobId: null,
   playerSpeed: 1,
+  annotations: [],
+  annotationsJobId: null,
+  editorMatches: [],
+  editorMatchIndex: -1,
+  globalResults: [],
+  blocksRenderLimit: 250,
 };
 
 /* ----------------------------------------------------------- utilitaires */
@@ -51,6 +57,15 @@ function humanDate(iso) {
   return Number.isNaN(date.getTime())
     ? ""
     : date.toLocaleString("fr-FR", { dateStyle: "medium", timeStyle: "short" });
+}
+
+function tagsForJob(jobId) {
+  try { return JSON.parse(localStorage.getItem(`transcription-tags:${jobId}`) || "[]"); }
+  catch (_) { return []; }
+}
+
+function saveTagsForJob(jobId, tags) {
+  localStorage.setItem(`transcription-tags:${jobId}`, JSON.stringify(tags));
 }
 
 let toastTimer;
@@ -127,6 +142,7 @@ async function loadStatus() {
   $("one-click-btn").title = obsidian.available
     ? ""
     : `Publication Obsidian désactivée : ${obsidian.detail}`;
+  $("notebooklm-btn").title = status.notebooklm?.detail || "Synchronisation NotebookLM non configurée.";
 
   const pills = [
     pill(status.ffmpeg.available, "Extraction audio", status.ffmpeg.detail),
@@ -285,7 +301,19 @@ function jobFlags(job) {
 
 function renderJobs() {
   const list = $("job-list");
-  const jobs = state.jobs;
+  const status = $("status-filter").value;
+  const date = $("date-filter").value;
+  const tag = $("tag-filter").value.trim().toLocaleLowerCase();
+  const now = Date.now();
+  const periods = { today: 1, week: 7, month: 30 };
+  const jobs = state.jobs.filter((job) => {
+    if (status && job.status !== status) return false;
+    if (date) {
+      const age = (now - new Date(job.created_at).getTime()) / 86400000;
+      if (!Number.isFinite(age) || age > periods[date]) return false;
+    }
+    return !tag || tagsForJob(job.id).some((item) => item.toLocaleLowerCase().includes(tag));
+  });
   $("jobs-empty").hidden = jobs.length > 0;
 
   list.innerHTML = jobs.map((job) => {
@@ -307,6 +335,7 @@ function renderJobs() {
           }</span>
           ${jobFlags(job)}
         </div>
+        ${tagsForJob(job.id).length ? `<div class="job-tags job-tags-compact">${tagsForJob(job.id).map((tag) => `<span class="tag">${escapeHtml(tag)}</span>`).join("")}</div>` : ""}
         ${showBar ? `<div class="bar"><span style="width:${percent}%"></span></div>` : ""}
       </li>`;
   }).join("");
@@ -360,6 +389,9 @@ async function selectJob(jobId, keepTab = false) {
   if (state.selected !== jobId) {
     state.editingBlockId = null;
     state.activeBlockId = null;
+    state.annotations = [];
+    state.annotationsJobId = null;
+    state.blocksRenderLimit = 250;
   }
   state.selected = jobId;
   if (!keepTab) {
@@ -422,6 +454,8 @@ function renderDetail() {
   const job = state.detail;
   $("result-empty").hidden = Boolean(job);
   $("result-body").hidden = !job;
+  $("tags-zone").hidden = !job;
+  $("publish-zone").hidden = !job;
   findingRegistry = [];
   if (!job) return;
 
@@ -432,12 +466,16 @@ function renderDetail() {
   errorBanner.hidden = !job.error;
   errorBanner.textContent = job.error || "";
 
+  $("cancel-btn").hidden = !["queued", "running"].includes(job.status);
+  $("retry-btn").hidden = !["error", "canceled"].includes(job.status);
+
   const summary = Array.isArray(job.summary) ? job.summary : [];
   $("result-summary").hidden = summary.length === 0;
   $("summary-list").innerHTML = summary.map((point) => `<li>${escapeHtml(point)}</li>`).join("");
 
   loadPlayerForJob(job);
   loadReviewBlocks(job);
+  loadAnnotations(job);
   renderComparisonPanel(job);
   $("blocks-zone").hidden = false;
 
@@ -448,18 +486,21 @@ function renderDetail() {
   // d'autres réglages, sur n'importe quel travail déjà à l'étape d'avant.
   const proofreadBtn = $("proofread-btn");
   proofreadBtn.hidden = !isReadable(job);
-  proofreadBtn.textContent = isProofread(job) ? "Relancer la relecture" : "Relire maintenant";
+  proofreadBtn.textContent = isProofread(job) ? "Relancer la relecture" : "Relire";
 
   const factcheckBtn = $("factcheck-btn");
   factcheckBtn.hidden = !isProofread(job);
-  factcheckBtn.textContent =
-    job.status === "checked" || job.status === "published"
-      ? "Revérifier par recherche web"
-      : "Vérifier par recherche web";
+  factcheckBtn.textContent = job.status === "checked" || job.status === "published" ? "Revérifier" : "Vérifier";
 
   const publishBtn = $("publish-btn");
   publishBtn.hidden = !isProofread(job);
-  publishBtn.textContent = job.status === "published" ? "Republier" : "Publier";
+  publishBtn.textContent = job.status === "published" ? "Republier dans Obsidian" : "Publier dans Obsidian";
+  [proofreadBtn, factcheckBtn, publishBtn].forEach((button) => button.classList.remove("btn-primary"));
+  [proofreadBtn, factcheckBtn, publishBtn].forEach((button) => button.classList.add("btn-ghost"));
+  const mainAction = !isProofread(job) ? proofreadBtn
+    : job.status === "done" ? factcheckBtn
+    : job.status === "published" ? $("notebooklm-btn") : publishBtn;
+  if (!mainAction.hidden) { mainAction.classList.remove("btn-ghost"); mainAction.classList.add("btn-primary"); }
 
   const obsidianLink = $("obsidian-link");
   if (job.obsidian_path && state.settings.obsidian_vault_path) {
@@ -472,6 +513,30 @@ function renderDetail() {
   } else {
     obsidianLink.hidden = true;
   }
+
+  const notebookButton = $("notebooklm-btn");
+  const notebookReady = Boolean(
+    state.settings.notebooklm_sync_enabled && state.settings.notebooklm_master_doc_id
+  );
+  const published = Boolean(job.obsidian_path);
+  notebookButton.disabled = !published || !notebookReady || job.notebooklm_status === "en_cours";
+  notebookButton.title = !published
+    ? "Disponible après une publication Obsidian réussie."
+    : !notebookReady
+      ? "Configurez le Doc maître Google dans les réglages."
+      : job.notebooklm_status === "en_cours"
+        ? "Synchronisation en cours…"
+        : "Met à jour le même Doc maître Google.";
+  const syncLabels = {
+    synchronise: "NotebookLM synchronisé",
+    en_cours: "Synchronisation NotebookLM en cours…",
+    erreur: job.notebooklm_error || "Synchronisation NotebookLM en erreur.",
+  };
+  $("publication-status").textContent = job.obsidian_path
+    ? `Obsidian publié${job.obsidian_published_at ? ` le ${humanDate(job.obsidian_published_at)}` : ""} · ${syncLabels[job.notebooklm_status] || (notebookReady ? "À synchroniser avec NotebookLM" : "NotebookLM non configuré")}`
+    : "Obsidian : prêt à publier.";
+
+  renderJobTags(job);
 
 }
 
@@ -724,6 +789,153 @@ function renderSources(job) {
   panel.innerHTML = entete + pendingSection + pointsSection;
 }
 
+/* ------------------------------------------------------- annotations */
+
+const ANNOTATION_STATUS_LABELS = {
+  a_verifier: "À vérifier", valide: "Validé", ignore: "Ignoré",
+};
+
+async function loadAnnotations(job) {
+  if (state.annotationsJobId === job.id) return;
+  try {
+    const data = await api(`/api/jobs/${job.id}/annotations`);
+    state.annotations = data.annotations || [];
+    state.annotationsJobId = job.id;
+  } catch (error) {
+    state.annotations = [];
+    state.annotationsJobId = job.id;
+    toast(error.message, true);
+  }
+  renderAnnotations();
+}
+
+function renderAnnotations() {
+  const active = state.blocks.find((block) => block.id === state.activeBlockId);
+  const composer = $("annotation-composer");
+  $("active-block-label").textContent = active
+    ? `Bloc actif — ${clock(active.start)}`
+    : "Sélectionnez un bloc dans la transcription.";
+  composer.hidden = !active;
+
+  const filter = $("annotation-filter").value;
+  const annotations = state.annotations.filter((item) => !filter || item.status === filter);
+  const list = $("annotation-list");
+  if (!annotations.length) {
+    list.innerHTML = `<p class="empty">Aucun élément${filter ? " dans cet état" : ""}.</p>`;
+    return;
+  }
+  list.innerHTML = annotations.map((item) => {
+    const block = state.blocks.find((candidate) => candidate.id === item.block_id);
+    const label = block ? clock(block.start) : "Bloc supprimé";
+    const content = item.content ? `<p>${escapeHtml(item.content)}</p>` : "";
+    const color = item.color ? ` annotation-highlight-${escapeHtml(item.color)}` : "";
+    return `<article class="annotation ${escapeHtml(item.type)}${color}" data-annotation-id="${item.id}">
+      <div class="annotation-head">
+        <button type="button" class="annotation-jump" data-annotation-action="jump" data-block-id="${escapeHtml(item.block_id)}">${label}</button>
+        <span class="badge">${escapeHtml(item.type === "review" ? "révision" : item.type === "highlight" ? "surlignage" : "note")}</span>
+      </div>
+      ${content}
+      <div class="annotation-actions">
+        <select data-annotation-action="status" aria-label="État de l’annotation">
+          ${Object.entries(ANNOTATION_STATUS_LABELS).map(([value, text]) => `<option value="${value}"${item.status === value ? " selected" : ""}>${text}</option>`).join("")}
+        </select>
+        <button type="button" class="btn btn-mini btn-danger-ghost" data-annotation-action="delete">Supprimer</button>
+      </div>
+    </article>`;
+  }).join("");
+}
+
+async function createAnnotation(kind, extra = {}) {
+  const job = state.detail;
+  if (!job || !state.activeBlockId) return;
+  try {
+    const item = await api(`/api/jobs/${job.id}/annotations`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ block_id: state.activeBlockId, type: kind, ...extra }),
+    });
+    state.annotations.push(item);
+    $("annotation-content").value = "";
+    renderAnnotations();
+    refreshJobs().catch(() => {});
+  } catch (error) { toast(error.message, true); }
+}
+
+async function updateAnnotation(annotationId, fields) {
+  const job = state.detail;
+  if (!job) return;
+  try {
+    const updated = await api(`/api/jobs/${job.id}/annotations/${annotationId}`, {
+      method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(fields),
+    });
+    state.annotations = state.annotations.map((item) => item.id === annotationId ? updated : item);
+    renderAnnotations();
+    refreshJobs().catch(() => {});
+  } catch (error) { toast(error.message, true); }
+}
+
+async function removeAnnotation(annotationId) {
+  const job = state.detail;
+  if (!job) return;
+  try {
+    await api(`/api/jobs/${job.id}/annotations/${annotationId}`, { method: "DELETE" });
+    state.annotations = state.annotations.filter((item) => item.id !== annotationId);
+    renderAnnotations();
+    refreshJobs().catch(() => {});
+  } catch (error) { toast(error.message, true); }
+}
+
+function renderJobTags(job) {
+  const tags = tagsForJob(job.id);
+  $("job-tags").innerHTML = tags.length
+    ? tags.map((tag) => `<button type="button" class="tag tag-remove" data-tag="${escapeHtml(tag)}" title="Retirer ${escapeHtml(tag)}">${escapeHtml(tag)} ×</button>`).join("")
+    : `<p class="meta">Visibles uniquement dans ce navigateur.</p>`;
+}
+
+function addJobTag() {
+  const job = state.detail;
+  const input = $("job-tag-input");
+  const tag = input.value.trim().replace(/\s+/g, " ");
+  if (!job || !tag) return;
+  const tags = tagsForJob(job.id);
+  if (!tags.some((item) => item.toLocaleLowerCase() === tag.toLocaleLowerCase())) {
+    saveTagsForJob(job.id, [...tags, tag]);
+  }
+  input.value = "";
+  renderJobTags(job);
+  renderJobs();
+}
+
+/* ------------------------------------------------ recherche dans l’éditeur */
+
+function editorQuery() { return $("editor-search-input").value.trim(); }
+
+function updateEditorMatches({ preserve = false } = {}) {
+  const query = editorQuery().toLocaleLowerCase();
+  const previousId = preserve && state.editorMatches[state.editorMatchIndex];
+  state.editorMatches = query ? state.blocks.filter((block) => block.text.toLocaleLowerCase().includes(query)).map((block) => block.id) : [];
+  state.editorMatchIndex = previousId ? state.editorMatches.indexOf(previousId) : -1;
+  if (state.editorMatchIndex < 0 && state.editorMatches.length) state.editorMatchIndex = 0;
+  $("editor-search-count").textContent = state.editorMatches.length
+    ? `${state.editorMatchIndex + 1}/${state.editorMatches.length}` : (query ? "0 résultat" : "");
+}
+
+function highlightEditorText(text) {
+  const query = editorQuery();
+  if (!query) return escapeHtml(text);
+  const expression = new RegExp(`(${query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})`, "gi");
+  return escapeHtml(text).replace(expression, "<mark class=\"editor-match\">$1</mark>");
+}
+
+function moveEditorMatch(direction) {
+  if (!state.editorMatches.length) return;
+  state.editorMatchIndex = (state.editorMatchIndex + direction + state.editorMatches.length) % state.editorMatches.length;
+  const blockId = state.editorMatches[state.editorMatchIndex];
+  updateEditorMatches({ preserve: true });
+  const node = document.querySelector(`.block[data-block-id="${blockId}"]`);
+  if (node) node.scrollIntoView({ block: "center", behavior: "smooth" });
+  seekToBlock(blockId);
+}
+
 // Les blocs de révision deviennent la sortie éditoriale canonique dès la
 // première modification humaine (docs/PLAN.md, phase 3) — comparaison
 // purement textuelle avec le segment brut de même index, sans flag serveur
@@ -764,6 +976,7 @@ function loadPlayerForJob(job) {
   video.pause();
   audio.hidden = true;
   video.hidden = false;
+  $("player-unavailable").hidden = true;
   video.src = `/api/jobs/${job.id}/media`;
   video.load();
   $("player-source-badge").textContent = "Vidéo source";
@@ -782,6 +995,13 @@ function fallbackToAudio(job) {
   audio.src = `/api/jobs/${job.id}/audio`;
   audio.load();
   $("player-source-badge").textContent = "Audio extrait (WAV)";
+  audio.onerror = () => {
+    audio.onerror = null;
+    audio.pause();
+    audio.hidden = true;
+    $("player-unavailable").hidden = false;
+    $("player-source-badge").textContent = "Média indisponible";
+  };
 }
 
 function playPause() {
@@ -967,6 +1187,7 @@ async function loadReviewBlocks(job) {
     const data = await api(`/api/jobs/${job.id}/review-blocks`);
     state.blocks = data.blocks || [];
     state.blocksJobId = job.id;
+    state.blocksRenderLimit = 250;
   } catch (error) {
     state.blocks = [];
     state.blocksJobId = job.id;
@@ -984,7 +1205,7 @@ function confidenceClass(score) {
 function renderBlockText(block, index, segments) {
   const edited = isBlockEdited(block, index, segments);
   const cls = edited ? "" : confidenceClass(block.confidence);
-  return `<p class="block-text ${cls}" data-action="edit">${escapeHtml(block.text)}${
+  return `<p class="block-text ${cls}" data-action="edit">${highlightEditorText(block.text)}${
     edited ? '<span class="block-edited-badge">modifié</span>' : ""
   }</p>`;
 }
@@ -993,11 +1214,13 @@ function renderBlocks() {
   const list = $("blocks-list");
   const job = state.detail;
   const segments = (job && job.segments) || [];
+  updateEditorMatches({ preserve: true });
 
   if (!state.blocks.length) {
     list.innerHTML = `<p class="empty">Aucun segment.</p>`;
   } else {
-    list.innerHTML = state.blocks.map((block, index) => {
+    const visible = state.blocks.slice(0, state.blocksRenderLimit);
+    list.innerHTML = visible.map((block, index) => {
       const isEditing = state.editingBlockId === block.id;
       const isActive = state.activeBlockId === block.id;
       const body = isEditing
@@ -1014,6 +1237,11 @@ function renderBlocks() {
       </div>`;
     }).join("");
   }
+
+  const more = $("blocks-more-btn");
+  const remaining = state.blocks.length - state.blocksRenderLimit;
+  more.hidden = remaining <= 0;
+  if (remaining > 0) more.textContent = `Afficher les ${Math.min(250, remaining)} blocs suivants (${remaining} restants)`;
 
   $("blocks-edited-flag").hidden = !anyBlockEdited();
 }
@@ -1039,6 +1267,11 @@ function updateActiveBlockFromTime() {
   const previous = state.activeBlockId && document.querySelector(`.block[data-block-id="${state.activeBlockId}"]`);
   if (previous) previous.classList.remove("is-active-block");
   state.activeBlockId = nextId;
+  const nextIndex = state.blocks.findIndex((block) => block.id === nextId);
+  if (nextIndex >= state.blocksRenderLimit) {
+    state.blocksRenderLimit = Math.ceil((nextIndex + 1) / 250) * 250;
+    renderBlocks();
+  }
   if (nextId) {
     const current = document.querySelector(`.block[data-block-id="${nextId}"]`);
     if (current) {
@@ -1046,14 +1279,17 @@ function updateActiveBlockFromTime() {
       current.scrollIntoView({ block: "nearest" });
     }
   }
+  renderAnnotations();
 }
 
 function startBlockEdit(blockId) {
   const block = state.blocks.find((b) => b.id === blockId);
   if (!block) return;
+  state.activeBlockId = blockId;
   state.editingBlockId = blockId;
   state.editingOriginalText = block.text;
   renderBlocks();
+  renderAnnotations();
   const textarea = document.querySelector(`.block-edit[data-id="${blockId}"]`);
   if (textarea) { textarea.focus(); textarea.setSelectionRange(textarea.value.length, textarea.value.length); }
 }
@@ -1104,7 +1340,13 @@ async function saveBlockEdit(blockId) {
 function initBlocksList() {
   $("blocks-list").addEventListener("click", (event) => {
     const seekTarget = event.target.closest('[data-action="seek"]');
-    if (seekTarget) { seekToBlock(seekTarget.dataset.id); return; }
+    if (seekTarget) {
+      state.activeBlockId = seekTarget.dataset.id;
+      renderBlocks();
+      renderAnnotations();
+      seekToBlock(seekTarget.dataset.id);
+      return;
+    }
 
     const editTarget = event.target.closest('[data-action="edit"]');
     if (editTarget) {
@@ -1119,6 +1361,35 @@ function initBlocksList() {
     const cancelTarget = event.target.closest('[data-action="cancel"]');
     if (cancelTarget) { cancelBlockEdit(); return; }
   });
+}
+
+/* -------------------------------------------------- recherche bibliothèque */
+
+function renderGlobalSearchResults() {
+  const zone = $("global-search-results");
+  const query = $("search").value.trim();
+  zone.hidden = !query;
+  if (!query) { zone.innerHTML = ""; return; }
+  if (!state.globalResults.length) {
+    zone.innerHTML = `<p class="empty">Aucun passage trouvé.</p>`;
+    return;
+  }
+  zone.innerHTML = `<p class="global-search-label">Passages trouvés</p>${state.globalResults.map((result) => `
+    <button type="button" class="global-search-result" data-job-id="${escapeHtml(result.job_id)}" data-start="${result.start ?? ""}">
+      <strong>${escapeHtml(result.title)}</strong>
+      <span>${escapeHtml(result.match_text)}</span>
+      <small>${result.match_count} occurrence${result.match_count > 1 ? "s" : ""}${result.start != null ? ` · ${clock(result.start)}` : ""}</small>
+    </button>`).join("")}`;
+}
+
+async function refreshGlobalSearch() {
+  const query = $("search").value.trim();
+  if (!query) { state.globalResults = []; renderGlobalSearchResults(); return; }
+  const data = await api(`/api/search?q=${encodeURIComponent(query)}`);
+  // Une réponse plus ancienne ne doit pas remplacer la requête en cours.
+  if (query !== $("search").value.trim()) return;
+  state.globalResults = data.results || [];
+  renderGlobalSearchResults();
 }
 
 /* --------------------------------------------------------- comparaison IA */
@@ -1433,7 +1704,10 @@ function initActions() {
     event.stopPropagation();
     menu.hidden = !menu.hidden;
   });
-  document.addEventListener("click", () => { menu.hidden = true; });
+  document.addEventListener("click", () => {
+    menu.hidden = true;
+    $("secondary-actions-menu").hidden = true;
+  });
   menu.querySelectorAll("a").forEach((item) =>
     item.addEventListener("click", () => {
       if (!state.detail) return;
@@ -1521,7 +1795,125 @@ function initActions() {
   let searchTimer;
   $("search").addEventListener("input", () => {
     clearTimeout(searchTimer);
-    searchTimer = setTimeout(() => refreshJobs().catch(() => {}), 250);
+    searchTimer = setTimeout(() => {
+      refreshJobs().catch(() => {});
+      refreshGlobalSearch().catch((error) => toast(error.message, true));
+    }, 250);
+  });
+
+  $("cancel-btn").addEventListener("click", async () => {
+    const job = state.detail;
+    if (!job) return;
+    const button = $("cancel-btn");
+    button.disabled = true;
+    try {
+      await api(`/api/jobs/${job.id}/cancel`, { method: "POST" });
+      toast("Annulation demandée.");
+      await refreshJobs();
+    } catch (error) {
+      toast(error.message, true);
+      button.disabled = false;
+    }
+  });
+
+  $("retry-btn").addEventListener("click", async () => {
+    const job = state.detail;
+    if (!job) return;
+    const button = $("retry-btn");
+    button.disabled = true;
+    try {
+      await api(`/api/jobs/${job.id}/retry`, { method: "POST" });
+      toast("Reprise lancée.");
+      await refreshJobs();
+    } catch (error) {
+      toast(error.message, true);
+      button.disabled = false;
+    }
+  });
+
+  $("notebooklm-btn").addEventListener("click", async () => {
+    const job = state.detail;
+    if (!job) return;
+    const button = $("notebooklm-btn");
+    button.disabled = true;
+    try {
+      await api(`/api/jobs/${job.id}/notebooklm-sync`, { method: "POST" });
+      toast("Synchronisation NotebookLM lancée.");
+      await refreshJobs();
+      await selectJob(job.id, true);
+    } catch (error) {
+      toast(error.message, true);
+      renderDetail();
+    }
+  });
+  ["status-filter", "date-filter", "tag-filter"].forEach((id) =>
+    $(id).addEventListener("input", renderJobs)
+  );
+
+  $("global-search-results").addEventListener("click", async (event) => {
+    const result = event.target.closest(".global-search-result");
+    if (!result) return;
+    await selectJob(result.dataset.jobId);
+    if (result.dataset.start !== "") seekTo(Number(result.dataset.start));
+  });
+
+  $("editor-search-input").addEventListener("input", () => { updateEditorMatches(); renderBlocks(); });
+  $("blocks-more-btn").addEventListener("click", () => {
+    state.blocksRenderLimit += 250;
+    renderBlocks();
+  });
+  $("editor-search-prev").addEventListener("click", () => moveEditorMatch(-1));
+  $("editor-search-next").addEventListener("click", () => moveEditorMatch(1));
+
+  $("add-note-btn").addEventListener("click", () => {
+    const content = $("annotation-content").value.trim();
+    if (!content) return toast("Écrivez une note avant de l’ajouter.", true);
+    createAnnotation("note", { content, status: "a_verifier" });
+  });
+  $("add-review-btn").addEventListener("click", () => createAnnotation("review", { status: "a_verifier" }));
+  document.querySelectorAll("[data-highlight-color]").forEach((button) =>
+    button.addEventListener("click", () => createAnnotation("highlight", {
+      color: button.dataset.highlightColor, status: "a_verifier",
+    }))
+  );
+  $("annotation-filter").addEventListener("change", renderAnnotations);
+  $("annotation-list").addEventListener("click", (event) => {
+    const action = event.target.dataset.annotationAction;
+    const card = event.target.closest("[data-annotation-id]");
+    if (!action || !card) return;
+    if (action === "jump") {
+      state.activeBlockId = event.target.dataset.blockId;
+      renderBlocks(); renderAnnotations(); seekToBlock(state.activeBlockId);
+    } else if (action === "delete") {
+      removeAnnotation(card.dataset.annotationId);
+    }
+  });
+  $("annotation-list").addEventListener("change", (event) => {
+    if (event.target.dataset.annotationAction !== "status") return;
+    const card = event.target.closest("[data-annotation-id]");
+    if (card) updateAnnotation(card.dataset.annotationId, { status: event.target.value });
+  });
+
+  $("add-job-tag-btn").addEventListener("click", addJobTag);
+  $("job-tag-input").addEventListener("keydown", (event) => {
+    if (event.key === "Enter") { event.preventDefault(); addJobTag(); }
+  });
+  $("job-tags").addEventListener("click", (event) => {
+    const button = event.target.closest("[data-tag]");
+    if (!button || !state.detail) return;
+    saveTagsForJob(state.detail.id, tagsForJob(state.detail.id).filter((tag) => tag !== button.dataset.tag));
+    renderJobTags(state.detail); renderJobs();
+  });
+
+  const secondaryMenu = $("secondary-actions-menu");
+  $("secondary-actions-btn").addEventListener("click", (event) => {
+    event.stopPropagation(); secondaryMenu.hidden = !secondaryMenu.hidden;
+  });
+  secondaryMenu.addEventListener("click", (event) => {
+    const action = event.target.dataset.secondaryAction;
+    if (action === "download") $("download-btn").click();
+    if (action === "delete") $("delete-btn").click();
+    secondaryMenu.hidden = true;
   });
 
   $("open-settings").addEventListener("click", openSettings);

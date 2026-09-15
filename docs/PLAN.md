@@ -77,6 +77,8 @@ L'outil conserve et met en avant son avantage spécifique par rapport à Sonix :
 
 ## Phase 4 — Révision, annotations et recherche globale — Claude
 
+**Statut : faite, voir `docs/PHASE4_HANDOFF.md`.**
+
 - Construire le panneau droit « Analyse » :
   - résumé ;
   - vérification de fidélité ;
@@ -94,6 +96,8 @@ L'outil conserve et met en avant son avantage spécifique par rapport à Sonix :
 **Handoff à Codex :** tous les états vide, chargement, erreur, petit écran et média indisponible sont vérifiés visuellement.
 
 ## Phase 5 — Obsidian et Google Docs / NotebookLM — Codex
+
+**Statut : faite, voir `docs/PHASE5_HANDOFF.md`.**
 
 - Refondre la sortie Obsidian autour de la transcription révisée :
   - générer le Markdown à partir des blocs humains, avec titre, résumé, tags, métadonnées, statut de vérification et liens vers les sources ;
@@ -118,6 +122,8 @@ L'outil conserve et met en avant son avantage spécifique par rapport à Sonix :
 - Ajouter les tests : contenu Obsidian venant des blocs révisés, absence de modification du texte brut, publication répétée sans doublon, échec Drive non bloquant, synchronisation du même document maître et indicateurs d'état corrects.
 
 ## Phase 6 — Intégration, robustesse et recette — Claude
+
+**Statut : faite, recette manuelle dans `docs/RECETTE_PHASE6.md`.**
 
 - Réconcilier les parcours : transcription seule, relecture relancée, vérification externe, édition manuelle, publication Obsidian, synchronisation Google Docs, annulation, reprise et suppression.
 - Vérifier que les modifications humaines ne détruisent ni transcription brute, ni rapport de vérification, ni sources, ni annotations.

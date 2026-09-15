@@ -36,6 +36,19 @@ def test_render_txt_prefere_le_texte_relu():
     assert exporters.render({"raw_text": "texte brut"}, "txt") == "texte brut\n"
 
 
+def test_exports_utilisent_les_blocs_humains_des_qu_ils_sont_corriges():
+    job = {
+        "raw_text": "brut", "clean_text": "Version IA.",
+        "segments": [{"text": "Version IA."}],
+        "review_blocks": [{"id": "segment-1", "text": "Version humaine."}],
+    }
+    assert exporters.render(job, "txt") == "Version humaine.\n"
+    assert "Version humaine." in exporters.render(job, "md")
+    payload = json.loads(exporters.render(job, "json"))
+    assert payload["texte_relu"] == "Version humaine."
+    assert payload["texte_brut"] == "brut"
+
+
 def test_render_md_contient_titre_resume_et_corps():
     job = {
         "filename": "cours.mp4",

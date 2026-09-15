@@ -133,7 +133,26 @@
       <div class="jobs-head">
         <h2>Bibliothèque</h2>
         <input type="search" id="search" placeholder="Rechercher…" aria-label="Rechercher dans les transcriptions">
+        <div class="library-filters" aria-label="Filtrer la bibliothèque">
+          <select id="status-filter" aria-label="Statut">
+            <option value="">Tous les statuts</option>
+            <option value="transcribed">À relire</option>
+            <option value="done">Relu</option>
+            <option value="checked">Vérifié</option>
+            <option value="published">Publié</option>
+            <option value="running">En cours</option>
+            <option value="error">En erreur</option>
+          </select>
+          <select id="date-filter" aria-label="Date">
+            <option value="">Toutes les dates</option>
+            <option value="today">Aujourd’hui</option>
+            <option value="week">7 derniers jours</option>
+            <option value="month">30 derniers jours</option>
+          </select>
+          <input type="search" id="tag-filter" placeholder="Tag local" aria-label="Filtrer par tag local">
+        </div>
       </div>
+      <div id="global-search-results" class="global-search-results" hidden aria-live="polite"></div>
       <ul id="job-list" class="job-list"></ul>
       <p id="jobs-empty" class="empty">Aucune transcription pour l'instant.</p>
     </section>
@@ -166,6 +185,8 @@
                 <a data-fmt="obsidian">Fiche Obsidian (.md)</a>
               </div>
             </div>
+            <button type="button" class="btn btn-ghost" id="cancel-btn" hidden>Annuler</button>
+            <button type="button" class="btn btn-ghost" id="retry-btn" hidden>Reprendre</button>
             <button type="button" class="btn btn-danger-ghost" id="delete-btn">Supprimer</button>
           </div>
         </div>
@@ -185,6 +206,9 @@
           <div class="player-body" id="player-body">
             <video id="media-player" class="media-player" playsinline preload="none" hidden></video>
             <audio id="audio-player" preload="none" hidden></audio>
+            <p id="player-unavailable" class="banner banner-error" hidden>
+              Aucun média lisible n’est disponible pour ce travail.
+            </p>
             <div class="timeline-zone" id="timeline-zone" tabindex="0"
                  role="slider" aria-label="Position de lecture"
                  aria-valuemin="0" aria-valuenow="0">
@@ -215,13 +239,21 @@
         <div class="blocks-zone" id="blocks-zone" hidden>
           <div class="blocks-header">
             <h3>Transcription</h3>
-            <input type="search" id="editor-search-input" class="editor-search-input"
-                   placeholder="Rechercher dans la transcription (bientôt disponible)" disabled>
+            <div class="editor-search">
+              <input type="search" id="editor-search-input" class="editor-search-input"
+                     placeholder="Rechercher dans la transcription" aria-label="Rechercher dans la transcription">
+              <button type="button" class="btn btn-mini btn-ghost" id="editor-search-prev" aria-label="Occurrence précédente">↑</button>
+              <button type="button" class="btn btn-mini btn-ghost" id="editor-search-next" aria-label="Occurrence suivante">↓</button>
+              <span id="editor-search-count" class="editor-search-count" aria-live="polite"></span>
+            </div>
             <span class="blocks-edited-flag" id="blocks-edited-flag" hidden>
               Version corrigée manuellement — sert désormais de référence
             </span>
           </div>
           <div class="blocks-list" id="blocks-list"></div>
+          <button type="button" class="btn btn-ghost blocks-more" id="blocks-more-btn" hidden>
+            Afficher les blocs suivants
+          </button>
         </div>
 
         <details class="comparison-zone" id="comparison-zone" hidden>
@@ -253,10 +285,42 @@
       <!-- Zone stable : notes et surlignages du bloc actif (phase 4). -->
       <section class="analysis-section" id="annotations-zone">
         <h3>Notes du bloc actif</h3>
-        <p class="empty">Arrivent avec l'éditeur synchronisé, à l'étape suivante.</p>
+        <p id="active-block-label" class="meta">Sélectionnez un bloc dans la transcription.</p>
+        <div id="annotation-composer" class="annotation-composer" hidden>
+          <textarea id="annotation-content" rows="3" placeholder="Ajouter une note au bloc actif"></textarea>
+          <div class="annotation-controls">
+            <button type="button" class="btn btn-mini btn-primary" id="add-note-btn">Ajouter une note</button>
+            <button type="button" class="btn btn-mini btn-ghost" id="add-review-btn">À vérifier</button>
+          </div>
+          <div class="highlight-controls" aria-label="Surligner le bloc actif">
+            <span>Surligner</span>
+            <button type="button" class="highlight-color color-yellow" data-highlight-color="yellow" aria-label="Jaune"></button>
+            <button type="button" class="highlight-color color-blue" data-highlight-color="blue" aria-label="Bleu"></button>
+            <button type="button" class="highlight-color color-green" data-highlight-color="green" aria-label="Vert"></button>
+          </div>
+        </div>
+        <div class="annotation-list-head">
+          <label for="annotation-filter">Éléments</label>
+          <select id="annotation-filter">
+            <option value="">Tous</option>
+            <option value="a_verifier">À vérifier</option>
+            <option value="valide">Validés</option>
+            <option value="ignore">Ignorés</option>
+          </select>
+        </div>
+        <div id="annotation-list" class="annotation-list"></div>
       </section>
 
-      <section class="analysis-section" id="publish-zone">
+      <section class="analysis-section" id="tags-zone" hidden>
+        <h3>Tags locaux</h3>
+        <div class="tag-editor">
+          <input type="text" id="job-tag-input" placeholder="ex. cours, droit" aria-label="Ajouter un tag local">
+          <button type="button" class="btn btn-mini btn-ghost" id="add-job-tag-btn">Ajouter</button>
+        </div>
+        <div id="job-tags" class="job-tags"></div>
+      </section>
+
+      <section class="analysis-section" id="publish-zone" hidden>
         <h3>Publication</h3>
         <div class="publish-actions">
           <button type="button" class="btn btn-primary" id="proofread-btn" hidden>
@@ -267,11 +331,17 @@
           </button>
           <button type="button" class="btn btn-ghost" id="publish-btn" hidden>Publier dans Obsidian</button>
           <a class="btn btn-ghost" id="obsidian-link" href="#" hidden>Ouvrir dans Obsidian</a>
-          <!-- Synchronisation NotebookLM : phase 5, zone réservée ici. -->
-          <button type="button" class="btn btn-ghost" id="notebooklm-btn" disabled
-                  title="Disponible après une publication Obsidian réussie (à venir)">
+          <button type="button" class="btn btn-ghost" id="notebooklm-btn" disabled>
             Synchroniser NotebookLM
           </button>
+          <p id="publication-status" class="publication-status" aria-live="polite"></p>
+          <div class="menu">
+            <button type="button" class="btn btn-ghost" id="secondary-actions-btn" aria-haspopup="true">Autres actions ▾</button>
+            <div class="menu-items" id="secondary-actions-menu" hidden>
+              <button type="button" data-secondary-action="download">Exporter la transcription</button>
+              <button type="button" data-secondary-action="delete">Supprimer</button>
+            </div>
+          </div>
         </div>
       </section>
     </section>

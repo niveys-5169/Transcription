@@ -282,13 +282,13 @@ def test_export_relit_la_base_plutot_que_le_dict_perime(client, vault):
     assert "Titre initial" not in contenu
 
 
-def test_echec_publication_obsidian_n_empeche_pas_l_export_et_le_sync(
+def test_echec_publication_obsidian_n_empeche_pas_l_export_intermediaire(
     client, vault, monkeypatch
 ):
     """Le texte est définitif dès la relecture (et le fact-check) : un
     incident dans l'écriture de la fiche Obsidian ne doit ni empêcher
-    l'export vers data/cours/, ni le sync NotebookLM — sinon un cours ne
-    partirait jamais vers Drive à cause d'un coffre mal configuré.
+    l'export vers data/cours/. En revanche, la synchronisation NotebookLM
+    attend désormais une publication Obsidian réussie.
     """
     def _publish_en_echec(job, *, settings=None):
         raise obsidian.ObsidianError("coffre indisponible (simulé)")
@@ -306,9 +306,12 @@ def test_echec_publication_obsidian_n_empeche_pas_l_export_et_le_sync(
     job_id = reponse.json()["id"]
     job = _attendre_statut(client, job_id, {"checked", "error", "canceled"})
     assert job["status"] == "checked"
-    assert "Publication Obsidian en échec" in (job.get("stage") or "")
 
+    limite = time.monotonic() + 5
     fichier = _fichier_cours(job_id)
+    while fichier is None and time.monotonic() < limite:
+        time.sleep(0.1)
+        fichier = _fichier_cours(job_id)
     assert fichier is not None
 
 

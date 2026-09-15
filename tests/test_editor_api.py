@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from app import db, server
+from app import config, db, pipeline, server
 
 
 @pytest.fixture
@@ -157,6 +157,23 @@ def test_liste_des_travaux_expose_compteur_et_statut_de_publication(client, tmp_
     db.update_job(job_id, obsidian_path="Formation/cours.md")
     job = next(j for j in client.get("/api/jobs").json()["jobs"] if j["id"] == job_id)
     assert job["publication_status"] == "publie"
+
+
+def test_sync_notebooklm_exige_obsidian_puis_enfile_la_sync(client, tmp_path, monkeypatch):
+    job_id = _job(tmp_path)
+    db.update_job(job_id, status="published", clean_text="Bonjour.")
+    config.save_settings({"notebooklm_sync_enabled": True, "notebooklm_master_doc_id": "doc-maitre"})
+    calls = []
+    monkeypatch.setattr(pipeline, "enqueue", lambda ident, task: calls.append((ident, task)))
+
+    blocked = client.post(f"/api/jobs/{job_id}/notebooklm-sync")
+    assert blocked.status_code == 409
+
+    db.update_job(job_id, obsidian_path="Formation/cours.md")
+    response = client.post(f"/api/jobs/{job_id}/notebooklm-sync")
+    assert response.status_code == 200
+    assert calls == [(job_id, pipeline.TASK_NOTEBOOKLM)]
+    assert db.get_job(job_id)["notebooklm_status"] == "en_cours"
 
 
 def test_media_source_est_servi_sans_divulguer_son_chemin(client, tmp_path):
