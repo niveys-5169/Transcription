@@ -21,6 +21,10 @@ pyvenv.cfg
 .coverage
 htmlcov/
 
+# Paquets générés par PyInstaller
+build/
+dist/
+
 # Éditeurs / OS
 .vscode/
 .idea/
