@@ -178,6 +178,25 @@ def test_avec_recherche_web_seul_websearch_est_autorise(backend, monkeypatch):
 
     cmd = captured["cmd"]
     assert cmd[cmd.index("--tools") + 1] == "WebSearch"
+    # ``--tools`` ne fait que restreindre l'ensemble disponible ; sans
+    # ``--allowedTools`` en plus, WebSearch resterait soumis à une
+    # confirmation qu'une session sans écran ne peut jamais donner, et se
+    # ferait refuser d'office par ``--permission-prompts none``.
+    assert cmd[cmd.index("--allowedTools") + 1] == "WebSearch"
+
+
+def test_sans_recherche_web_pas_d_allowedtools(backend, monkeypatch):
+    _make_available(monkeypatch)
+    captured = {}
+
+    def fake_popen(cmd, **kwargs):
+        captured["cmd"] = cmd
+        return _FakeProcess(_stream(_result("ok")))
+
+    monkeypatch.setattr("subprocess.Popen", fake_popen)
+    backend.complete(system="s", user="u", max_tokens=100, web_search=False)
+
+    assert "--allowedTools" not in captured["cmd"]
 
 
 def test_schema_ajoute_json_schema(backend, monkeypatch):
