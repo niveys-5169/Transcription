@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import mimetypes
 import shutil
 import uuid
 from contextlib import asynccontextmanager
@@ -185,6 +186,12 @@ async def list_jobs(q: str | None = None, limit: int = 100) -> dict:
     return {"jobs": [_decorate(job) for job in jobs]}
 
 
+@app.get("/api/search")
+async def search_transcripts(q: str, limit: int = 50) -> dict:
+    """Recherche globale avec contexte et position média lorsqu'elle existe."""
+    return {"results": db.search_transcripts(q, max(1, min(limit, 100)))}
+
+
 @app.post("/api/jobs")
 async def create_job(
     file: UploadFile = File(...),
@@ -276,6 +283,108 @@ async def get_job(job_id: str) -> dict:
     if job is None:
         raise HTTPException(404, "Travail introuvable.")
     return _decorate(job)
+
+
+@app.get("/api/jobs/{job_id}/media")
+async def job_media(job_id: str) -> FileResponse:
+    """Le média d'origine, destiné au lecteur synchronisé du navigateur."""
+    job = db.get_job(job_id, with_content=False)
+    if job is None:
+        raise HTTPException(404, "Travail introuvable.")
+    source = Path(job["media_path"] or "")
+    if not source.is_file():
+        raise HTTPException(
+            404,
+            "Le média d'origine n'est plus disponible ; utilisez l'audio extrait.",
+        )
+    media_type, _ = mimetypes.guess_type(job["filename"] or source.name)
+    return FileResponse(source, media_type=media_type or "application/octet-stream")
+
+
+@app.get("/api/jobs/{job_id}/review-blocks")
+async def get_review_blocks(job_id: str) -> dict:
+    if db.get_job(job_id, with_content=False) is None:
+        raise HTTPException(404, "Travail introuvable.")
+    return {"blocks": db.ensure_review_blocks(job_id)}
+
+
+@app.put("/api/jobs/{job_id}/review-blocks/{block_id}")
+async def put_review_block(job_id: str, block_id: str, payload: dict = Body(...)) -> dict:
+    text = payload.get("text")
+    if not isinstance(text, str) or not text.strip():
+        raise HTTPException(400, "Le texte du bloc est obligatoire.")
+    block = db.update_review_block(job_id, block_id, text.strip())
+    if block is None:
+        raise HTTPException(404, "Bloc de révision introuvable.")
+    return block
+
+
+_ANNOTATION_TYPES = {"note", "highlight", "review"}
+_ANNOTATION_STATUSES = {"a_verifier", "valide", "ignore"}
+
+
+def _annotation_payload(payload: dict, *, partial: bool = False) -> dict:
+    fields: dict = {}
+    if "type" in payload:
+        kind = payload["type"]
+        if kind not in _ANNOTATION_TYPES:
+            raise HTTPException(400, "Type d'annotation inconnu.")
+        fields["type"] = kind
+    if "status" in payload:
+        status = payload["status"]
+        if status is not None and status not in _ANNOTATION_STATUSES:
+            raise HTTPException(400, "Statut de révision inconnu.")
+        fields["status"] = status
+    for key in ("color", "content"):
+        if key in payload:
+            value = payload[key]
+            if value is not None and not isinstance(value, str):
+                raise HTTPException(400, f"Le champ « {key} » doit être du texte.")
+            fields[key] = value
+    if not partial and "type" not in fields:
+        raise HTTPException(400, "Le type d'annotation est obligatoire.")
+    return fields
+
+
+@app.get("/api/jobs/{job_id}/annotations")
+async def get_annotations(job_id: str) -> dict:
+    if db.get_job(job_id, with_content=False) is None:
+        raise HTTPException(404, "Travail introuvable.")
+    return {"annotations": db.list_annotations(job_id)}
+
+
+@app.post("/api/jobs/{job_id}/annotations")
+async def post_annotation(job_id: str, payload: dict = Body(...)) -> dict:
+    if db.get_job(job_id, with_content=False) is None:
+        raise HTTPException(404, "Travail introuvable.")
+    block_id = payload.get("block_id")
+    if not isinstance(block_id, str) or not any(
+        block.get("id") == block_id for block in db.ensure_review_blocks(job_id)
+    ):
+        raise HTTPException(400, "Le bloc associé est introuvable.")
+    fields = _annotation_payload(payload)
+    return db.create_annotation(job_id, block_id=block_id, kind=fields["type"],
+                                color=fields.get("color"), content=fields.get("content"),
+                                status=fields.get("status"))
+
+
+@app.patch("/api/jobs/{job_id}/annotations/{annotation_id}")
+async def patch_annotation(job_id: str, annotation_id: str, payload: dict = Body(...)) -> dict:
+    annotation = db.get_annotation(annotation_id)
+    if annotation is None or annotation["job_id"] != job_id:
+        raise HTTPException(404, "Annotation introuvable.")
+    updated = db.update_annotation(annotation_id, **_annotation_payload(payload, partial=True))
+    assert updated is not None
+    return updated
+
+
+@app.delete("/api/jobs/{job_id}/annotations/{annotation_id}")
+async def delete_annotation(job_id: str, annotation_id: str) -> dict:
+    annotation = db.get_annotation(annotation_id)
+    if annotation is None or annotation["job_id"] != job_id:
+        raise HTTPException(404, "Annotation introuvable.")
+    db.delete_annotation(annotation_id)
+    return {"deleted": annotation_id}
 
 
 @app.post("/api/jobs/{job_id}/cancel")

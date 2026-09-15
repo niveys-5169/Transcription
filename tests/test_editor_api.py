@@ -1,0 +1,147 @@
+"""Contrat API de l'éditeur synchronisé (phase 1)."""
+from __future__ import annotations
+
+import sqlite3
+from pathlib import Path
+
+import pytest
+from fastapi.testclient import TestClient
+
+from app import db, server
+
+
+@pytest.fixture
+def client():
+    with TestClient(server.app) as test_client:
+        yield test_client
+
+
+def _job(tmp_path: Path) -> str:
+    source = tmp_path / "cours.mp4"
+    source.write_bytes(b"source-media")
+    job_id = db.create_job(
+        filename="cours.mp4",
+        media_path=str(source),
+        size_bytes=source.stat().st_size,
+        engine="local",
+        model="tiny",
+        language="fr",
+        proofread="basic",
+        structure=False,
+    )
+    db.update_job(
+        job_id,
+        status="transcribed",
+        segments=[
+            {"start": 1.0, "end": 3.5, "text": "Bonjour à tous."},
+            {"start": 4.0, "end": 7.0, "text": "Le second passage."},
+        ],
+        raw_text="Bonjour à tous.\n\nLe second passage.",
+    )
+    return job_id
+
+
+def test_migration_ajoute_les_primitives_editeur_sans_effacer_les_jobs(tmp_path):
+    legacy = tmp_path / "legacy.sqlite"
+    with sqlite3.connect(legacy) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE jobs (
+                id TEXT PRIMARY KEY, filename TEXT NOT NULL, media_path TEXT,
+                status TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+            );
+            INSERT INTO jobs VALUES ('ancien', 'cours.mp3', NULL, 'done', '2026', '2026');
+            """
+        )
+
+    db.init_db(legacy)
+
+    with sqlite3.connect(legacy) as conn:
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(jobs)")}
+        tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master")}
+        assert conn.execute("SELECT id FROM jobs").fetchone()[0] == "ancien"
+    assert "review_blocks" in columns
+    assert "annotations" in tables
+
+
+def test_blocs_de_revision_sont_crees_a_la_demande_et_editables(client, tmp_path):
+    job_id = _job(tmp_path)
+
+    body = client.get(f"/api/jobs/{job_id}/review-blocks").json()
+    assert body["blocks"] == [
+        {"id": "segment-1", "start": 1.0, "end": 3.5, "text": "Bonjour à tous."},
+        {"id": "segment-2", "start": 4.0, "end": 7.0, "text": "Le second passage."},
+    ]
+
+    response = client.put(
+        f"/api/jobs/{job_id}/review-blocks/segment-1",
+        json={"text": "Bonjour tout le monde."},
+    )
+    assert response.status_code == 200
+    assert response.json()["text"] == "Bonjour tout le monde."
+
+    job = client.get(f"/api/jobs/{job_id}").json()
+    assert job["segments"][0]["text"] == "Bonjour à tous."
+    assert job["review_blocks"][0]["text"] == "Bonjour tout le monde."
+
+
+def test_annotations_sont_persistantes_et_validees(client, tmp_path):
+    job_id = _job(tmp_path)
+    annotation = client.post(
+        f"/api/jobs/{job_id}/annotations",
+        json={
+            "block_id": "segment-1",
+            "type": "note",
+            "content": "Vérifier le nom de l'intervenant.",
+            "status": "a_verifier",
+        },
+    )
+    assert annotation.status_code == 200
+    annotation_id = annotation.json()["id"]
+
+    updated = client.patch(
+        f"/api/jobs/{job_id}/annotations/{annotation_id}",
+        json={"status": "valide"},
+    )
+    assert updated.status_code == 200
+    assert updated.json()["status"] == "valide"
+    assert client.get(f"/api/jobs/{job_id}/annotations").json()["annotations"][0]["content"]
+
+    invalid = client.post(
+        f"/api/jobs/{job_id}/annotations",
+        json={"block_id": "inconnu", "type": "note"},
+    )
+    assert invalid.status_code == 400
+
+    assert client.delete(f"/api/jobs/{job_id}/annotations/{annotation_id}").json() == {
+        "deleted": annotation_id
+    }
+
+
+def test_recherche_globale_retourne_un_horodatage_de_bloc(client, tmp_path):
+    job_id = _job(tmp_path)
+    client.get(f"/api/jobs/{job_id}/review-blocks")
+    client.put(
+        f"/api/jobs/{job_id}/review-blocks/segment-2",
+        json={"text": "Une expression très spécifique."},
+    )
+
+    response = client.get("/api/search", params={"q": "très spécifique"})
+    assert response.status_code == 200
+    result = response.json()["results"][0]
+    assert result["job_id"] == job_id
+    assert result["start"] == 4.0
+    assert "spécifique" in result["match_text"]
+
+
+def test_media_source_est_servi_sans_divulguer_son_chemin(client, tmp_path):
+    job_id = _job(tmp_path)
+    response = client.get(f"/api/jobs/{job_id}/media")
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("video/mp4")
+    assert response.content == b"source-media"
+    assert "media_path" not in client.get(f"/api/jobs/{job_id}").json()
+
+    source = Path(db.get_job(job_id, with_content=False)["media_path"])
+    source.unlink()
+    assert client.get(f"/api/jobs/{job_id}/media").status_code == 404

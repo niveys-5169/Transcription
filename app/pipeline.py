@@ -318,6 +318,7 @@ def run_transcription(job_id: str) -> None:
             progress=1.0,
             task=None,
             segments=segments,
+            review_blocks=db.review_blocks_from_segments(segments),
             raw_text=segments_to_text(segments),
         )
         if not config.load_settings().keep_media:

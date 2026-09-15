@@ -39,6 +39,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     raw_text      TEXT,
     clean_text    TEXT,
     segments      TEXT,
+    review_blocks TEXT,
     verification  TEXT,
     error         TEXT,
     created_at    TEXT NOT NULL,
@@ -46,6 +47,20 @@ CREATE TABLE IF NOT EXISTS jobs (
     finished_at   TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_jobs_created ON jobs (created_at DESC);
+CREATE TABLE IF NOT EXISTS annotations (
+    id         TEXT PRIMARY KEY,
+    job_id     TEXT NOT NULL,
+    block_id   TEXT NOT NULL,
+    type       TEXT NOT NULL,
+    color      TEXT,
+    content    TEXT,
+    status     TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_annotations_job ON annotations (job_id, block_id);
+CREATE INDEX IF NOT EXISTS idx_annotations_status ON annotations (job_id, status);
 """
 
 # Colonnes ajoutées après coup : appliquées à une base existante au démarrage.
@@ -60,6 +75,7 @@ MIGRATIONS = {
     "factcheck_report": "TEXT",
     "entities": "TEXT",
     "obsidian_path": "TEXT",
+    "review_blocks": "TEXT",
 }
 
 # Colonnes lourdes, exclues des listes (une transcription d'une heure fait
@@ -68,6 +84,7 @@ HEAVY_COLUMNS = (
     "raw_text",
     "clean_text",
     "segments",
+    "review_blocks",
     "verification",
     "factcheck_report",
     "entities",
@@ -129,7 +146,9 @@ def init_db(db_path: Path | None = None) -> None:
 
 def _row_to_dict(row: sqlite3.Row) -> dict:
     data = dict(row)
-    for colonne in ("segments", "verification", "factcheck_report", "entities"):
+    for colonne in (
+        "segments", "review_blocks", "verification", "factcheck_report", "entities",
+    ):
         if colonne in data:
             try:
                 data[colonne] = json.loads(data[colonne]) if data[colonne] else None
@@ -139,6 +158,8 @@ def _row_to_dict(row: sqlite3.Row) -> dict:
     # rien casser côté appelants existants.
     if data.get("segments") is None and "segments" in data:
         data["segments"] = []
+    if data.get("review_blocks") is None and "review_blocks" in data:
+        data["review_blocks"] = []
     if data.get("verification") is None and "verification" in data:
         data["verification"] = []
     if data.get("entities") is None and "entities" in data:
@@ -199,7 +220,9 @@ def create_job(
 def update_job(job_id: str, **fields: Any) -> None:
     if not fields:
         return
-    for colonne in ("segments", "verification", "factcheck_report", "entities"):
+    for colonne in (
+        "segments", "review_blocks", "verification", "factcheck_report", "entities",
+    ):
         if colonne in fields and not isinstance(fields[colonne], (str, type(None))):
             fields[colonne] = json.dumps(fields[colonne], ensure_ascii=False)
     for colonne in ("structure", "verify", "chain", "factcheck", "publish"):
@@ -237,6 +260,7 @@ def delete_job(job_id: str) -> dict | None:
     if job is None:
         return None
     with connect() as conn:
+        conn.execute("DELETE FROM annotations WHERE job_id = ?", (job_id,))
         conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
     return job
 
@@ -280,6 +304,158 @@ def search_jobs(query: str, limit: int = 50) -> list[dict]:
             (pattern, pattern, pattern, pattern, limit),
         ).fetchall()
     return [_row_to_dict(row) for row in rows]
+
+
+def ensure_review_blocks(job_id: str) -> list[dict]:
+    """Retourne les blocs éditables, créés à la demande depuis les segments.
+
+    La transcription brute reste intacte : les blocs sont une copie séparée
+    qui peut ensuite être corrigée par l'utilisateur.
+    """
+    job = get_job(job_id)
+    if job is None:
+        return []
+    blocks = job.get("review_blocks") or []
+    if blocks:
+        return blocks
+    segments = job.get("segments") or []
+    if not segments:
+        return []
+    blocks = review_blocks_from_segments(segments)
+    update_job(job_id, review_blocks=blocks)
+    return blocks
+
+
+def review_blocks_from_segments(segments: list[dict]) -> list[dict]:
+    """Copie normalisée des segments pour l'éditeur, sans toucher au brut."""
+    return [
+        {
+            "id": f"segment-{index}",
+            "start": float(segment.get("start") or 0),
+            "end": float(segment.get("end") or 0),
+            "text": str(segment.get("text") or "").strip(),
+        }
+        for index, segment in enumerate(segments, start=1)
+    ]
+
+
+def update_review_block(job_id: str, block_id: str, text: str) -> dict | None:
+    """Met à jour un bloc de révision sans jamais retoucher les segments bruts."""
+    blocks = ensure_review_blocks(job_id)
+    for block in blocks:
+        if block.get("id") == block_id:
+            block["text"] = text
+            update_job(job_id, review_blocks=blocks)
+            return block
+    return None
+
+
+def list_annotations(job_id: str) -> list[dict]:
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM annotations WHERE job_id = ? ORDER BY created_at ASC", (job_id,)
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def create_annotation(
+    job_id: str,
+    *,
+    block_id: str,
+    kind: str,
+    color: str | None = None,
+    content: str | None = None,
+    status: str | None = None,
+) -> dict:
+    annotation_id = uuid.uuid4().hex
+    now = _now()
+    with connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO annotations
+                (id, job_id, block_id, type, color, content, status, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (annotation_id, job_id, block_id, kind, color, content, status, now, now),
+        )
+    return {
+        "id": annotation_id, "job_id": job_id, "block_id": block_id,
+        "type": kind, "color": color, "content": content, "status": status,
+        "created_at": now, "updated_at": now,
+    }
+
+
+def update_annotation(annotation_id: str, **fields: Any) -> dict | None:
+    allowed = {"type", "color", "content", "status"}
+    fields = {key: value for key, value in fields.items() if key in allowed}
+    if not fields:
+        return get_annotation(annotation_id)
+    fields["updated_at"] = _now()
+    assignments = ", ".join(f"{key} = ?" for key in fields)
+    with connect() as conn:
+        conn.execute(
+            f"UPDATE annotations SET {assignments} WHERE id = ?",
+            (*fields.values(), annotation_id),
+        )
+    return get_annotation(annotation_id)
+
+
+def get_annotation(annotation_id: str) -> dict | None:
+    with connect() as conn:
+        row = conn.execute("SELECT * FROM annotations WHERE id = ?", (annotation_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def delete_annotation(annotation_id: str) -> bool:
+    with connect() as conn:
+        cursor = conn.execute("DELETE FROM annotations WHERE id = ?", (annotation_id,))
+    return cursor.rowcount > 0
+
+
+def search_transcripts(query: str, limit: int = 50) -> list[dict]:
+    """Recherche avec extrait et horodatage quand un bloc éditable correspond."""
+    needle = query.strip().casefold()
+    if not needle:
+        return []
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, filename, title, raw_text, clean_text, segments, review_blocks
+            FROM jobs ORDER BY created_at DESC
+            """
+        ).fetchall()
+    results: list[dict] = []
+    for row in rows:
+        job = _row_to_dict(row)
+        matches: list[tuple[str, float | None, float | None]] = []
+        blocks = job.get("review_blocks") or review_blocks_from_segments(
+            job.get("segments") or []
+        )
+        for block in blocks:
+            text = str(block.get("text") or "")
+            if needle in text.casefold():
+                matches.append((text, block.get("start"), block.get("end")))
+        if not matches:
+            for field in ("title", "filename", "clean_text", "raw_text"):
+                text = str(job.get(field) or "")
+                if needle in text.casefold():
+                    matches.append((text, None, None))
+                    break
+        if matches:
+            text, start, end = matches[0]
+            at = text.casefold().find(needle)
+            excerpt = text[max(0, at - 70):at + len(query) + 110].strip()
+            results.append({
+                "job_id": job["id"],
+                "title": job.get("title") or job["filename"],
+                "match_text": excerpt,
+                "start": start,
+                "end": end,
+                "match_count": len(matches),
+            })
+        if len(results) >= limit:
+            break
+    return results
 
 
 def mark_finished(job_id: str, **fields: Any) -> None:
