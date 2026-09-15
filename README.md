@@ -91,6 +91,12 @@ dossier complet, avec `Transcription.exe`. Les artefacts sont conservés
 30 jours. Le même workflow peut être lancé manuellement depuis GitHub avec
 **Run workflow**.
 
+L’exécutable vérifie automatiquement cette « dernière version » à son
+démarrage. Si elle est plus récente, le bouton **Mise à jour disponible**
+télécharge le paquet, ferme l’application, remplace le dossier complet puis
+redémarre. Il faut donc toujours conserver le dossier `Transcription` entier,
+pas seulement le fichier `.exe`.
+
 ## Réviser une transcription
 
 L'interface est organisée en trois panneaux : la **bibliothèque** à gauche,

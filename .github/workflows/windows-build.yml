@@ -8,7 +8,7 @@ on:
   workflow_dispatch: {}
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build-windows:
@@ -32,7 +32,12 @@ jobs:
           python -m pip install -r requirements-app.txt pyinstaller
 
       - name: Construire l'application
-        run: python -m PyInstaller packaging\transcription.spec --noconfirm
+        run: |
+          "BUILD_ID = '${{ github.sha }}'" | Out-File -Encoding utf8 app\build_info.py
+          python -m PyInstaller packaging\transcription.spec --noconfirm
+
+      - name: Préparer le paquet de mise à jour
+        run: Compress-Archive -Path dist\Transcription\* -DestinationPath Transcription-Windows.zip
 
       - name: Publier l'exécutable
         uses: actions/upload-artifact@v4
@@ -41,3 +46,15 @@ jobs:
           path: dist/Transcription
           if-no-files-found: error
           retention-days: 30
+
+      - name: Publier la dernière version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view latest 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload latest Transcription-Windows.zip --clobber
+            gh release edit latest --target "${{ github.sha }}" --title "Dernière version"
+          } else {
+            gh release create latest Transcription-Windows.zip --target "${{ github.sha }}" --title "Dernière version" --notes "Mise à jour automatique."
+          }

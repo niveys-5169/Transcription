@@ -5,8 +5,11 @@ import asyncio
 import json
 import logging
 import mimetypes
+import os
 import shutil
+import threading
 import uuid
+import zipfile
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -14,7 +17,7 @@ from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import __version__, config, db, exporters, lexicon, media, obsidian, pipeline
+from . import __version__, config, db, exporters, lexicon, media, obsidian, pipeline, updates
 from .engines import availability as engine_availability
 from .proofread import factcheck as factcheck_module
 from .proofread.claude import ClaudeProofreader
@@ -81,6 +84,24 @@ async def status() -> dict:
         "models": config.WHISPER_MODELS,
         "settings": settings.public_dict(),
     }
+
+
+@app.get("/api/update")
+async def check_update() -> dict:
+    return updates.check()
+
+
+@app.post("/api/update")
+async def apply_update() -> dict:
+    update = updates.check()
+    if not update.get("available") or not update.get("download_url"):
+        raise HTTPException(400, "Aucune mise à jour disponible.")
+    try:
+        updates.download_and_restart(update["download_url"])
+    except (OSError, ValueError, zipfile.BadZipFile) as exc:
+        raise HTTPException(500, f"Mise à jour impossible : {exc}") from exc
+    threading.Timer(1.0, lambda: os._exit(0)).start()
+    return {"restarting": True}
 
 
 def _obsidian_status(settings) -> tuple[bool, str]:

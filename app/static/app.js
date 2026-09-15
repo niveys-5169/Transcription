@@ -156,6 +156,15 @@ async function loadStatus() {
     pill(obsidian.available, "Obsidian", obsidian.detail, true),
   ];
   $("health").innerHTML = pills.join("");
+  checkForUpdate();
+}
+
+async function checkForUpdate() {
+  try {
+    const update = await api("/api/update");
+    $("update-btn").hidden = !update.available;
+    if (update.available) $("update-btn").dataset.version = update.version || "";
+  } catch (_) { /* Une mise à jour ne doit jamais bloquer l'application. */ }
 }
 
 function pill(ok, label, detail, optional = false) {
@@ -2049,6 +2058,15 @@ function initActions() {
   });
 
   $("open-settings").addEventListener("click", openSettings);
+  $("update-btn").addEventListener("click", async () => {
+    const button = $("update-btn");
+    if (!window.confirm(`Installer la mise à jour ${button.dataset.version || ""} ? L'application va redémarrer.`)) return;
+    button.disabled = true;
+    try {
+      await api("/api/update", { method: "POST" });
+      button.textContent = "Redémarrage…";
+    } catch (error) { button.disabled = false; toast(error.message, true); }
+  });
   $("settings-save").addEventListener("click", saveSettings);
   $("settings-cancel").addEventListener("click", () => $("settings-dialog").close());
 
