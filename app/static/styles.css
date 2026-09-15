@@ -274,6 +274,7 @@ select:focus, input:focus { outline: 2px solid var(--accent); outline-offset: 1p
 .badge.done { color: var(--ok); }
 .badge.error { color: var(--danger); }
 .badge.running { color: var(--accent); }
+.badge.warn { color: var(--warn); }
 
 .empty { color: var(--text-soft); font-size: 13px; text-align: center; padding: 18px 0; margin: 0; }
 
@@ -407,6 +408,9 @@ select:focus, input:focus { outline: 2px solid var(--accent); outline-offset: 1p
   cursor: pointer;
 }
 .finding-expand:hover { background: var(--surface-2); color: var(--text); }
+
+.pending-correction { border-left-color: var(--warn); }
+.pending-actions { display: flex; gap: 8px; margin-top: 10px; }
 
 /* ------------------------------------------------------------ sources */
 

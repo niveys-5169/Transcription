@@ -459,6 +459,37 @@ function sourceLabel(point) {
   return { claude: "Claude", web: "Recherche web", lexique: "Lexique" }[point.source] || "Règle";
 }
 
+const CLAIM_TYPE_LABELS = {
+  nom_propre: "nom propre",
+  organisme: "organisme",
+  rapport: "rapport",
+  statistique: "statistique",
+  reference_juridique: "référence juridique",
+  date: "date",
+};
+
+function renderPendingCard(item) {
+  const sources = (item.sources || []).filter((s) => s.url);
+  return `
+    <div class="finding pending-correction" data-correction-id="${escapeHtml(item.id)}">
+      <div class="finding-head">
+        <time>${clock(item.start)}</time>
+        <span class="finding-kind">${escapeHtml(CLAIM_TYPE_LABELS[item.claim_type] || item.claim_type)}</span>
+        <span class="finding-kind">confiance ${escapeHtml(item.confiance)}</span>
+      </div>
+      <p class="finding-message">« ${escapeHtml(item.citation)} » → proposé : <b>${escapeHtml(item.proposition)}</b></p>
+      ${item.explication ? `<p class="meta">${escapeHtml(item.explication)}</p>` : ""}
+      ${sources.length ? `
+        <div class="finding-sources">
+          ${sources.map((s) => `<a href="${escapeHtml(s.url)}" target="_blank" rel="noopener">${escapeHtml(s.titre || s.url)}</a>`).join("")}
+        </div>` : ""}
+      <div class="pending-actions">
+        <button type="button" class="btn btn-primary btn-mini" data-pending-action="valider">Valider</button>
+        <button type="button" class="btn btn-ghost btn-mini" data-pending-action="rejeter">Rejeter</button>
+      </div>
+    </div>`;
+}
+
 // Réinitialisé à chaque renderDetail() ; permet au bouton « Voir le passage »
 // de retrouver le point d'origine sans le sérialiser dans le DOM.
 let findingRegistry = [];
@@ -599,12 +630,16 @@ function renderSources(job) {
   const rapport = job.verification || {};
   const allPoints = Array.isArray(rapport.findings) ? rapport.findings : [];
   const points = allPoints.filter((p) => SOURCE_KINDS.has(p.kind));
+  const report = job.factcheck_report;
+  const enAttente = (report && Array.isArray(report.pending) ? report.pending : [])
+    .filter((p) => p.status === "attente");
+
   const badge = $("sources-count");
-  badge.hidden = points.length === 0;
-  badge.textContent = String(points.length);
+  const badgeCount = points.length + enAttente.length;
+  badge.hidden = badgeCount === 0;
+  badge.textContent = String(badgeCount);
 
   const panel = $("panel-sources");
-  const report = job.factcheck_report;
 
   if (!isProofread(job)) {
     panel.innerHTML = `<p class="empty">Vérification par recherche web disponible après la relecture.</p>`;
@@ -623,12 +658,21 @@ function renderSources(job) {
     <div class="verify-summary">
       <span class="badge">${report.claims_checked || 0} affirmation${report.claims_checked > 1 ? "s" : ""} vérifiée${report.claims_checked > 1 ? "s" : ""}</span>
       <span class="badge">${report.corrections || 0} correction${report.corrections > 1 ? "s" : ""} appliquée${report.corrections > 1 ? "s" : ""}</span>
+      ${enAttente.length ? `<span class="badge warn">${enAttente.length} en attente de validation</span>` : ""}
       ${points.length
         ? `<span class="badge error">${points.length} point${points.length > 1 ? "s" : ""} non confirmé${points.length > 1 ? "s" : ""}</span>`
         : `<span class="verify-ok">Tout ce qui a été vérifié est confirmé</span>`}
     </div>`;
 
-  if (!points.length) {
+  const pendingSection = enAttente.length ? `
+    <h3>À valider</h3>
+    <p class="meta">
+      Ces corrections ne sont pas assez sûres, ou touchent une catégorie
+      sensible, pour être appliquées seules : elles attendent votre décision.
+    </p>
+    ${enAttente.map(renderPendingCard).join("")}` : "";
+
+  if (!points.length && !enAttente.length) {
     panel.innerHTML = `${entete}
       <p class="meta">
         Les notes de bas de page du texte relu détaillent les sources. Une
@@ -637,11 +681,13 @@ function renderSources(job) {
     return;
   }
 
-  panel.innerHTML = entete + `
+  const pointsSection = points.length ? `
     <p class="meta">
       Le texte relu porte un appel de note (<code>[^v…]</code>) à chacun de
       ces points ; les sources consultées y sont citées.
-    </p>` + points.map(renderFindingCard).join("");
+    </p>` + points.map(renderFindingCard).join("") : "";
+
+  panel.innerHTML = entete + pendingSection + pointsSection;
 }
 
 function showTab(name) {
@@ -1025,6 +1071,25 @@ function initActions() {
     if (point) openPassage(point);
   });
   $("passage-close").addEventListener("click", () => $("passage-dialog").close());
+
+  document.addEventListener("click", async (event) => {
+    const button = event.target.closest("[data-pending-action]");
+    if (!button) return;
+    const card = button.closest(".pending-correction");
+    const job = state.detail;
+    if (!card || !job) return;
+    const correctionId = card.dataset.correctionId;
+    const action = button.dataset.pendingAction;
+    card.querySelectorAll("button").forEach((b) => { b.disabled = true; });
+    try {
+      await api(`/api/jobs/${job.id}/corrections/${correctionId}/${action}`, { method: "POST" });
+      toast(action === "valider" ? "Correction validée." : "Correction rejetée.");
+      await selectJob(job.id, true);
+    } catch (error) {
+      toast(error.message, true);
+      card.querySelectorAll("button").forEach((b) => { b.disabled = false; });
+    }
+  });
 }
 
 /* ------------------------------------------------------------ init */
