@@ -39,6 +39,7 @@ from .proofread.base import TextPair
 from .proofread.basic import split_paragraph_spans
 from .proofread.chunking import segments_to_text
 from .proofread.claude import ClaudeProofreader
+from .proofread.nim import NimProofreader
 from .proofread.verify import SEVERITIES, verify
 
 logger = logging.getLogger(__name__)
@@ -508,6 +509,22 @@ def _proofread(job: dict, segments: list[dict], *, on_progress, should_cancel):
                 if should_cancel():
                     raise
                 logger.warning("Relecture Claude en échec (%s) : repli mécanique.", exc)
+
+        # Le repli NIM est volontairement distinct du repli mécanique : il
+        # ne s'active qu'après un échec/une indisponibilité Claude et si la
+        # clé ainsi que l'option ont été explicitement configurées.
+        nim = NimProofreader()
+        available, detail = nim.is_available()
+        if available:
+            try:
+                on_progress(0.05, "Claude indisponible : repli NVIDIA NIM…")
+                return nim.proofread(segments, structure=bool(job.get("structure", True)), on_progress=on_progress, should_cancel=should_cancel)
+            except ProofreadError as exc:
+                if should_cancel():
+                    raise
+                logger.warning("Relecture NVIDIA NIM en échec (%s) : repli mécanique.", exc)
+        else:
+            logger.info("Repli NVIDIA NIM indisponible (%s).", detail)
 
     on_progress(0.5, "Relecture mécanique…")
     result = basic_proofread(segments)

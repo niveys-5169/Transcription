@@ -44,14 +44,16 @@ ENGINES = ["local", "runpod"]
 #   pas perdre runpod_launch_timeout_seconds à l'attendre pour rien.
 RUNPOD_POD_MODES = ["off", "fallback", "always"]
 
-# Modes de relecture.
+# Modes de relecture. NVIDIA NIM reste un repli opt-in de Claude ; il n'est
+# pas proposé comme moteur principal afin de ne pas basculer silencieusement
+# sur un service facturé.
 PROOFREAD_MODES = ["claude", "basic", "none"]
 
 # Comment l'application appelle Claude : le CLI (abonnement) ou l'API (clé).
 CLAUDE_BACKENDS = ["cli", "api"]
 
 # Champs considérés comme secrets : jamais renvoyés en clair par l'API.
-SECRET_FIELDS = {"runpod_api_key", "anthropic_api_key"}
+SECRET_FIELDS = {"runpod_api_key", "anthropic_api_key", "nim_api_key"}
 
 _lock = threading.Lock()
 
@@ -140,6 +142,15 @@ class Settings:
     proofread_chunk_chars: int = 6000
     # Ajouter titre, intertitres et résumé au texte relu.
     structure_output: bool = True
+
+    # --- Repli NVIDIA NIM (optionnel) ---
+    # NIM expose une API compatible OpenAI. Cette clé n'est jamais envoyée au
+    # navigateur : seul le serveur l'utilise si Claude est indisponible ou en
+    # erreur et que le repli est explicitement activé.
+    nim_api_key: str = ""
+    nim_fallback_enabled: bool = False
+    nim_base_url: str = "https://integrate.api.nvidia.com/v1/chat/completions"
+    nim_model: str = "nvidia/llama-3.3-nemotron-super-49b-v1"
 
     # --- Vérification externe (recherche web) ---
     factcheck: bool = True
@@ -237,6 +248,9 @@ def _from_env(settings: Settings) -> Settings:
         "runpod_api_key": "RUNPOD_API_KEY",
         "runpod_endpoint_id": "RUNPOD_ENDPOINT_ID",
         "anthropic_api_key": "ANTHROPIC_API_KEY",
+        "nim_api_key": "NIM_API_KEY",
+        "nim_base_url": "NIM_BASE_URL",
+        "nim_model": "NIM_MODEL",
         "proofread_model": "TRANSCRIPTION_PROOFREAD_MODEL",
         "default_engine": "TRANSCRIPTION_ENGINE",
         "default_model": "TRANSCRIPTION_MODEL",

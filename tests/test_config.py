@@ -47,3 +47,13 @@ def test_env_normalizes_endpoint_id(monkeypatch):
     monkeypatch.setenv("RUNPOD_ENDPOINT_ID", "https://api.runpod.ai/v2/abc123xyz/run")
     settings = config.load_settings(refresh=True)
     assert settings.runpod_endpoint_id == "abc123xyz"
+
+
+def test_nim_key_is_masked_in_public_settings():
+    settings = config.save_settings(
+        {"nim_api_key": "nvapi-secret", "nim_fallback_enabled": True}
+    )
+    public = settings.public_dict()
+    assert public["nim_api_key"] == ""
+    assert public["nim_api_key_set"] is True
+    assert public["nim_fallback_enabled"] is True

@@ -18,6 +18,7 @@ from . import __version__, config, db, exporters, lexicon, media, obsidian, pipe
 from .engines import availability as engine_availability
 from .proofread import factcheck as factcheck_module
 from .proofread.claude import ClaudeProofreader
+from .proofread.nim import NimProofreader
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +58,7 @@ async def status() -> dict:
     settings = config.load_settings()
     proofreader = ClaudeProofreader(settings)
     claude_ok, claude_detail = proofreader.is_available()
+    nim_ok, nim_detail = NimProofreader(settings).is_available()
     ffmpeg_ok = media.ffmpeg_available()
     obsidian_ok, obsidian_detail = _obsidian_status(settings)
     notebooklm_ok, notebooklm_detail = _notebooklm_status(settings)
@@ -73,7 +75,7 @@ async def status() -> dict:
             ),
         },
         "engines": engine_availability(),
-        "proofread": {"claude": {"available": claude_ok, "detail": claude_detail}},
+        "proofread": {"claude": {"available": claude_ok, "detail": claude_detail}, "nim": {"available": nim_ok, "detail": nim_detail}},
         "obsidian": {"available": obsidian_ok, "detail": obsidian_detail},
         "notebooklm": {"available": notebooklm_ok, "detail": notebooklm_detail},
         "models": config.WHISPER_MODELS,

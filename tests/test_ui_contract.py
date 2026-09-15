@@ -24,3 +24,15 @@ def test_etats_vides_et_longues_transcriptions_ont_leurs_points_d_ancrage():
         assert f'id="{marker}"' in html
     assert "blocksRenderLimit: 250" in script
     assert "[hidden] { display: none !important; }" in css
+
+
+def test_confiance_et_repli_nim_sont_visibles_sans_exposer_la_cle():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+    script = (STATIC / "app.js").read_text(encoding="utf-8")
+    css = (STATIC / "styles.css").read_text(encoding="utf-8")
+
+    assert 'id="nim_api_key"' in html
+    assert 'type="password" id="nim_api_key"' in html
+    assert "timeline-marker.needs-review" in css
+    assert "confidence-badge" in css
+    assert "markerLabel" in script

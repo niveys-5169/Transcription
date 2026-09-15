@@ -127,12 +127,15 @@ async function loadStatus() {
   $("structure").checked = Boolean(status.settings.structure_output);
 
   const claude = status.proofread.claude;
+  const nim = status.proofread.nim;
   const proofSelect = $("proofread");
-  proofSelect.options[0].disabled = !claude.available;
-  proofSelect.value = claude.available ? status.settings.default_proofread : "basic";
+  proofSelect.options[0].disabled = !claude.available && !nim?.available;
+  proofSelect.value = (claude.available || nim?.available)
+    ? status.settings.default_proofread
+    : "basic";
   $("proofread-detail").textContent = claude.available
-    ? claude.detail
-    : `${claude.detail} La relecture simple reste disponible.`;
+    ? `${claude.detail}${nim?.available ? " — NVIDIA NIM est prêt en repli." : ""}`
+    : `${claude.detail}${nim?.available ? " NVIDIA NIM prendra le relais." : " La relecture simple reste disponible."}`;
 
   $("factcheck").checked = Boolean(status.settings.factcheck) && claude.available;
   $("factcheck").disabled = !claude.available;
@@ -421,6 +424,7 @@ function metaLine(job) {
   if (job.duration) parts.push(clock(job.duration));
   parts.push(`${job.engine === "runpod" ? "RunPod" : "local"} · ${job.model}`);
   if (job.proofread === "claude") parts.push("relu par Claude");
+  else if (job.proofread === "nim") parts.push("relu par NVIDIA NIM (repli)");
   else if (job.proofread === "basic") parts.push("relecture simple");
   parts.push(humanDate(job.created_at));
   return parts.filter(Boolean).join(" · ");
@@ -807,6 +811,7 @@ async function loadAnnotations(job) {
     toast(error.message, true);
   }
   renderAnnotations();
+  renderTimelineMarkers();
 }
 
 function renderAnnotations() {
@@ -856,6 +861,7 @@ async function createAnnotation(kind, extra = {}) {
     state.annotations.push(item);
     $("annotation-content").value = "";
     renderAnnotations();
+    renderTimelineMarkers();
     refreshJobs().catch(() => {});
   } catch (error) { toast(error.message, true); }
 }
@@ -869,6 +875,7 @@ async function updateAnnotation(annotationId, fields) {
     });
     state.annotations = state.annotations.map((item) => item.id === annotationId ? updated : item);
     renderAnnotations();
+    renderTimelineMarkers();
     refreshJobs().catch(() => {});
   } catch (error) { toast(error.message, true); }
 }
@@ -880,6 +887,7 @@ async function removeAnnotation(annotationId) {
     await api(`/api/jobs/${job.id}/annotations/${annotationId}`, { method: "DELETE" });
     state.annotations = state.annotations.filter((item) => item.id !== annotationId);
     renderAnnotations();
+    renderTimelineMarkers();
     refreshJobs().catch(() => {});
   } catch (error) { toast(error.message, true); }
 }
@@ -1126,9 +1134,19 @@ function renderTimelineMarkers() {
     container.innerHTML = "";
     return;
   }
+  const reviewBlockIds = new Set(state.annotations
+    .filter((item) => item.type === "review" && item.status === "a_verifier")
+    .map((item) => item.block_id));
   container.innerHTML = state.blocks
-    .map((block) => `<span class="timeline-marker" style="left:${Math.min(100, (block.start / total) * 100)}%"></span>`)
+    .map((block) => `<span class="timeline-marker ${confidenceClass(block.confidence)}${reviewBlockIds.has(block.id) ? " needs-review" : ""}" title="${markerLabel(block, reviewBlockIds.has(block.id))}" style="left:${Math.min(100, (block.start / total) * 100)}%"></span>`)
     .join("");
+}
+
+function markerLabel(block, needsReview) {
+  if (needsReview) return `À vérifier — ${clock(block.start)}`;
+  if (block.confidence != null && block.confidence < 0.6) return `Confiance faible (${Math.round(block.confidence * 100)} %) — ${clock(block.start)}`;
+  if (block.confidence != null && block.confidence < 0.8) return `Confiance moyenne (${Math.round(block.confidence * 100)} %) — ${clock(block.start)}`;
+  return `Confiance élevée — ${clock(block.start)}`;
 }
 
 function updateTimelineProgress() {
@@ -1220,6 +1238,9 @@ function renderBlocks() {
     list.innerHTML = `<p class="empty">Aucun segment.</p>`;
   } else {
     const visible = state.blocks.slice(0, state.blocksRenderLimit);
+    const reviewBlockIds = new Set(state.annotations
+      .filter((item) => item.type === "review" && item.status === "a_verifier")
+      .map((item) => item.block_id));
     list.innerHTML = visible.map((block, index) => {
       const isEditing = state.editingBlockId === block.id;
       const isActive = state.activeBlockId === block.id;
@@ -1231,9 +1252,12 @@ function renderBlocks() {
              <span class="block-save-status" id="block-save-status-${block.id}"></span>
            </div>`
         : renderBlockText(block, index, segments);
-      return `<div class="block${isActive ? " is-active-block" : ""}" data-block-id="${block.id}">
-        <time class="block-time" data-action="seek" data-id="${block.id}">${clock(block.start)}</time>
-        <div class="block-body">${body}</div>
+      const confidence = confidenceClass(block.confidence);
+      const needsReview = reviewBlockIds.has(block.id);
+      const confidenceLabel = block.confidence == null ? "" : `<span class="confidence-badge ${confidence}">${Math.round(block.confidence * 100)} % ${block.confidence < .6 ? "— confiance faible" : block.confidence < .8 ? "— à confirmer" : "— confiance élevée"}</span>`;
+      return `<div class="block ${confidence}${needsReview ? " needs-review" : ""}${isActive ? " is-active-block" : ""}" data-block-id="${block.id}">
+        <time class="block-time${needsReview ? " needs-review" : ""}" data-action="seek" data-id="${block.id}" title="${needsReview ? "Passage à vérifier" : "Aller à cet horodatage"}">${clock(block.start)}</time>
+        <div class="block-body">${body}${confidenceLabel}</div>
       </div>`;
     }).join("");
   }
@@ -1563,6 +1587,9 @@ function openSettings() {
   $("claude_cli_path").value = settings.claude_cli_path || "";
   $("proofread_model").value = settings.proofread_model || "";
   $("proofread_effort").value = settings.proofread_effort || "high";
+  $("nim_fallback_enabled").checked = Boolean(settings.nim_fallback_enabled);
+  $("nim_model").value = settings.nim_model || "";
+  $("nim_base_url").value = settings.nim_base_url || "";
   $("runpod_endpoint_id").value = settings.runpod_endpoint_id || "";
   $("runpod_chunk_seconds").value = settings.runpod_chunk_seconds || 180;
   $("runpod_pod_mode").value = settings.runpod_pod_mode || "off";
@@ -1571,8 +1598,12 @@ function openSettings() {
   $("runpod_pod_network_volume_id").value = settings.runpod_pod_network_volume_id || "";
   $("keep_media").checked = Boolean(settings.keep_media);
   $("anthropic_api_key").value = "";
+  $("nim_api_key").value = "";
   $("runpod_api_key").value = "";
   $("anthropic-state").textContent = settings.anthropic_api_key_set
+    ? "Une clé est enregistrée. Laissez vide pour la conserver."
+    : "Aucune clé enregistrée.";
+  $("nim-state").textContent = settings.nim_api_key_set
     ? "Une clé est enregistrée. Laissez vide pour la conserver."
     : "Aucune clé enregistrée.";
   $("runpod-state").textContent = settings.runpod_api_key_set
@@ -1617,6 +1648,9 @@ async function saveSettings() {
     claude_cli_path: $("claude_cli_path").value.trim(),
     proofread_model: $("proofread_model").value.trim(),
     proofread_effort: $("proofread_effort").value,
+    nim_fallback_enabled: $("nim_fallback_enabled").checked,
+    nim_model: $("nim_model").value.trim(),
+    nim_base_url: $("nim_base_url").value.trim(),
     runpod_endpoint_id: $("runpod_endpoint_id").value.trim(),
     runpod_chunk_seconds: Number($("runpod_chunk_seconds").value) || 180,
     runpod_pod_mode: $("runpod_pod_mode").value,
@@ -1644,6 +1678,8 @@ async function saveSettings() {
   };
   const anthropic = $("anthropic_api_key").value.trim();
   if (anthropic) payload.anthropic_api_key = anthropic;
+  const nim = $("nim_api_key").value.trim();
+  if (nim) payload.nim_api_key = nim;
   const runpod = $("runpod_api_key").value.trim();
   if (runpod) payload.runpod_api_key = runpod;
 
