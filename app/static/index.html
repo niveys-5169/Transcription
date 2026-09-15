@@ -456,6 +456,24 @@
   </form>
 </dialog>
 
+<!-- ------------------------------------------------- passage élargi -->
+<dialog id="passage-dialog">
+  <h2 id="passage-title"></h2>
+  <div class="passage-blocks">
+    <div class="passage-block">
+      <b>Brut</b>
+      <p id="passage-raw"></p>
+    </div>
+    <div class="passage-block">
+      <b>Relu</b>
+      <p id="passage-clean"></p>
+    </div>
+  </div>
+  <div class="dialog-actions">
+    <button type="button" class="btn btn-ghost" id="passage-close">Fermer</button>
+  </div>
+</dialog>
+
 <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 
 <script src="/static/app.js"></script>
