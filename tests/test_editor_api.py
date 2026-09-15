@@ -69,8 +69,8 @@ def test_blocs_de_revision_sont_crees_a_la_demande_et_editables(client, tmp_path
 
     body = client.get(f"/api/jobs/{job_id}/review-blocks").json()
     assert body["blocks"] == [
-        {"id": "segment-1", "start": 1.0, "end": 3.5, "text": "Bonjour à tous."},
-        {"id": "segment-2", "start": 4.0, "end": 7.0, "text": "Le second passage."},
+        {"id": "segment-1", "start": 1.0, "end": 3.5, "text": "Bonjour à tous.", "confidence": None},
+        {"id": "segment-2", "start": 4.0, "end": 7.0, "text": "Le second passage.", "confidence": None},
     ]
 
     response = client.put(
@@ -170,3 +170,17 @@ def test_media_source_est_servi_sans_divulguer_son_chemin(client, tmp_path):
     source = Path(db.get_job(job_id, with_content=False)["media_path"])
     source.unlink()
     assert client.get(f"/api/jobs/{job_id}/media").status_code == 404
+
+
+def test_review_blocks_propagent_la_confiance_quand_disponible():
+    blocks = db.review_blocks_from_segments(
+        [{"start": 0.0, "end": 1.0, "text": "x", "confidence": 0.42}]
+    )
+    assert blocks[0]["confidence"] == 0.42
+
+
+def test_review_blocks_tolerent_un_segment_sans_confiance():
+    """Compat des travaux transcrits avant l'ajout du champ : pas de KeyError,
+    confidence retombe simplement à None (pas de coloration côté client)."""
+    blocks = db.review_blocks_from_segments([{"start": 0.0, "end": 1.0, "text": "x"}])
+    assert blocks[0]["confidence"] is None

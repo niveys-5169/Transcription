@@ -17,12 +17,16 @@ class Segment:
     start: float
     end: float
     text: str
+    confidence: float | None = None
+    """Score indicatif [0, 1] dérivé du moteur (ex. avg_logprob) ; n'affecte
+    jamais le texte ni son édition — purement informatif pour l'affichage."""
 
     def shifted(self, offset: float) -> "Segment":
         return Segment(
             start=round(self.start + offset, 3),
             end=round(self.end + offset, 3),
             text=self.text,
+            confidence=self.confidence,
         )
 
     def to_dict(self) -> dict:

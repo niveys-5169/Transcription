@@ -9,7 +9,14 @@ const state = {
   detail: null,
   pending: [],
   settings: {},
-  tab: "clean",
+  blocks: [],
+  blocksJobId: null,
+  editingBlockId: null,
+  editingOriginalText: "",
+  activeBlockId: null,
+  playerSource: null, // "video" | "audio" | null
+  playerJobId: null,
+  playerSpeed: 1,
 };
 
 /* ----------------------------------------------------------- utilitaires */
@@ -350,9 +357,12 @@ function listenEvents() {
 /* ----------------------------------------------------------- résultat */
 
 async function selectJob(jobId, keepTab = false) {
+  if (state.selected !== jobId) {
+    state.editingBlockId = null;
+    state.activeBlockId = null;
+  }
   state.selected = jobId;
   if (!keepTab) {
-    state.tab = "clean";
     // Sur petit écran, choisir un travail bascule vers le panneau éditeur —
     // mais seulement pour une vraie sélection : un rafraîchissement de fond
     // (keepTab, déclenché par le SSE quand un statut change) ne doit pas
@@ -426,21 +436,10 @@ function renderDetail() {
   $("result-summary").hidden = summary.length === 0;
   $("summary-list").innerHTML = summary.map((point) => `<li>${escapeHtml(point)}</li>`).join("");
 
-  $("panel-clean").innerHTML = job.clean_text
-    ? renderTranscript(job.clean_text)
-    : `<p class="empty">${
-        job.status === "done" ? "Aucun texte relu." : "Traitement en cours…"
-      }</p>`;
-  $("panel-raw").innerHTML = renderTranscript(job.raw_text, "is-raw");
-
-  const segments = job.segments || [];
-  $("panel-segments").innerHTML = segments.length
-    ? `<div class="segments">${segments.map((segment) => `
-        <div class="segment">
-          <time>${clock(segment.start)}</time>
-          <span>${escapeHtml(segment.text)}</span>
-        </div>`).join("")}</div>`
-    : `<p class="empty">Aucun segment.</p>`;
+  loadPlayerForJob(job);
+  loadReviewBlocks(job);
+  renderComparisonPanel(job);
+  $("blocks-zone").hidden = false;
 
   renderVerification(job);
   renderSources(job);
@@ -474,14 +473,6 @@ function renderDetail() {
     obsidianLink.hidden = true;
   }
 
-  const player = $("audio-player");
-  const audioUrl = `/api/jobs/${job.id}/audio`;
-  if (player.dataset.job !== job.id) {
-    player.dataset.job = job.id;
-    player.src = audioUrl;
-  }
-
-  showTab(state.tab);
 }
 
 const KIND_LABELS = {
@@ -733,28 +724,446 @@ function renderSources(job) {
   panel.innerHTML = entete + pendingSection + pointsSection;
 }
 
-function showTab(name) {
-  state.tab = name;
-  document.querySelectorAll(".tab").forEach((tab) =>
-    tab.classList.toggle("is-active", tab.dataset.tab === name)
-  );
-  // Vérification et sources sont désormais des sections permanentes du
-  // panneau « Analyse » (colonne de droite), pas des onglets du centre.
-  ["clean", "raw", "segments"].forEach((key) => {
-    $(`panel-${key}`).hidden = key !== name;
-  });
+// Les blocs de révision deviennent la sortie éditoriale canonique dès la
+// première modification humaine (docs/PLAN.md, phase 3) — comparaison
+// purement textuelle avec le segment brut de même index, sans flag serveur
+// dédié : review_blocks_from_segments() garantit la correspondance 1:1.
+function isBlockEdited(block, index, segments) {
+  const original = segments && segments[index] ? segments[index].text || "" : "";
+  return (block.text || "").trim() !== original.trim();
+}
+
+function anyBlockEdited() {
+  const segments = (state.detail && state.detail.segments) || [];
+  return state.blocks.some((block, index) => isBlockEdited(block, index, segments));
 }
 
 function currentText() {
   const job = state.detail;
   if (!job) return "";
-  if (state.tab === "raw") return job.raw_text || "";
-  if (state.tab === "segments") {
-    return (job.segments || [])
-      .map((segment) => `[${clock(segment.start)}] ${segment.text}`)
-      .join("\n");
+  if (state.blocks.length && anyBlockEdited()) {
+    return state.blocks.map((block) => block.text).join("\n\n");
   }
   return job.clean_text || job.raw_text || "";
+}
+
+/* -------------------------------------------------------------- lecteur */
+
+function activeMedia() {
+  return state.playerSource === "video" ? $("media-player") : $("audio-player");
+}
+
+function loadPlayerForJob(job) {
+  if (state.playerJobId === job.id) return;
+  state.playerJobId = job.id;
+  state.playerSource = "video";
+
+  const video = $("media-player");
+  const audio = $("audio-player");
+  audio.pause();
+  video.pause();
+  audio.hidden = true;
+  video.hidden = false;
+  video.src = `/api/jobs/${job.id}/media`;
+  video.load();
+  $("player-source-badge").textContent = "Vidéo source";
+
+  video.onerror = () => fallbackToAudio(job);
+}
+
+function fallbackToAudio(job) {
+  const video = $("media-player");
+  const audio = $("audio-player");
+  video.onerror = null;
+  video.pause();
+  video.hidden = true;
+  state.playerSource = "audio";
+  audio.hidden = false;
+  audio.src = `/api/jobs/${job.id}/audio`;
+  audio.load();
+  $("player-source-badge").textContent = "Audio extrait (WAV)";
+}
+
+function playPause() {
+  const media = activeMedia();
+  if (!media.src) return;
+  if (media.paused) media.play().catch(() => {});
+  else media.pause();
+}
+
+function seekBy(deltaSeconds) {
+  const media = activeMedia();
+  if (!media.src || !Number.isFinite(media.duration)) return;
+  seekTo(media.currentTime + deltaSeconds);
+}
+
+function seekTo(seconds) {
+  const media = activeMedia();
+  if (!media.src) return;
+  const duration = Number.isFinite(media.duration) ? media.duration : Infinity;
+  media.currentTime = Math.max(0, Math.min(seconds, duration));
+}
+
+const SPEEDS = [0.75, 1, 1.25, 1.5, 2];
+
+function setSpeed(rate) {
+  state.playerSpeed = rate;
+  $("media-player").playbackRate = rate;
+  $("audio-player").playbackRate = rate;
+  document.querySelectorAll(".speed-btn").forEach((btn) =>
+    btn.classList.toggle("is-active", Number(btn.dataset.speed) === rate)
+  );
+}
+
+function cycleSpeed(direction) {
+  const index = SPEEDS.indexOf(state.playerSpeed);
+  const next = SPEEDS[Math.min(SPEEDS.length - 1, Math.max(0, index + direction))];
+  setSpeed(next);
+}
+
+function togglePlayerCollapse() {
+  const zone = $("player-zone");
+  const collapsed = zone.classList.toggle("is-collapsed");
+  $("player-collapse-btn").textContent = collapsed ? "Agrandir" : "Réduire";
+  $("player-collapse-btn").setAttribute("aria-expanded", String(!collapsed));
+}
+
+function updatePlayPauseIcon() {
+  const media = activeMedia();
+  $("play-pause-btn").textContent = media.paused ? "▶" : "⏸";
+  $("play-pause-btn").setAttribute("aria-label", media.paused ? "Lecture" : "Pause");
+}
+
+function updatePlayerTimeDisplay() {
+  const media = activeMedia();
+  const duration = Number.isFinite(media.duration) ? media.duration : 0;
+  $("player-time").textContent = `${clock(media.currentTime)} / ${clock(duration)}`;
+  updateTimelineProgress();
+  updateActiveBlockFromTime();
+}
+
+function initPlayer() {
+  ["media-player", "audio-player"].forEach((id) => {
+    const media = $(id);
+    media.addEventListener("timeupdate", updatePlayerTimeDisplay);
+    media.addEventListener("loadedmetadata", updatePlayerTimeDisplay);
+    media.addEventListener("play", updatePlayPauseIcon);
+    media.addEventListener("pause", updatePlayPauseIcon);
+    media.addEventListener("ended", updatePlayPauseIcon);
+  });
+
+  $("play-pause-btn").addEventListener("click", playPause);
+  $("seek-back-btn").addEventListener("click", () => seekBy(-5));
+  $("seek-fwd-btn").addEventListener("click", () => seekBy(5));
+  $("player-collapse-btn").addEventListener("click", togglePlayerCollapse);
+  document.querySelectorAll(".speed-btn").forEach((btn) =>
+    btn.addEventListener("click", () => setSpeed(Number(btn.dataset.speed)))
+  );
+
+  initPlayerDrag();
+}
+
+function initPlayerDrag() {
+  const zone = $("player-zone");
+  const handle = $("player-drag-handle");
+  let dragging = null;
+
+  handle.addEventListener("pointerdown", (event) => {
+    if (window.matchMedia("(max-width: 960px)").matches) return;
+    const rect = zone.getBoundingClientRect();
+    zone.classList.add("is-floating");
+    zone.style.left = `${rect.left}px`;
+    zone.style.top = `${rect.top}px`;
+    dragging = { offsetX: event.clientX - rect.left, offsetY: event.clientY - rect.top };
+    handle.setPointerCapture(event.pointerId);
+  });
+
+  handle.addEventListener("pointermove", (event) => {
+    if (!dragging) return;
+    const maxLeft = window.innerWidth - zone.offsetWidth;
+    const maxTop = window.innerHeight - zone.offsetHeight;
+    zone.style.left = `${Math.max(0, Math.min(maxLeft, event.clientX - dragging.offsetX))}px`;
+    zone.style.top = `${Math.max(0, Math.min(maxTop, event.clientY - dragging.offsetY))}px`;
+  });
+
+  const stopDrag = () => { dragging = null; };
+  handle.addEventListener("pointerup", stopDrag);
+  handle.addEventListener("pointercancel", stopDrag);
+  handle.addEventListener("dblclick", () => {
+    zone.classList.remove("is-floating");
+    zone.style.left = "";
+    zone.style.top = "";
+  });
+}
+
+/* ------------------------------------------------------------ timeline */
+
+function renderTimelineMarkers() {
+  const duration = Number($("media-player").duration || $("audio-player").duration) || 0;
+  const total = duration || (state.detail && state.detail.duration) || 0;
+  const container = $("timeline-markers");
+  if (!total || !state.blocks.length) {
+    container.innerHTML = "";
+    return;
+  }
+  container.innerHTML = state.blocks
+    .map((block) => `<span class="timeline-marker" style="left:${Math.min(100, (block.start / total) * 100)}%"></span>`)
+    .join("");
+}
+
+function updateTimelineProgress() {
+  const media = activeMedia();
+  const duration = Number.isFinite(media.duration) && media.duration > 0
+    ? media.duration
+    : (state.detail && state.detail.duration) || 0;
+  const fraction = duration ? Math.min(1, media.currentTime / duration) : 0;
+  $("timeline-progress").style.width = `${fraction * 100}%`;
+  $("timeline-handle").style.left = `${fraction * 100}%`;
+  $("timeline-zone").setAttribute("aria-valuenow", String(Math.round(fraction * duration)));
+}
+
+function seekFromTimelineEvent(event) {
+  const track = $("timeline-zone").querySelector(".timeline-track");
+  const rect = track.getBoundingClientRect();
+  const media = activeMedia();
+  const duration = Number.isFinite(media.duration) && media.duration > 0
+    ? media.duration
+    : (state.detail && state.detail.duration) || 0;
+  if (!duration) return;
+  const fraction = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
+  seekTo(fraction * duration);
+}
+
+function initTimelineInteraction() {
+  const zone = $("timeline-zone");
+  let dragging = false;
+
+  zone.addEventListener("pointerdown", (event) => {
+    dragging = true;
+    zone.setPointerCapture(event.pointerId);
+    seekFromTimelineEvent(event);
+  });
+  zone.addEventListener("pointermove", (event) => {
+    if (dragging) seekFromTimelineEvent(event);
+  });
+  const stop = () => { dragging = false; };
+  zone.addEventListener("pointerup", stop);
+  zone.addEventListener("pointercancel", stop);
+
+  zone.addEventListener("keydown", (event) => {
+    if (event.key === "ArrowLeft") { event.preventDefault(); seekBy(-5); }
+    else if (event.key === "ArrowRight") { event.preventDefault(); seekBy(5); }
+  });
+}
+
+/* ------------------------------------------------------- blocs de révision */
+
+async function loadReviewBlocks(job) {
+  // Retenter tant qu'aucun bloc n'a été chargé (transcription en cours à la
+  // première sélection) ; une fois chargés, ne pas écraser une édition en
+  // cours sur un rafraîchissement SSE pour le même travail.
+  if (state.blocksJobId === job.id && state.blocks.length) return;
+  try {
+    const data = await api(`/api/jobs/${job.id}/review-blocks`);
+    state.blocks = data.blocks || [];
+    state.blocksJobId = job.id;
+  } catch (error) {
+    state.blocks = [];
+    state.blocksJobId = job.id;
+    toast(error.message, true);
+  }
+  renderBlocks();
+  renderTimelineMarkers();
+}
+
+function confidenceClass(score) {
+  if (score == null || score >= 0.8) return "";
+  return score >= 0.6 ? "conf-mid" : "conf-low";
+}
+
+function renderBlockText(block, index, segments) {
+  const edited = isBlockEdited(block, index, segments);
+  const cls = edited ? "" : confidenceClass(block.confidence);
+  return `<p class="block-text ${cls}" data-action="edit">${escapeHtml(block.text)}${
+    edited ? '<span class="block-edited-badge">modifié</span>' : ""
+  }</p>`;
+}
+
+function renderBlocks() {
+  const list = $("blocks-list");
+  const job = state.detail;
+  const segments = (job && job.segments) || [];
+
+  if (!state.blocks.length) {
+    list.innerHTML = `<p class="empty">Aucun segment.</p>`;
+  } else {
+    list.innerHTML = state.blocks.map((block, index) => {
+      const isEditing = state.editingBlockId === block.id;
+      const isActive = state.activeBlockId === block.id;
+      const body = isEditing
+        ? `<textarea class="block-edit" data-id="${block.id}">${escapeHtml(block.text)}</textarea>
+           <div class="block-actions">
+             <button type="button" class="btn btn-mini btn-primary" data-action="save" data-id="${block.id}">Enregistrer</button>
+             <button type="button" class="btn btn-mini btn-ghost" data-action="cancel" data-id="${block.id}">Annuler</button>
+             <span class="block-save-status" id="block-save-status-${block.id}"></span>
+           </div>`
+        : renderBlockText(block, index, segments);
+      return `<div class="block${isActive ? " is-active-block" : ""}" data-block-id="${block.id}">
+        <time class="block-time" data-action="seek" data-id="${block.id}">${clock(block.start)}</time>
+        <div class="block-body">${body}</div>
+      </div>`;
+    }).join("");
+  }
+
+  $("blocks-edited-flag").hidden = !anyBlockEdited();
+}
+
+function seekToBlock(blockId) {
+  const block = state.blocks.find((b) => b.id === blockId);
+  if (block) seekTo(block.start);
+}
+
+function updateActiveBlockFromTime() {
+  if (!state.blocks.length) return;
+  const time = activeMedia().currentTime;
+  let lo = 0, hi = state.blocks.length - 1, found = null;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    const block = state.blocks[mid];
+    if (time < block.start) { hi = mid - 1; }
+    else if (block.end && time > block.end && mid < state.blocks.length - 1) { lo = mid + 1; }
+    else { found = block; break; }
+  }
+  const nextId = found ? found.id : null;
+  if (nextId === state.activeBlockId) return;
+  const previous = state.activeBlockId && document.querySelector(`.block[data-block-id="${state.activeBlockId}"]`);
+  if (previous) previous.classList.remove("is-active-block");
+  state.activeBlockId = nextId;
+  if (nextId) {
+    const current = document.querySelector(`.block[data-block-id="${nextId}"]`);
+    if (current) {
+      current.classList.add("is-active-block");
+      current.scrollIntoView({ block: "nearest" });
+    }
+  }
+}
+
+function startBlockEdit(blockId) {
+  const block = state.blocks.find((b) => b.id === blockId);
+  if (!block) return;
+  state.editingBlockId = blockId;
+  state.editingOriginalText = block.text;
+  renderBlocks();
+  const textarea = document.querySelector(`.block-edit[data-id="${blockId}"]`);
+  if (textarea) { textarea.focus(); textarea.setSelectionRange(textarea.value.length, textarea.value.length); }
+}
+
+function cancelBlockEdit() {
+  if (!state.editingBlockId) return;
+  const block = state.blocks.find((b) => b.id === state.editingBlockId);
+  if (block) block.text = state.editingOriginalText;
+  state.editingBlockId = null;
+  renderBlocks();
+}
+
+async function saveBlockEdit(blockId) {
+  const textarea = document.querySelector(`.block-edit[data-id="${blockId}"]`);
+  const job = state.detail;
+  if (!textarea || !job) return;
+  const text = textarea.value.trim();
+  if (!text) { toast("Le texte du bloc est obligatoire.", true); return; }
+
+  const status = $(`block-save-status-${blockId}`);
+  if (status) { status.textContent = "Enregistrement…"; status.className = "block-save-status is-saving"; }
+
+  const block = state.blocks.find((b) => b.id === blockId);
+  const previousText = block ? block.text : "";
+  if (block) block.text = text;
+
+  try {
+    const updated = await api(`/api/jobs/${job.id}/review-blocks/${blockId}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text }),
+    });
+    if (block) block.text = updated.text;
+    state.editingBlockId = null;
+    renderBlocks();
+    const savedStatus = $(`block-save-status-${blockId}`);
+    if (savedStatus) {
+      savedStatus.textContent = "Enregistré.";
+      savedStatus.className = "block-save-status is-saved";
+    }
+  } catch (error) {
+    if (block) block.text = previousText;
+    if (status) { status.textContent = error.message; status.className = "block-save-status is-error"; }
+    toast(error.message, true);
+  }
+}
+
+function initBlocksList() {
+  $("blocks-list").addEventListener("click", (event) => {
+    const seekTarget = event.target.closest('[data-action="seek"]');
+    if (seekTarget) { seekToBlock(seekTarget.dataset.id); return; }
+
+    const editTarget = event.target.closest('[data-action="edit"]');
+    if (editTarget) {
+      const blockEl = editTarget.closest(".block");
+      if (blockEl) startBlockEdit(blockEl.dataset.blockId);
+      return;
+    }
+
+    const saveTarget = event.target.closest('[data-action="save"]');
+    if (saveTarget) { saveBlockEdit(saveTarget.dataset.id); return; }
+
+    const cancelTarget = event.target.closest('[data-action="cancel"]');
+    if (cancelTarget) { cancelBlockEdit(); return; }
+  });
+}
+
+/* --------------------------------------------------------- comparaison IA */
+
+function renderComparisonPanel(job) {
+  const zone = $("comparison-zone");
+  if (!job.clean_text) { zone.hidden = true; return; }
+  zone.hidden = false;
+  $("comparison-body").innerHTML = renderTranscript(job.clean_text);
+}
+
+/* --------------------------------------------------------- raccourcis clavier */
+
+function isEditableTarget(target) {
+  return Boolean(target.closest && target.closest("input, textarea, select, [contenteditable]"));
+}
+
+function initKeyboardShortcuts() {
+  document.addEventListener("keydown", (event) => {
+    if (state.editingBlockId) {
+      if (event.key === "Escape") { event.preventDefault(); cancelBlockEdit(); }
+      else if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+        event.preventDefault();
+        saveBlockEdit(state.editingBlockId);
+      }
+      return;
+    }
+
+    if (isEditableTarget(event.target)) return;
+
+    if (event.key === " ") { event.preventDefault(); playPause(); }
+    else if (event.key === "ArrowLeft") { event.preventDefault(); seekBy(-5); }
+    else if (event.key === "ArrowRight") { event.preventDefault(); seekBy(5); }
+    else if (event.key === "[") { event.preventDefault(); cycleSpeed(-1); }
+    else if (event.key === "]") { event.preventDefault(); cycleSpeed(1); }
+    else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "f") {
+      const search = $("editor-search-input");
+      if (search) {
+        event.preventDefault();
+        search.disabled = false;
+        search.focus();
+        search.select();
+      }
+    }
+  });
 }
 
 /* ----------------------------------------------------------- réglages */
@@ -1008,10 +1417,6 @@ function initActions() {
   $("one-click-btn").addEventListener("click", () => submitFiles(null, true));
   $("engine").addEventListener("change", updateEngineDetail);
 
-  document.querySelectorAll(".tab").forEach((tab) =>
-    tab.addEventListener("click", () => showTab(tab.dataset.tab))
-  );
-
   $("copy-btn").addEventListener("click", async () => {
     const text = currentText();
     if (!text) return toast("Rien à copier.", true);
@@ -1163,6 +1568,10 @@ function initActions() {
   initDropzone();
   initActions();
   initShellTabs();
+  initPlayer();
+  initTimelineInteraction();
+  initBlocksList();
+  initKeyboardShortcuts();
   try {
     await loadStatus();
     await refreshJobs();

@@ -181,10 +181,15 @@ class RunPodEngine:
                         text = (raw.get("text") or "").strip()
                         if not text:
                             continue
+                        # "confidence" est absent des réponses d'un worker
+                        # pas encore republié avec ce champ (voir
+                        # handler.py/pod_server.py) : raw.get() renvoie alors
+                        # None, donc pas de coloration plutôt qu'une erreur.
                         yield Segment(
                             start=float(raw.get("start", 0.0)),
                             end=float(raw.get("end", 0.0)),
                             text=text,
+                            confidence=raw.get("confidence"),
                         ).shifted(chunk.offset)
 
                     if on_progress and total:

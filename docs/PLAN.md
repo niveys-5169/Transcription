@@ -55,6 +55,8 @@ L'outil conserve et met en avant son avantage spécifique par rapport à Sonix :
 
 ## Phase 3 — Éditeur synchronisé et interactions de lecture — Codex
 
+**Statut : faite par Claude (PR #25), voir `docs/PHASE3_HANDOFF.md`.**
+
 - Remplacer les onglets texte/audio par un éditeur central :
   - vidéo source compacte, déplaçable et rétractable ;
   - repli automatique vers le WAV ;
@@ -145,5 +147,5 @@ L'outil conserve et met en avant son avantage spécifique par rapport à Sonix :
 - Timeline : barre interactive native, sans WaveSurfer ni dépendance front-end supplémentaire.
 - Notes, surlignages et états de révision sont persistés en SQLite.
 - Stack conservé : FastAPI, SQLite, HTML/CSS/JavaScript sans framework.
-- Ordre de réalisation : Codex Phase 1, Claude Phase 2, Codex Phase 3, Claude Phase 4, Codex Phase 5, Claude Phase 6.
+- Ordre de réalisation : Codex Phase 1, Claude Phase 2, Codex Phase 3, Claude Phase 4, Codex Phase 5, Claude Phase 6. En pratique, la Phase 3 a été faite par Claude (voir `docs/PHASE3_HANDOFF.md`) — Codex reprend donc directement à la Phase 4.
 - La coloration par confiance (Phase 3) est un raffinement optionnel de l'éditeur, pas un prérequis des phases suivantes : si le moteur en place ne remonte aucun score exploitable, l'éditeur reste fonctionnel sans elle.
