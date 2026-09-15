@@ -103,6 +103,12 @@ def start_server(host: str, port: int, reload: bool = False) -> ServerHandle:
         port=port,
         reload=reload,
         log_level="warning",
+        # On configure déjà le logging nous-mêmes (voir logging_setup.py) :
+        # laisser uvicorn appliquer sa propre config par défaut plante en
+        # mode "windowed" (exe PyInstaller sans console), où sys.stdout /
+        # sys.stderr valent None et son formatter coloré appelle
+        # stream.isatty() dessus.
+        log_config=None,
     )
     server = uvicorn.Server(config)
     return ServerHandle(server, host, port)
