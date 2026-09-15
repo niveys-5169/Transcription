@@ -351,10 +351,15 @@ function listenEvents() {
 
 async function selectJob(jobId, keepTab = false) {
   state.selected = jobId;
-  if (!keepTab) state.tab = "clean";
+  if (!keepTab) {
+    state.tab = "clean";
+    // Sur petit écran, choisir un travail bascule vers le panneau éditeur —
+    // mais seulement pour une vraie sélection : un rafraîchissement de fond
+    // (keepTab, déclenché par le SSE quand un statut change) ne doit pas
+    // arracher l'utilisateur du panneau qu'il est en train de lire.
+    document.querySelector('.shell-tab[data-shell="workspace"]')?.click();
+  }
   renderJobs();
-  // Sur petit écran, sélectionner un travail bascule vers le panneau éditeur.
-  document.querySelector('.shell-tab[data-shell="workspace"]')?.click();
   try {
     state.detail = await api(`/api/jobs/${jobId}`);
     renderDetail();
