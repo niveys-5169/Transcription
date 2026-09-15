@@ -1228,6 +1228,19 @@ function renderBlockText(block, index, segments) {
   }</p>`;
 }
 
+function renderSpeakerControls(block) {
+  const role = block.role || "";
+  return `<div class="speaker-controls" aria-label="Identifier l'intervenant">
+    <select class="speaker-role" data-action="role" data-id="${block.id}" aria-label="Rôle de l'intervenant">
+      <option value=""${role ? "" : " selected"}>Qui parle ?</option>
+      <option value="professeur"${role === "professeur" ? " selected" : ""}>Professeur</option>
+      <option value="eleve"${role === "eleve" ? " selected" : ""}>Élève</option>
+      <option value="intervenant"${role === "intervenant" ? " selected" : ""}>Autre intervenant</option>
+    </select>
+    <input class="speaker-name" data-action="speaker" data-id="${block.id}" value="${escapeHtml(block.speaker || "")}" placeholder="Nom ou repère (facultatif)" aria-label="Nom ou repère de l'intervenant">
+  </div>`;
+}
+
 function renderBlocks() {
   const list = $("blocks-list");
   const job = state.detail;
@@ -1254,10 +1267,11 @@ function renderBlocks() {
         : renderBlockText(block, index, segments);
       const confidence = confidenceClass(block.confidence);
       const needsReview = reviewBlockIds.has(block.id);
+      const speakerControls = renderSpeakerControls(block);
       const confidenceLabel = block.confidence == null ? "" : `<span class="confidence-badge ${confidence}">${Math.round(block.confidence * 100)} % ${block.confidence < .6 ? "— confiance faible" : block.confidence < .8 ? "— à confirmer" : "— confiance élevée"}</span>`;
       return `<div class="block ${confidence}${needsReview ? " needs-review" : ""}${isActive ? " is-active-block" : ""}" data-block-id="${block.id}">
         <time class="block-time${needsReview ? " needs-review" : ""}" data-action="seek" data-id="${block.id}" title="${needsReview ? "Passage à vérifier" : "Aller à cet horodatage"}">${clock(block.start)}</time>
-        <div class="block-body">${body}${confidenceLabel}</div>
+        <div class="block-body">${speakerControls}${body}${confidenceLabel}</div>
       </div>`;
     }).join("");
   }
@@ -1268,6 +1282,34 @@ function renderBlocks() {
   if (remaining > 0) more.textContent = `Afficher les ${Math.min(250, remaining)} blocs suivants (${remaining} restants)`;
 
   $("blocks-edited-flag").hidden = !anyBlockEdited();
+  renderManualReviewStatus();
+}
+
+function renderManualReviewStatus() {
+  const status = state.detail && state.detail.manual_review_status;
+  const labels = { in_progress: "Repasse en cours", completed: "Repasse terminée" };
+  $("manual-review-status").textContent = labels[status] || "";
+  $("manual-review-btn").textContent = status === "in_progress"
+    ? "Terminer la repasse" : status === "completed" ? "Reprendre la repasse" : "Relecture manuelle";
+}
+
+async function saveSpeakerField(blockId, fields) {
+  const job = state.detail;
+  const block = state.blocks.find((item) => item.id === blockId);
+  if (!job || !block) return;
+  const previous = { speaker: block.speaker, role: block.role };
+  Object.assign(block, fields);
+  try {
+    const updated = await api(`/api/jobs/${job.id}/review-blocks/${blockId}`, {
+      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(fields),
+    });
+    Object.assign(block, updated);
+    renderBlocks();
+  } catch (error) {
+    Object.assign(block, previous);
+    renderBlocks();
+    toast(error.message, true);
+  }
 }
 
 function seekToBlock(blockId) {
@@ -1384,6 +1426,14 @@ function initBlocksList() {
 
     const cancelTarget = event.target.closest('[data-action="cancel"]');
     if (cancelTarget) { cancelBlockEdit(); return; }
+  });
+  $("blocks-list").addEventListener("change", (event) => {
+    const select = event.target.closest('[data-action="role"]');
+    if (select) saveSpeakerField(select.dataset.id, { role: select.value || null });
+  });
+  $("blocks-list").addEventListener("focusout", (event) => {
+    const input = event.target.closest('[data-action="speaker"]');
+    if (input) saveSpeakerField(input.dataset.id, { speaker: input.value.trim() || null });
   });
 }
 
@@ -1835,6 +1885,22 @@ function initActions() {
       refreshJobs().catch(() => {});
       refreshGlobalSearch().catch((error) => toast(error.message, true));
     }, 250);
+  });
+
+  $("manual-review-btn").addEventListener("click", async () => {
+    const job = state.detail;
+    if (!job) return;
+    const status = job.manual_review_status === "in_progress" ? "completed" : "in_progress";
+    try {
+      const updated = await api(`/api/jobs/${job.id}/manual-review`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status }),
+      });
+      state.detail = updated;
+      renderDetail();
+      toast(status === "completed" ? "Repasse manuelle terminée." : "Repasse manuelle démarrée : écoutez et corrigez les blocs.");
+    } catch (error) {
+      toast(error.message, true);
+    }
   });
 
   $("cancel-btn").addEventListener("click", async () => {

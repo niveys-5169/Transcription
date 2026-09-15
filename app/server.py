@@ -322,13 +322,44 @@ async def get_review_blocks(job_id: str) -> dict:
 
 @app.put("/api/jobs/{job_id}/review-blocks/{block_id}")
 async def put_review_block(job_id: str, block_id: str, payload: dict = Body(...)) -> dict:
-    text = payload.get("text")
-    if not isinstance(text, str) or not text.strip():
-        raise HTTPException(400, "Le texte du bloc est obligatoire.")
-    block = db.update_review_block(job_id, block_id, text.strip())
+    if "text" not in payload and "speaker" not in payload and "role" not in payload:
+        raise HTTPException(400, "Indiquez le texte, l'intervenant ou le rôle à modifier.")
+    fields: dict = {}
+    if "text" in payload:
+        text = payload["text"]
+        if not isinstance(text, str) or not text.strip():
+            raise HTTPException(400, "Le texte du bloc est obligatoire.")
+        fields["text"] = text.strip()
+    for key in ("speaker", "role"):
+        if key in payload:
+            value = payload[key]
+            if value is not None and not isinstance(value, str):
+                raise HTTPException(400, f"Le champ « {key} » doit être du texte.")
+            fields[key] = value.strip() if isinstance(value, str) else None
+    block = db.update_review_block(job_id, block_id, **fields)
     if block is None:
         raise HTTPException(404, "Bloc de révision introuvable.")
     return block
+
+
+@app.post("/api/jobs/{job_id}/manual-review")
+async def set_manual_review(job_id: str, payload: dict = Body(default={})) -> dict:
+    """Démarre ou clôt une repasse humaine, sans modifier le texte IA.
+
+    Les corrections et attributions de parole restent dans ``review_blocks`` :
+    cette action ne fait qu'expliciter l'étape de contrôle humain pour que la
+    transcription puisse être reprise plus tard.
+    """
+    job = db.get_job(job_id, with_content=False)
+    if job is None:
+        raise HTTPException(404, "Travail introuvable.")
+    if not db.get_job(job_id).get("segments"):
+        raise HTTPException(409, "Aucune transcription à relire.")
+    status = payload.get("status", "in_progress")
+    if status not in {"not_started", "in_progress", "completed"}:
+        raise HTTPException(400, "Statut de relecture manuelle inconnu.")
+    db.update_job(job_id, manual_review_status=status)
+    return _decorate(db.get_job(job_id))
 
 
 _ANNOTATION_TYPES = {"note", "highlight", "review"}

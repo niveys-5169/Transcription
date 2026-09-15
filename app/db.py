@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     clean_text    TEXT,
     segments      TEXT,
     review_blocks TEXT,
+    manual_review_status TEXT DEFAULT 'not_started',
     verification  TEXT,
     error         TEXT,
     created_at    TEXT NOT NULL,
@@ -76,6 +77,8 @@ MIGRATIONS = {
     "entities": "TEXT",
     "obsidian_path": "TEXT",
     "review_blocks": "TEXT",
+    # Relecture humaine optionnelle, indépendante de la relecture IA.
+    "manual_review_status": "TEXT DEFAULT 'not_started'",
     "obsidian_published_at": "TEXT",
     "notebooklm_status": "TEXT DEFAULT 'non_configure'",
     "notebooklm_synced_at": "TEXT",
@@ -117,7 +120,7 @@ STATUSES = (
 # un lien « Ouvrir dans Obsidian ».
 LIST_COLUMNS = (
     "id, filename, media_path, wav_path, size_bytes, duration, engine, model, "
-    "language, proofread, structure, verify, chain, factcheck, publish, task, "
+    "language, proofread, structure, verify, chain, factcheck, publish, manual_review_status, task, "
     "status, stage, progress, title, summary, error, obsidian_path, obsidian_published_at, "
     "notebooklm_status, notebooklm_synced_at, notebooklm_error, "
     "created_at, updated_at, finished_at"
@@ -345,17 +348,38 @@ def review_blocks_from_segments(segments: list[dict]) -> list[dict]:
             "end": float(segment.get("end") or 0),
             "text": str(segment.get("text") or "").strip(),
             "confidence": segment.get("confidence"),
+            # La diarisation n'est pas devinée : Whisper ne fournit pas une
+            # identité fiable. Ces champs permettent à la personne qui écoute
+            # de distinguer sans ambiguïté professeur, élève et intervenants.
+            "speaker": None,
+            "role": None,
         }
         for index, segment in enumerate(segments, start=1)
     ]
 
 
-def update_review_block(job_id: str, block_id: str, text: str) -> dict | None:
+_UNSET = object()
+
+
+def update_review_block(
+    job_id: str,
+    block_id: str,
+    text: str | None = None,
+    speaker: str | None | object = _UNSET,
+    role: str | None | object = _UNSET,
+) -> dict | None:
     """Met à jour un bloc de révision sans jamais retoucher les segments bruts."""
     blocks = ensure_review_blocks(job_id)
     for block in blocks:
         if block.get("id") == block_id:
-            block["text"] = text
+            if text is not None:
+                block["text"] = text
+            # ``None`` signifie « non renseigné » et efface donc une
+            # attribution précédente ; les anciens blocs restent compatibles.
+            if speaker is not _UNSET:
+                block["speaker"] = speaker
+            if role is not _UNSET:
+                block["role"] = role
             update_job(job_id, review_blocks=blocks)
             return block
     return None
