@@ -82,6 +82,15 @@ exécutable autonome : `dist/Transcription/Transcription.exe`.
 Le build se fait dans un venv dédié (`.venv-build`), avec le même
 interpréteur Python que le reste du projet — voir `packaging/build.bat`.
 
+### Compilation automatique
+
+Chaque push sur la branche `main` lance aussi une compilation Windows dans
+l’onglet **Actions** de GitHub. Une fois le workflow **Application Windows**
+terminé, téléchargez l’artefact **Transcription-Windows** : il contient le
+dossier complet, avec `Transcription.exe`. Les artefacts sont conservés
+30 jours. Le même workflow peut être lancé manuellement depuis GitHub avec
+**Run workflow**.
+
 ## Réviser une transcription
 
 L'interface est organisée en trois panneaux : la **bibliothèque** à gauche,

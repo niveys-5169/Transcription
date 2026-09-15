@@ -1,0 +1,43 @@
+name: Application Windows
+
+# Une version Windows fraîche est produite à chaque mise à jour de main,
+# et peut aussi être relancée depuis l'onglet Actions de GitHub.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows:
+    name: Construire Transcription.exe
+    runs-on: windows-latest
+
+    steps:
+      - name: Récupérer le code
+        uses: actions/checkout@v6
+
+      - name: Installer Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements-app.txt
+
+      - name: Installer les dépendances
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-app.txt pyinstaller
+
+      - name: Construire l'application
+        run: python -m PyInstaller packaging\transcription.spec --noconfirm
+
+      - name: Publier l'exécutable
+        uses: actions/upload-artifact@v4
+        with:
+          name: Transcription-Windows
+          path: dist/Transcription
+          if-no-files-found: error
+          retention-days: 30
