@@ -10,12 +10,13 @@ manquants au premier essai.
 Onedir plutôt que onefile : faster-whisper/ctranslate2 sont volumineux, un
 onefile décompresserait tout à chaque lancement.
 """
-import sys
 from pathlib import Path
 
 from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs, collect_submodules
 
-ROOT = Path(__file__).resolve().parent.parent
+# PyInstaller exécute ce fichier avec exec() : __file__ n'existe pas ici.
+# SPECPATH est la variable qu'il injecte lui-même (dossier du .spec).
+ROOT = Path(SPECPATH).resolve().parent  # noqa: F821
 
 hiddenimports = (
     collect_submodules("ctranslate2")
