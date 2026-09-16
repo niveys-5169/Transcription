@@ -1769,6 +1769,12 @@ function openSettings() {
   $("runpod_pod_gpu_type_id").value = settings.runpod_pod_gpu_type_id || "NVIDIA L4";
   $("runpod_pod_network_volume_id").value = settings.runpod_pod_network_volume_id || "";
   $("keep_media").checked = Boolean(settings.keep_media);
+  $("notebooklm_sync_enabled").checked = Boolean(settings.notebooklm_sync_enabled);
+  $("notebooklm_drive_folder_id").value = settings.notebooklm_drive_folder_id || "";
+  $("notebooklm_master_doc_id").value = settings.notebooklm_master_doc_id || "";
+  $("notebooklm-settings-state").textContent = settings.notebooklm_master_doc_id
+    ? (settings.notebooklm_sync_enabled ? "Prêt : le Doc maître sera mis à jour automatiquement." : "Doc maître trouvé, mais la synchronisation automatique est désactivée.")
+    : "À initialiser : aucun Doc maître Google n'est encore associé.";
   $("anthropic_api_key").value = "";
   $("nim_api_key").value = "";
   $("runpod_api_key").value = "";
@@ -1847,6 +1853,8 @@ async function saveSettings() {
     obsidian_tags: $("obsidian_tags").value.trim(),
     obsidian_filename_template: $("obsidian_filename_template").value.trim(),
     obsidian_create_entities: $("obsidian_create_entities").checked,
+    notebooklm_sync_enabled: $("notebooklm_sync_enabled").checked,
+    notebooklm_drive_folder_id: $("notebooklm_drive_folder_id").value.trim(),
   };
   const anthropic = $("anthropic_api_key").value.trim();
   if (anthropic) payload.anthropic_api_key = anthropic;
@@ -1866,6 +1874,50 @@ async function saveSettings() {
     toast("Réglages enregistrés.");
   } catch (error) {
     toast(error.message, true);
+  }
+}
+
+async function initializeNotebookLM() {
+  const button = $("notebooklm-initialize");
+  button.disabled = true;
+  button.textContent = "Ouverture de Google…";
+  try {
+    // Le dossier éventuel doit être enregistré avant que le serveur crée le
+    // Doc maître ; sinon il serait créé à la racine de Drive par défaut.
+    await api("/api/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        notebooklm_drive_folder_id: $("notebooklm_drive_folder_id").value.trim(),
+      }),
+    });
+    const result = await api("/api/notebooklm/initialize", { method: "POST" });
+    state.settings = await api("/api/settings");
+    $("notebooklm_master_doc_id").value = result.master_doc_id;
+    $("notebooklm_sync_enabled").checked = true;
+    $("notebooklm-settings-state").textContent = result.detail;
+    toast(result.detail);
+  } catch (error) {
+    $("notebooklm-settings-state").textContent = error.message;
+    toast(error.message, true);
+  } finally {
+    button.disabled = false;
+    button.textContent = "Initialiser avec Google";
+  }
+}
+
+async function testNotebookLMSync() {
+  const button = $("notebooklm-test");
+  button.disabled = true;
+  try {
+    const result = await api("/api/notebooklm/sync", { method: "POST" });
+    $("notebooklm-settings-state").textContent = result.detail;
+    toast(result.detail);
+  } catch (error) {
+    $("notebooklm-settings-state").textContent = error.message;
+    toast(error.message, true);
+  } finally {
+    button.disabled = false;
   }
 }
 
@@ -2166,6 +2218,16 @@ function initActions() {
   });
   $("settings-save").addEventListener("click", saveSettings);
   $("settings-cancel").addEventListener("click", () => $("settings-dialog").close());
+  $("notebooklm-initialize").addEventListener("click", initializeNotebookLM);
+  $("notebooklm-test").addEventListener("click", testNotebookLMSync);
+  document.querySelectorAll(".settings-section").forEach((section) => {
+    section.addEventListener("toggle", () => {
+      if (!section.open) return;
+      document.querySelectorAll(".settings-section").forEach((other) => {
+        if (other !== section) other.open = false;
+      });
+    });
+  });
 
   $("obsidian_layout").addEventListener("change", updateObsidianLayoutUI);
   $("obsidian_filename_style").addEventListener("change", updateObsidianFilenameUI);

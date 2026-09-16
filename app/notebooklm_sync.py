@@ -302,17 +302,27 @@ def sync_master_doc(courses_dir: Path, creds=None, *, settings=None) -> bool:
     identifiants absents, bibliothèques Google non installées) est
     journalisé et n'interrompt rien d'autre.
     """
+    return sync_master_doc_with_detail(courses_dir, creds, settings=settings)[0]
+
+
+def sync_master_doc_with_detail(
+    courses_dir: Path, creds=None, *, settings=None
+) -> tuple[bool, str]:
+    """Synchronise le Doc maître et renvoie un diagnostic affichable.
+
+    ``sync_master_doc`` garde son contrat booléen pour le pipeline existant ;
+    cette variante permet à l'interface de dire quoi réparer au lieu de
+    réduire tous les échecs Google à « réessayez ».
+    """
     settings = settings or config_module.load_settings()
 
     if not settings.notebooklm_sync_enabled:
-        return False
+        return False, "La synchronisation NotebookLM est désactivée dans les réglages."
 
     if not settings.notebooklm_master_doc_id:
-        logger.warning(
-            "Synchronisation NotebookLM activée mais aucun Doc maître : "
-            "lancez « python -m app.notebooklm_sync --init »."
-        )
-        return False
+        detail = "Aucun Doc maître Google n'est configuré : initialisez NotebookLM."
+        logger.warning("Synchronisation NotebookLM activée mais %s", detail)
+        return False, detail
 
     try:
         if creds is None:
@@ -320,16 +330,34 @@ def sync_master_doc(courses_dir: Path, creds=None, *, settings=None) -> bool:
         markdown = build_master_markdown(courses_dir)
         _update_master_doc(settings.notebooklm_master_doc_id, markdown, creds)
         logger.info("Doc maître NotebookLM synchronisé (%s).", settings.notebooklm_master_doc_id)
-        return True
+        return True, "Doc maître Google synchronisé."
     except NotebookLMSyncError as exc:
         logger.warning("Synchronisation NotebookLM en échec : %s", exc)
-        return False
+        return False, str(exc)
     except ImportError as exc:  # pragma: no cover - dépendance facultative
         logger.warning("Synchronisation NotebookLM en échec (dépendance absente) : %s", exc)
-        return False
+        return False, "Bibliothèques Google absentes : réinstallez l'application."
     except Exception as exc:  # noqa: BLE001 - pare-feu : aucune erreur Drive ne doit remonter
         logger.warning("Synchronisation NotebookLM en échec (%s) : %s", type(exc).__name__, exc)
-        return False
+        return False, f"{type(exc).__name__} : {exc}"
+
+
+def initialize_master_doc(*, settings=None) -> str:
+    """Lance le consentement Google si nécessaire, crée le Doc puis active la sync.
+
+    Cette action est explicitement déclenchée depuis l'interface : le navigateur
+    peut donc s'ouvrir pour le consentement OAuth. Les prochaines synchronisations
+    réutilisent ensuite le jeton et son refresh token, sans intervention humaine.
+    """
+    settings = settings or config_module.load_settings()
+    creds = load_credentials(settings, interactive=True)
+    document_id = settings.notebooklm_master_doc_id or create_master_doc(
+        settings.notebooklm_drive_folder_id, creds
+    )
+    config_module.save_settings(
+        {"notebooklm_master_doc_id": document_id, "notebooklm_sync_enabled": True}
+    )
+    return document_id
 
 
 # -------------------------------------------------------------------------- CLI

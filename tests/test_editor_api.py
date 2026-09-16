@@ -176,6 +176,32 @@ def test_sync_notebooklm_exige_obsidian_puis_enfile_la_sync(client, tmp_path, mo
     assert db.get_job(job_id)["notebooklm_status"] == "en_cours"
 
 
+def test_initialisation_notebooklm_active_la_sync(client, monkeypatch):
+    from app import notebooklm_sync
+
+    monkeypatch.setattr(notebooklm_sync, "initialize_master_doc", lambda: "doc-maitre")
+
+    response = client.post("/api/notebooklm/initialize")
+
+    assert response.status_code == 200
+    assert response.json()["master_doc_id"] == "doc-maitre"
+
+
+def test_test_notebooklm_restitue_le_diagnostic(client, monkeypatch):
+    from app import notebooklm_sync
+
+    monkeypatch.setattr(
+        notebooklm_sync,
+        "sync_master_doc_with_detail",
+        lambda _courses: (False, "Jeton Google expiré : initialisez NotebookLM."),
+    )
+
+    response = client.post("/api/notebooklm/sync")
+
+    assert response.status_code == 409
+    assert "Jeton Google expiré" in response.json()["detail"]
+
+
 def test_media_source_est_servi_sans_divulguer_son_chemin(client, tmp_path):
     job_id = _job(tmp_path)
     response = client.get(f"/api/jobs/{job_id}/media")

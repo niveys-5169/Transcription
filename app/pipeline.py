@@ -212,7 +212,7 @@ def _export_course_markdown(job_id: str) -> Path | None:
         return None
 
 
-def _sync_notebooklm() -> bool:
+def _sync_notebooklm() -> tuple[bool, str]:
     """Pousse la compilation de data/cours/ vers le Doc maître Drive.
 
     Étape non bloquante, comme la publication Obsidian : ``sync_master_doc``
@@ -223,25 +223,21 @@ def _sync_notebooklm() -> bool:
     try:
         from . import notebooklm_sync
 
-        return notebooklm_sync.sync_master_doc(config.COURSES_DIR)
+        return notebooklm_sync.sync_master_doc_with_detail(config.COURSES_DIR)
     except Exception:  # pragma: no cover - garde-fou ultime
         logger.exception("Synchronisation NotebookLM en échec de façon inattendue.")
-        return False
+        return False, "Erreur inattendue pendant la synchronisation NotebookLM."
 
 
-def _record_notebooklm_result(job_id: str, success: bool) -> None:
+def _record_notebooklm_result(job_id: str, success: bool, detail: str) -> None:
     """Mémorise un résultat de sync sans modifier l'état Obsidian du travail."""
     if success:
         db.update_job(
-            job_id, notebooklm_status="synchronise", notebooklm_synced_at=db.now(),
-            notebooklm_error=None,
+            job_id, notebooklm_status="synchronise", notebooklm_synced_at=db.now(), notebooklm_error=None,
         )
     else:
         db.update_job(
-            job_id, notebooklm_status="erreur", notebooklm_error=(
-                "La mise à jour du Doc maître a échoué. Vérifiez les identifiants Google "
-                "et la connexion, puis réessayez."
-            ),
+            job_id, notebooklm_status="erreur", notebooklm_error=detail,
         )
 
 
@@ -772,9 +768,9 @@ def run_publish(job_id: str) -> None:
     # synchronisation trompeur.
     if final_status == "published":
         sync_requested = config.load_settings().notebooklm_sync_enabled
-        synced = _sync_notebooklm()
+        synced, detail = _sync_notebooklm()
         if sync_requested:
-            _record_notebooklm_result(job_id, synced)
+            _record_notebooklm_result(job_id, synced, detail)
 
 
 def run_notebooklm_sync(job_id: str) -> None:
@@ -792,7 +788,7 @@ def run_notebooklm_sync(job_id: str) -> None:
     progress = _Progress(job_id)
     progress(0.2, "Synchronisation du Doc maître NotebookLM…")
     _export_course_markdown(job_id)
-    success = _sync_notebooklm()
+    success, detail = _sync_notebooklm()
     if success:
         db.update_job(
             job_id, task=None, stage="Publié — synchronisé NotebookLM", progress=1.0,
@@ -801,7 +797,7 @@ def run_notebooklm_sync(job_id: str) -> None:
         db.update_job(
             job_id, task=None, stage="Publié — synchronisation NotebookLM en échec", progress=1.0,
         )
-    _record_notebooklm_result(job_id, success)
+    _record_notebooklm_result(job_id, success, detail)
     _release(job_id)
 
 

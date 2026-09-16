@@ -14,7 +14,7 @@ import logging
 import pytest
 
 from app import config
-from app.notebooklm_sync import build_master_markdown, sync_master_doc
+from app.notebooklm_sync import build_master_markdown, sync_master_doc, sync_master_doc_with_detail
 
 
 @pytest.fixture(autouse=True)
@@ -126,6 +126,15 @@ def test_sync_active_sans_doc_maitre_echoue_proprement(tmp_path, caplog):
         result = sync_master_doc(tmp_path, settings=settings)
     assert result is False
     assert any("Doc maître" in record.message for record in caplog.records)
+
+
+def test_sync_detail_explique_le_reglage_desactive(tmp_path):
+    settings = config.save_settings({"notebooklm_sync_enabled": False})
+
+    result, detail = sync_master_doc_with_detail(tmp_path, settings=settings)
+
+    assert result is False
+    assert "désactivée" in detail
 
 
 def test_sync_sans_identifiants_ne_leve_pas(tmp_path, caplog):

@@ -133,6 +133,37 @@ async def post_settings(payload: dict = Body(...)) -> dict:
     return settings.public_dict()
 
 
+@app.post("/api/notebooklm/initialize")
+async def initialize_notebooklm() -> dict:
+    """Démarre le consentement OAuth local puis rend NotebookLM opérationnel."""
+    from . import notebooklm_sync
+
+    try:
+        document_id = await asyncio.to_thread(notebooklm_sync.initialize_master_doc)
+    except notebooklm_sync.NotebookLMSyncError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001 - erreur Google détaillée pour l'utilisateur
+        logger.exception("Initialisation NotebookLM en échec")
+        raise HTTPException(502, f"Initialisation Google impossible : {exc}") from exc
+    return {
+        "detail": "NotebookLM est configuré et sera synchronisé après chaque publication.",
+        "master_doc_id": document_id,
+    }
+
+
+@app.post("/api/notebooklm/sync")
+async def sync_notebooklm_now() -> dict:
+    """Test explicite de la synchronisation, avec un diagnostic non générique."""
+    from . import notebooklm_sync
+
+    ok, detail = await asyncio.to_thread(
+        notebooklm_sync.sync_master_doc_with_detail, config.COURSES_DIR
+    )
+    if not ok:
+        raise HTTPException(409, detail)
+    return {"detail": detail}
+
+
 # ------------------------------------------------------------------ lexique
 
 

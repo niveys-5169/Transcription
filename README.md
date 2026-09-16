@@ -429,7 +429,12 @@ réseau.
 2. Le scope demandé est le plus étroit possible,
    `https://www.googleapis.com/auth/drive.file` : l'application ne voit que
    les fichiers qu'elle a elle-même créés, jamais le reste de votre Drive.
-3. Première exécution :
+3. Dans l'application : **Réglages → NotebookLM → Initialiser avec Google**.
+   Le navigateur ouvre le consentement, puis l'application crée ou réutilise
+   le Doc maître et active la synchronisation automatique. Le bouton
+   **Tester la synchronisation** affiche immédiatement la cause exacte d'un
+   éventuel problème de jeton, de connexion ou de configuration.
+   En ligne de commande, l'équivalent est :
 
    ```bash
    python -m app.notebooklm_sync --init
