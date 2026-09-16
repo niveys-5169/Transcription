@@ -28,6 +28,11 @@ def ensure_entity_notes(settings, entities: list[dict]) -> None:
     if not settings.obsidian_create_entities:
         return
     for entity in entities:
+        # L'index du coffre a déjà trouvé une note, éventuellement hors du
+        # dossier d'entités géré par Verbatim : la lier suffit, créer un stub
+        # ici donnerait un doublon.
+        if entity.get("vault_path"):
+            continue
         wikilink = str(entity.get("wikilink") or entity.get("nom") or "").strip()
         if not wikilink:
             continue

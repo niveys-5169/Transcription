@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from .. import config as config_module
 from .entities import ensure_entity_notes, update_index, write_glossary
+from .index import resolve_entities
 from .notes import filename_for, render_note, render_verbatim
 from .vault import ObsidianError, resolve, write_atomic
 
@@ -40,7 +41,8 @@ def publish(job: dict, *, settings=None) -> str:
     # La fiche et le verbatim se désignent mutuellement.  Le chemin est placé
     # sur une copie afin de ne pas modifier l'objet du travail avant que la
     # publication soit entièrement réussie.
-    note_job = {**job, "obsidian_verbatim_path": verbatim_relative}
+    entities = resolve_entities(settings, job.get("entities") or [])
+    note_job = {**job, "entities": entities, "obsidian_verbatim_path": verbatim_relative}
     path = resolve(settings.obsidian_vault_path, relative)
     write_atomic(path, render_note(note_job, settings=settings))
 
@@ -50,7 +52,6 @@ def publish(job: dict, *, settings=None) -> str:
         ))
         job["_obsidian_verbatim_path"] = verbatim_relative
 
-    entities = job.get("entities") or []
     ensure_entity_notes(settings, entities)
 
     verification = job.get("verification") or {}
