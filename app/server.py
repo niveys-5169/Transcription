@@ -639,6 +639,19 @@ async def revision_job(job_id: str) -> dict:
     return _decorate(db.get_job(job_id, with_content=False))
 
 
+@app.post("/api/jobs/{job_id}/knowledge")
+async def knowledge_job(job_id: str) -> dict:
+    """Prépare des propositions de mémoire, sans publier quoi que ce soit."""
+    job = db.get_job(job_id, with_content=False)
+    if job is None:
+        raise HTTPException(404, "Travail introuvable.")
+    if job["status"] not in {"done", "checked", "published"}:
+        raise HTTPException(409, "La capitalisation exige un cours relu.")
+    db.update_job(job_id, task=pipeline.TASK_KNOWLEDGE, stage="Capitalisation en attente", progress=0.0)
+    pipeline.enqueue(job_id, pipeline.TASK_KNOWLEDGE)
+    return _decorate(db.get_job(job_id, with_content=False))
+
+
 @app.post("/api/jobs/{job_id}/factcheck")
 async def factcheck_job(job_id: str) -> dict:
     """Lance (ou relance) la vérification externe d'un travail déjà relu.

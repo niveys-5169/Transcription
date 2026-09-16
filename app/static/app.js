@@ -519,6 +519,7 @@ function renderDetail() {
   renderVerification(job);
   renderSources(job);
   renderRevision(job);
+  renderKnowledge(job);
 
   // Chaque étape est à part : on peut la lancer, ou la relancer avec
   // d'autres réglages, sur n'importe quel travail déjà à l'étape d'avant.
@@ -605,6 +606,20 @@ function renderRevision(job) {
   const points = Array.isArray(revision.points_cles) ? revision.points_cles : [];
   const questions = Array.isArray(revision.questions) ? revision.questions : [];
   panel.innerHTML = `${points.length ? `<h4>Points clés</h4><ul>${points.map((point) => `<li>${escapeHtml(point)}</li>`).join("")}</ul>` : ""}${questions.length ? `<h4>Questions</h4>${questions.slice(0, 5).map((item) => `<details><summary>${escapeHtml(item.q || "Question")}</summary><p>${escapeHtml(item.r || "")}</p></details>`).join("")}` : ""}`;
+}
+
+function renderKnowledge(job) {
+  const zone = $("knowledge-zone");
+  const panel = $("panel-knowledge");
+  const button = $("knowledge-btn");
+  const knowledge = job.knowledge;
+  zone.hidden = !isProofread(job);
+  button.disabled = job.task === "capitalisation";
+  button.textContent = knowledge ? "Régénérer les propositions" : "Proposer des concepts";
+  if (!knowledge) { panel.innerHTML = ""; return; }
+  const concepts = Array.isArray(knowledge.concepts) ? knowledge.concepts : [];
+  const themes = Array.isArray(knowledge.themes) ? knowledge.themes : [];
+  panel.innerHTML = `<p class="meta">À valider avant publication dans le coffre.</p>${concepts.length ? `<h4>Concepts</h4><ul>${concepts.map((item) => `<li><strong>${escapeHtml(item.nom || "")}</strong> — ${escapeHtml(item.definition || "")}</li>`).join("")}</ul>` : ""}${themes.length ? `<h4>Thèmes</h4><ul>${themes.map((item) => `<li>${escapeHtml(item.nom || "")}</li>`).join("")}</ul>` : ""}`;
 }
 
 const KIND_LABELS = {
@@ -2165,6 +2180,15 @@ function initActions() {
     try {
       await api(`/api/jobs/${state.detail.id}/revision`, { method: "POST" });
       toast("Fiche de révision en cours de génération.");
+      refreshJobs();
+    } catch (error) { toast(error.message, true); }
+  });
+
+  $("knowledge-btn").addEventListener("click", async () => {
+    if (!state.detail) return;
+    try {
+      await api(`/api/jobs/${state.detail.id}/knowledge`, { method: "POST" });
+      toast("Propositions de mémoire en cours de génération.");
       refreshJobs();
     } catch (error) { toast(error.message, true); }
   });

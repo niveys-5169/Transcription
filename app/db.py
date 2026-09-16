@@ -105,6 +105,7 @@ MIGRATIONS = {
     "notebooklm_error": "TEXT",
     "notebooklm_doc_id": "TEXT",
     "revision": "TEXT",
+    "knowledge": "TEXT",
 }
 
 ANNOTATION_MIGRATIONS = {
@@ -123,6 +124,8 @@ HEAVY_COLUMNS = (
     "verification",
     "factcheck_report",
     "entities",
+    "revision",
+    "knowledge",
 )
 
 # Statuts d'un travail. Chaque étape est un état stable et exploitable, pas
@@ -194,7 +197,7 @@ def init_db(db_path: Path | None = None) -> None:
 def _row_to_dict(row: sqlite3.Row) -> dict:
     data = dict(row)
     for colonne in (
-        "segments", "review_blocks", "verification", "factcheck_report", "entities", "revision",
+        "segments", "review_blocks", "verification", "factcheck_report", "entities", "revision", "knowledge",
     ):
         if colonne in data:
             try:

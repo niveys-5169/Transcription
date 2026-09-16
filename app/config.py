@@ -185,6 +185,8 @@ class Settings:
     obsidian_notes_folder: str = "Formation/Transcriptions"
     obsidian_verbatim_folder: str = "Formation/Transcriptions/Verbatim"
     obsidian_write_verbatim: bool = True
+    obsidian_concepts_folder: str = "Formation/Concepts"
+    obsidian_themes_folder: str = "Formation/Synthèses"
     obsidian_entities_folder: str = "Formation/MJPM/Entités"
     obsidian_index_note: str = "Formation/MJPM/MOC Formation.md"
     obsidian_glossary_note: str = "Formation/MJPM/Glossaire MJPM.md"

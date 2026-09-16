@@ -420,6 +420,10 @@ alias, tags et type), sans jamais écrire dans les notes existantes : « Cdaph �
 peut ainsi pointer vers une note `CDAPH` déjà présente. `GET /api/vault/index`
 permet de consulter cet index et `POST /api/vault/reindex` de le reconstruire.
 
+Le panneau **Mémoire** peut demander à Claude des propositions de concepts et
+de thèmes transversaux. Elles restent à l'état `proposed` et sont affichées
+pour contrôle : cette étape n'écrit encore aucune note dans le coffre.
+
 Les dossiers par défaut (`Formation/Transcriptions`, `Formation/MJPM/…`)
 sont des conjectures, tous modifiables dans les réglages — la première
 publication dira si la convention tombe juste pour votre coffre.
@@ -861,6 +865,7 @@ GET/POST/PATCH/DELETE /api/jobs/{id}/annotations  annotations persistées
 POST /api/jobs/{id}/proofread                 relecture et vérification de fidélité
 POST /api/jobs/{id}/factcheck                 vérification externe
 POST /api/jobs/{id}/publish                   publication Obsidian
+POST /api/jobs/{id}/knowledge                  propositions de concepts et thèmes, sans écriture
 POST /api/jobs/{id}/notebooklm-sync           synchronisation Google Docs / NotebookLM
 POST /api/jobs/{id}/cancel, /retry            interruption ou reprise
 GET  /api/jobs/{id}/download/{fmt}            export txt, md, json ou aperçu Obsidian
