@@ -17,6 +17,7 @@ const state = {
   playerSource: null, // "video" | "audio" | null
   playerJobId: null,
   playerSpeed: 1,
+  playerAnimationFrame: null,
   annotations: [],
   annotationsJobId: null,
   editingAnnotationId: null,
@@ -26,6 +27,10 @@ const state = {
   editorMatchIndex: -1,
   globalResults: [],
   blocksRenderLimit: 250,
+  editorUndoStack: [],
+  editorRedoStack: [],
+  editorHistoryJobId: null,
+  lexiconTerms: [],
 };
 
 /* ----------------------------------------------------------- utilitaires */
@@ -624,6 +629,21 @@ function renderKnowledge(job) {
   panel.innerHTML = `<p class="meta">${knowledge.status === "proposed" ? "À valider avant publication dans le coffre." : "Mémoire publiée."}</p>${concepts.length ? `<h4>Concepts</h4><ul>${concepts.map((item, i) => `<li><label><input type="checkbox" checked data-knowledge-kind="concept" data-knowledge-index="${i}"> <input class="knowledge-name" value="${escapeHtml(item.nom || "")}"></label> — ${escapeHtml(item.definition || "")}</li>`).join("")}</ul>` : ""}${themes.length ? `<h4>Thèmes</h4><ul>${themes.map((item, i) => `<li><label><input type="checkbox" checked data-knowledge-kind="theme" data-knowledge-index="${i}"> <input class="knowledge-name" value="${escapeHtml(item.nom || "")}"></label>${item.synthesis ? `<details><summary>Aperçu de la synthèse</summary><p><del>${escapeHtml(item.previous_synthesis || "Nouvelle synthèse")}</del></p><p>${escapeHtml(item.synthesis)}</p></details>` : ""}</li>`).join("")}</ul>` : ""}`;
 }
 
+function renderLexicon() {
+  const panel = $("panel-lexicon");
+  const terms = state.lexiconTerms || [];
+  panel.innerHTML = terms.length
+    ? `<div class="lexicon-list">${terms.slice(0, 30).map((term) => `<div class="lexicon-entry"><div><b>${escapeHtml(term.terme)}</b>${term.verifie ? " <span class=\"badge\">vérifié</span>" : ""}<p>${escapeHtml(term.definition || term.categorie || "")}</p></div>${term.user_editable ? `<button type="button" class="btn btn-mini btn-ghost" data-action="delete-lexicon" data-term="${escapeHtml(term.terme)}">Supprimer</button>` : ""}</div>`).join("")}</div>${terms.length > 30 ? `<p class="meta">${terms.length - 30} autres termes disponibles dans les réglages.</p>` : ""}`
+    : "<p class=\"meta\">Aucun terme dans le lexique.</p>";
+}
+
+async function loadLexicon() {
+  try {
+    state.lexiconTerms = (await api("/api/lexicon")).terms || [];
+    renderLexicon();
+  } catch (error) { toast(error.message, true); }
+}
+
 const KIND_LABELS = {
   omission: "omission",
   ajout: "ajout",
@@ -668,6 +688,7 @@ function renderPendingCard(item) {
         </div>` : ""}
       <div class="pending-actions">
         <button type="button" class="btn btn-primary btn-mini" data-pending-action="valider">Valider</button>
+        <button type="button" class="btn btn-ghost btn-mini" data-pending-action="valider-lexique">Valider + lexique</button>
         <button type="button" class="btn btn-ghost btn-mini" data-pending-action="rejeter">Rejeter</button>
       </div>
     </div>`;
@@ -1158,6 +1179,37 @@ function updatePlayerTimeDisplay() {
   updateActiveWordFromTime();
 }
 
+function schedulePlayerTimeDisplay() {
+  if (state.playerAnimationFrame !== null) return;
+  state.playerAnimationFrame = window.requestAnimationFrame(() => {
+    state.playerAnimationFrame = null;
+    updatePlayerTimeDisplay();
+  });
+}
+
+async function replaceEditorMatches(all = false) {
+  const query = editorQuery();
+  const replacement = $("editor-replace-input").value;
+  const job = state.detail;
+  if (!job || !query) return;
+  const ids = all ? [...state.editorMatches] : [state.editorMatches[state.editorMatchIndex]].filter(Boolean);
+  if (!ids.length) return;
+  const expression = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi");
+  try {
+    for (const id of ids) {
+      const block = state.blocks.find((item) => item.id === id);
+      if (!block) continue;
+      const text = block.text.replace(expression, replacement);
+      const updated = await api(`/api/jobs/${job.id}/review-blocks/${id}`, {
+        method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }),
+      });
+      Object.assign(block, updated);
+    }
+    updateEditorMatches(); renderBlocks();
+    toast(`${ids.length} bloc${ids.length > 1 ? "s" : ""} mis à jour.`);
+  } catch (error) { toast(error.message, true); }
+}
+
 function updateActiveWordFromTime() {
   const previous = document.querySelector(".word.is-playing");
   const block = state.blocks.find((item) => item.id === state.activeBlockId);
@@ -1172,7 +1224,7 @@ function updateActiveWordFromTime() {
 function initPlayer() {
   ["media-player", "audio-player"].forEach((id) => {
     const media = $(id);
-    media.addEventListener("timeupdate", updatePlayerTimeDisplay);
+    media.addEventListener("timeupdate", schedulePlayerTimeDisplay);
     media.addEventListener("loadedmetadata", updatePlayerTimeDisplay);
     media.addEventListener("play", updatePlayPauseIcon);
     media.addEventListener("pause", updatePlayPauseIcon);
@@ -1301,6 +1353,11 @@ async function loadReviewBlocks(job) {
   // cours sur un rafraîchissement SSE pour le même travail.
   if (state.blocksJobId === job.id && state.blocks.length) return;
   try {
+    if (state.blocksJobId !== job.id) {
+      state.editorUndoStack = [];
+      state.editorRedoStack = [];
+      state.editorHistoryJobId = job.id;
+    }
     const data = await api(`/api/jobs/${job.id}/review-blocks`);
     state.blocks = data.blocks || [];
     state.blocksJobId = job.id;
@@ -1369,6 +1426,66 @@ function speakerColorClass(speaker) {
   return `speaker-color-${Math.abs(hash) % 6}`;
 }
 
+async function refreshReviewBlocks(jobId) {
+  state.blocks = (await api(`/api/jobs/${jobId}/review-blocks`)).blocks || [];
+  state.blocksJobId = jobId;
+  renderBlocks();
+  renderAnnotations();
+}
+
+function editableBlockSnapshot() {
+  return state.blocks.map((block) => ({
+    id: block.id, text: block.text, speaker: block.speaker ?? null, role: block.role ?? null,
+    start: block.start, end: block.end,
+  }));
+}
+
+function pushEditorHistory(entry) {
+  if (!state.detail || state.editorHistoryJobId !== state.detail.id) return;
+  state.editorUndoStack.push(entry);
+  if (state.editorUndoStack.length > 50) state.editorUndoStack.shift();
+  state.editorRedoStack = [];
+}
+
+async function restoreEditableBlockSnapshot(snapshot) {
+  const job = state.detail;
+  if (!job) return;
+  for (const saved of snapshot) {
+    if (!state.blocks.some((block) => block.id === saved.id)) continue;
+    await api(`/api/jobs/${job.id}/review-blocks/${saved.id}`, {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: saved.text, speaker: saved.speaker, role: saved.role, start: saved.start, end: saved.end }),
+    });
+  }
+  await refreshReviewBlocks(job.id);
+}
+
+async function undoEditor() {
+  const entry = state.editorUndoStack.pop();
+  if (!entry) return;
+  try {
+    await entry.undo();
+    state.editorRedoStack.push(entry);
+    toast("Modification annulée.");
+  } catch (error) {
+    state.editorUndoStack.push(entry);
+    toast(error.message, true);
+  }
+}
+
+async function redoEditor() {
+  const entry = state.editorRedoStack.pop();
+  if (!entry) return;
+  try {
+    await entry.redo();
+    state.editorUndoStack.push(entry);
+    toast("Modification rétablie.");
+  } catch (error) {
+    state.editorRedoStack.push(entry);
+    toast(error.message, true);
+  }
+}
+
 function renderBlocks() {
   const list = $("blocks-list");
   const job = state.detail;
@@ -1402,12 +1519,13 @@ function renderBlocks() {
       }).join(" ");
       const hasReviewed = job && ["done", "checked", "published"].includes(job.status);
       const rawControl = hasReviewed ? `<details class="block-raw"><summary>Brut</summary><p>${escapeHtml(raw)}</p><button type="button" class="btn btn-mini btn-ghost" data-action="seek" data-id="${block.id}">Écouter ce passage</button></details>` : "";
+      const editTools = `<div class="block-tools"><button type="button" class="btn btn-mini btn-ghost" data-action="timing" data-id="${block.id}">Horodatage</button><button type="button" class="btn btn-mini btn-ghost" data-action="split" data-id="${block.id}"${(block.words || []).length < 2 ? " disabled" : ""}>Scinder</button><button type="button" class="btn btn-mini btn-ghost" data-action="merge" data-id="${block.id}">Fusionner avec le suivant</button></div>`;
       const previous = visible[index - 1];
       const groupHeader = block.speaker && (!previous || previous.speaker !== block.speaker)
         ? `<div class="speaker-turn ${speakerColorClass(block.speaker)}"><span class="speaker-dot"></span><b>${escapeHtml(block.speaker)}</b><span>tour de parole</span></div>` : "";
       return `${groupHeader}<div class="block ${speakerColorClass(block.speaker)} ${confidence}${needsReview ? " needs-review" : ""}${isActive ? " is-active-block" : ""}" data-block-id="${block.id}">
         <time class="block-time${needsReview ? " needs-review" : ""}" data-action="seek" data-id="${block.id}" title="${needsReview ? "Passage à vérifier" : "Aller à cet horodatage"}">${clock(block.start)}</time>
-        <div class="block-body">${speakerControls}${body}${confidenceLabel}${rawControl}</div>
+        <div class="block-body">${speakerControls}${body}${confidenceLabel}${editTools}${rawControl}</div>
       </div>`;
     }).join("");
   }
@@ -1435,6 +1553,7 @@ async function saveSpeakerField(blockId, fields) {
   const job = state.detail;
   const block = state.blocks.find((item) => item.id === blockId);
   if (!job || !block) return;
+  const beforeSnapshot = editableBlockSnapshot();
   const previous = { speaker: block.speaker, role: block.role };
   // Les blocs qui partagent le même repère (ex. "Speaker 1") sont mis à jour
   // ensemble : renommer le repère ou lui donner un rôle s'applique à tous.
@@ -1453,6 +1572,11 @@ async function saveSpeakerField(blockId, fields) {
       method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(fields),
     });
     Object.assign(block, updated);
+    const afterSnapshot = editableBlockSnapshot();
+    pushEditorHistory({
+      undo: () => restoreEditableBlockSnapshot(beforeSnapshot),
+      redo: () => restoreEditableBlockSnapshot(afterSnapshot),
+    });
     renderBlocks();
   } catch (error) {
     Object.assign(block, previous);
@@ -1563,6 +1687,7 @@ async function saveBlockEdit(blockId) {
 
   const block = state.blocks.find((b) => b.id === blockId);
   const previousText = block ? block.text : "";
+  const beforeSnapshot = editableBlockSnapshot();
   if (block) block.text = text;
 
   try {
@@ -1572,6 +1697,11 @@ async function saveBlockEdit(blockId) {
       body: JSON.stringify({ text }),
     });
     if (block) block.text = updated.text;
+    const afterSnapshot = editableBlockSnapshot();
+    pushEditorHistory({
+      undo: () => restoreEditableBlockSnapshot(beforeSnapshot),
+      redo: () => restoreEditableBlockSnapshot(afterSnapshot),
+    });
     state.editingBlockId = null;
     renderBlocks();
     const savedStatus = $(`block-save-status-${blockId}`);
@@ -1584,6 +1714,79 @@ async function saveBlockEdit(blockId) {
     if (status) { status.textContent = error.message; status.className = "block-save-status is-error"; }
     toast(error.message, true);
   }
+}
+
+async function splitBlock(blockId) {
+  const block = state.blocks.find((item) => item.id === blockId);
+  const job = state.detail;
+  if (!block || !job || (block.words || []).length < 2) return;
+  const value = window.prompt(`Scinder après quel mot ? (1 à ${(block.words || []).length - 1})`, "1");
+  const wordIndex = Number(value);
+  if (!Number.isInteger(wordIndex) || wordIndex < 1 || wordIndex >= block.words.length) return;
+  try {
+    const result = await api(`/api/jobs/${job.id}/review-blocks/${blockId}/split`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ word_index: wordIndex }) });
+    const entry = {
+      snapshotId: result.snapshot_id,
+      undo: async () => {
+        await api(`/api/jobs/${job.id}/review-versions/${entry.snapshotId}/restore`, { method: "POST" });
+        await refreshReviewBlocks(job.id);
+      },
+      redo: async () => {
+        const replay = await api(`/api/jobs/${job.id}/review-blocks/${blockId}/split`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ word_index: wordIndex }) });
+        entry.snapshotId = replay.snapshot_id;
+        await refreshReviewBlocks(job.id);
+      },
+    };
+    pushEditorHistory(entry);
+    await refreshReviewBlocks(job.id);
+    state.activeBlockId = blockId;
+    renderBlocks(); renderAnnotations();
+  } catch (error) { toast(error.message, true); }
+}
+
+async function mergeBlock(blockId) {
+  const job = state.detail;
+  if (!job) return;
+  try {
+    const result = await api(`/api/jobs/${job.id}/review-blocks/${blockId}/merge`, { method: "POST" });
+    const entry = {
+      snapshotId: result.snapshot_id,
+      undo: async () => {
+        await api(`/api/jobs/${job.id}/review-versions/${entry.snapshotId}/restore`, { method: "POST" });
+        await refreshReviewBlocks(job.id);
+      },
+      redo: async () => {
+        const replay = await api(`/api/jobs/${job.id}/review-blocks/${blockId}/merge`, { method: "POST" });
+        entry.snapshotId = replay.snapshot_id;
+        await refreshReviewBlocks(job.id);
+      },
+    };
+    pushEditorHistory(entry);
+    await refreshReviewBlocks(job.id);
+    state.activeBlockId = blockId;
+    renderBlocks(); renderAnnotations();
+  } catch (error) { toast(error.message, true); }
+}
+
+async function editBlockTiming(blockId) {
+  const job = state.detail;
+  const block = state.blocks.find((item) => item.id === blockId);
+  if (!job || !block) return;
+  const start = Number(window.prompt("Début (secondes)", String(block.start)));
+  const end = Number(window.prompt("Fin (secondes)", String(block.end)));
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return;
+  const beforeSnapshot = editableBlockSnapshot();
+  try {
+    await api(`/api/jobs/${job.id}/review-blocks/${blockId}`, {
+      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ start, end }),
+    });
+    await refreshReviewBlocks(job.id);
+    const afterSnapshot = editableBlockSnapshot();
+    pushEditorHistory({
+      undo: () => restoreEditableBlockSnapshot(beforeSnapshot),
+      redo: () => restoreEditableBlockSnapshot(afterSnapshot),
+    });
+  } catch (error) { toast(error.message, true); }
 }
 
 function initBlocksList() {
@@ -1616,6 +1819,13 @@ function initBlocksList() {
 
     const cancelTarget = event.target.closest('[data-action="cancel"]');
     if (cancelTarget) { cancelBlockEdit(); return; }
+
+    const splitTarget = event.target.closest('[data-action="split"]');
+    if (splitTarget) { splitBlock(splitTarget.dataset.id); return; }
+    const mergeTarget = event.target.closest('[data-action="merge"]');
+    if (mergeTarget) { mergeBlock(mergeTarget.dataset.id); return; }
+    const timingTarget = event.target.closest('[data-action="timing"]');
+    if (timingTarget) { editBlockTiming(timingTarget.dataset.id); return; }
   });
   $("blocks-list").addEventListener("change", (event) => {
     const select = event.target.closest('[data-action="role"]');
@@ -1775,6 +1985,17 @@ function initKeyboardShortcuts() {
     }
 
     if (isEditableTarget(event.target)) return;
+
+    if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === "z") {
+      event.preventDefault();
+      if (event.shiftKey) redoEditor(); else undoEditor();
+      return;
+    }
+    if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === "y") {
+      event.preventDefault();
+      redoEditor();
+      return;
+    }
 
     if (event.key === " ") { event.preventDefault(); playPause(); }
     else if (event.key === "ArrowLeft") { event.preventDefault(); seekBy(-5); }
@@ -2350,6 +2571,8 @@ function initActions() {
   });
   $("editor-search-prev").addEventListener("click", () => moveEditorMatch(-1));
   $("editor-search-next").addEventListener("click", () => moveEditorMatch(1));
+  $("editor-replace-btn").addEventListener("click", () => replaceEditorMatches(false));
+  $("editor-replace-all-btn").addEventListener("click", () => replaceEditorMatches(true));
 
   $("annotation-filter").addEventListener("change", renderAnnotations);
   $("annotation-list").addEventListener("click", (event) => {
@@ -2494,13 +2717,50 @@ function initActions() {
     const action = button.dataset.pendingAction;
     card.querySelectorAll("button").forEach((b) => { b.disabled = true; });
     try {
-      await api(`/api/jobs/${job.id}/corrections/${correctionId}/${action}`, { method: "POST" });
-      toast(action === "valider" ? "Correction validée." : "Correction rejetée.");
+      const endpointAction = action === "valider-lexique" ? "valider" : action;
+      await api(`/api/jobs/${job.id}/corrections/${correctionId}/${endpointAction}`, { method: "POST" });
+      if (action === "valider-lexique") {
+        const term = card.querySelector(".finding-message b")?.textContent || "";
+        const response = await api("/api/lexicon", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ terme: term, verifie: true }),
+        });
+        state.lexiconTerms = response.terms || [];
+        renderLexicon();
+      }
+      toast(action === "rejeter" ? "Correction rejetée." : action === "valider-lexique" ? "Correction validée et ajoutée au lexique." : "Correction validée.");
       await selectJob(job.id, true);
     } catch (error) {
       toast(error.message, true);
       card.querySelectorAll("button").forEach((b) => { b.disabled = false; });
     }
+  });
+
+  $("lexicon-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const terme = $("lexicon-term-input").value.trim();
+    if (!terme) return;
+    try {
+      const response = await api("/api/lexicon", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ terme, definition: $("lexicon-definition-input").value.trim(), verifie: $("lexicon-verified-input").checked }),
+      });
+      state.lexiconTerms = response.terms || [];
+      $("lexicon-form").reset();
+      renderLexicon();
+      toast("Terme ajouté au lexique.");
+    } catch (error) { toast(error.message, true); }
+  });
+
+  document.addEventListener("click", async (event) => {
+    const button = event.target.closest('[data-action="delete-lexicon"]');
+    if (!button || !window.confirm(`Supprimer « ${button.dataset.term} » du lexique utilisateur ?`)) return;
+    try {
+      const response = await api(`/api/lexicon/${encodeURIComponent(button.dataset.term)}`, { method: "DELETE" });
+      state.lexiconTerms = response.terms || [];
+      renderLexicon();
+      toast("Terme supprimé du lexique utilisateur.");
+    } catch (error) { toast(error.message, true); }
   });
 }
 
@@ -2517,6 +2777,7 @@ function initActions() {
   initKeyboardShortcuts();
   try {
     await loadStatus();
+    await loadLexicon();
     await refreshJobs();
     listenEvents();
   } catch (error) {

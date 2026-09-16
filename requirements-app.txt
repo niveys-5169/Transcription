@@ -38,3 +38,6 @@ google-auth-httplib2>=0.2
 # aux deux : le fallback dans app/desktop.py gère leur absence.
 pystray>=0.19
 Pillow>=10
+
+# Export Word : document de cours avec métadonnées et tours de parole.
+python-docx>=1.1

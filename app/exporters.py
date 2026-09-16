@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import re
+from io import BytesIO
 
 EXTENSIONS = {
     "txt": "text/plain; charset=utf-8",
@@ -10,6 +11,7 @@ EXTENSIONS = {
     "srt": "application/x-subrip; charset=utf-8",
     "vtt": "text/vtt; charset=utf-8",
     "json": "application/json; charset=utf-8",
+    "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     # La fiche telle qu'elle serait écrite dans le coffre Obsidian (étape 4) :
     # frontmatter, encart de vérification, notes de bas de page comprises.
     # Téléchargeable même sans coffre configuré — c'est un aperçu.
@@ -53,10 +55,28 @@ def timecode(seconds: float, separator: str = ",") -> str:
     return f"{hours:02d}:{minutes:02d}:{secs:02d}{separator}{milliseconds:03d}"
 
 
+def _subtitle_text(segment: dict, line_length: int = 42) -> str:
+    text = str(segment.get("text") or "").strip()
+    speaker = str(segment.get("speaker") or "").strip()
+    if speaker:
+        text = f"{speaker}: {text}"
+    words, lines, line = text.split(), [], ""
+    for word in words:
+        candidate = f"{line} {word}".strip()
+        if line and len(candidate) > line_length:
+            lines.append(line)
+            line = word
+        else:
+            line = candidate
+    if line:
+        lines.append(line)
+    return "\n".join(lines)
+
+
 def to_srt(segments) -> str:
     lines: list[str] = []
     for index, segment in enumerate(segments, start=1):
-        text = (segment.get("text") or "").strip()
+        text = _subtitle_text(segment)
         if not text:
             continue
         lines.append(str(index))
@@ -72,7 +92,7 @@ def to_srt(segments) -> str:
 def to_vtt(segments) -> str:
     lines = ["WEBVTT", ""]
     for segment in segments:
-        text = (segment.get("text") or "").strip()
+        text = _subtitle_text(segment)
         if not text:
             continue
         lines.append(
@@ -133,18 +153,57 @@ def _summary_list(job: dict) -> list[str]:
         return []
 
 
-def render(job: dict, fmt: str) -> str:
+def to_docx(job: dict) -> bytes:
+    """Document Word lisible, construit depuis les blocs éditoriaux."""
+    try:
+        from docx import Document
+        from docx.shared import Pt
+    except ImportError as exc:  # dépendance optionnelle en mode développement
+        raise RuntimeError("L'export DOCX nécessite python-docx.") from exc
+    document = Document()
+    title = str(job.get("title") or job.get("filename") or "Transcription")
+    document.core_properties.title = title
+    document.add_heading(title, level=0)
+    document.add_paragraph(
+        f"Langue : {job.get('language') or 'auto'} · "
+        f"Moteur : {job.get('engine') or '—'} · "
+        f"Durée : {timecode(job.get('duration') or 0).split(',')[0]}"
+    )
+    document.add_heading("Transcription", level=1)
+    blocks = job.get("review_blocks") or job.get("segments") or []
+    if blocks:
+        for block in blocks:
+            text = str(block.get("text") or "").strip()
+            if not text:
+                continue
+            label = timecode(block.get("start") or 0).split(",")[0]
+            speaker = str(block.get("speaker") or "").strip()
+            paragraph = document.add_paragraph()
+            run = paragraph.add_run(f"[{label}]" + (f" {speaker}" if speaker else ""))
+            run.bold = True
+            run.font.size = Pt(9)
+            paragraph.add_run(f" — {text}")
+    else:
+        document.add_paragraph(editorial_text(job))
+    output = BytesIO()
+    document.save(output)
+    return output.getvalue()
+
+
+def render(job: dict, fmt: str) -> str | bytes:
     """Contenu du fichier à télécharger, pour le format demandé."""
     if fmt == "txt":
         return editorial_text(job) + "\n"
     if fmt == "md":
         return _markdown(job)
     if fmt == "srt":
-        return to_srt(job.get("segments") or [])
+        return to_srt(job.get("review_blocks") or job.get("segments") or [])
     if fmt == "vtt":
-        return to_vtt(job.get("segments") or [])
+        return to_vtt(job.get("review_blocks") or job.get("segments") or [])
     if fmt == "json":
         return to_json(job)
+    if fmt == "docx":
+        return to_docx(job)
     if fmt == "obsidian":
         from .obsidian.notes import render_note
 

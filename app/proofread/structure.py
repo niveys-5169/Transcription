@@ -127,3 +127,22 @@ def insert_headings(text: str, sections: list[dict]) -> str:
         previous = position
     pieces.append(text[previous:])
     return "".join(pieces)
+
+
+def insert_wikilinks(text: str, proposals: list[dict], allowed_titles: set[str]) -> str:
+    """Insère un lien proposé seulement si sa cible est déjà indexée."""
+    if not text or not proposals or not allowed_titles:
+        return text
+    result = text
+    allowed = {str(title).strip() for title in allowed_titles if str(title).strip()}
+    for proposal in proposals:
+        if not isinstance(proposal, dict):
+            continue
+        quote = str(proposal.get("quote") or "").strip()
+        title = str(proposal.get("title") or "").strip()
+        if not quote or not title or title not in allowed or "[[" in quote:
+            continue
+        if result.count(quote) != 1:
+            continue
+        result = result.replace(quote, f"[[{title}|{quote}]]", 1)
+    return result

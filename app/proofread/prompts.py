@@ -44,7 +44,7 @@ Réponds uniquement par un objet JSON valide, sans aucun texte autour et sans \
 bloc de code, de la forme :
 
 {"title": "...", "summary": ["...", "..."], "sections": [{"heading": "...", \
-"quote": "..."}]}
+"quote": "..."}], "wikilinks": [{"quote": "...", "title": "..."}]}
 
 - "title" : titre court et descriptif du cours, 80 caractères maximum.
 - "summary" : 3 à 6 points clés, une phrase courte chacun.
@@ -53,12 +53,19 @@ bloc de code, de la forme :
 - "quote" : recopie EXACTE des 8 à 12 premiers mots du passage où commence la \
 section, tels qu'ils apparaissent dans le texte fourni. Ne les modifie pas, \
 ne les traduis pas, ne les abrège pas — ils servent à retrouver l'endroit.
-- La première section ne commence pas au tout premier mot du texte.\
+- La première section ne commence pas au tout premier mot du texte.
+- "wikilinks" : zéro à huit notions qui correspondent exactement à une note
+  existante fournie. "title" reprend un titre existant à l'identique et
+  "quote" est une citation EXACTE (2 à 8 mots). Un tableau vide est préférable
+  à un lien incertain.\
 """
 
 STRUCTURE_USER = """\
 Voici la transcription relue d'un cours. Produis-en le sommaire au format \
 JSON demandé.
+
+Notes déjà présentes dans le coffre (seules cibles autorisées) :
+{vault_notes}
 
 {body}"""
 

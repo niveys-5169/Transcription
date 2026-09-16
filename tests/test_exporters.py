@@ -30,6 +30,19 @@ def test_vtt_commence_par_l_entete():
     assert "00:00:00.000 --> 00:00:02.500" in vtt
 
 
+def test_sous_titres_utilisent_locuteur_et_longueur_de_ligne():
+    srt = exporters.to_srt([{"start": 0, "end": 5, "speaker": "Professeur", "text": "un texte suffisamment long pour devoir être découpé en plusieurs lignes de sous titres"}])
+    lines = srt.splitlines()[2:]
+    assert lines[0].startswith("Professeur:")
+    assert all(len(line) <= 42 for line in lines)
+
+
+def test_docx_contient_titre_et_tours_de_parole():
+    content = exporters.to_docx({"title": "Cours test", "language": "fr", "engine": "runpod", "review_blocks": [{"start": 65, "speaker": "Professeur", "text": "Bonjour."}]})
+    assert content.startswith(b"PK")
+    assert b"word/document.xml" in content
+
+
 def test_render_txt_prefere_le_texte_relu():
     job = {"clean_text": "Texte relu.", "raw_text": "texte brut"}
     assert exporters.render(job, "txt") == "Texte relu.\n"

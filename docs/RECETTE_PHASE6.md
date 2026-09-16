@@ -1,4 +1,6 @@
-# Recette navigateur — phase 6
+# Recette navigateur — phase 6 (archivée)
+
+> Cette recette historique est remplacée par [RECETTE.md](RECETTE.md).
 
 Cette recette complète les tests API : le front est volontairement sans
 framework ni runner JavaScript, donc les interactions média et clavier sont

@@ -8,12 +8,13 @@ from urllib.request import Request, urlopen
 
 from ..config import Settings, load_settings
 from ..lexicon import glossary_block
+from ..obsidian import index as vault_index
 from . import prompts
 from .base import ProofreadError, ProofreadResult, TextPair
 from .basic import clean_line, split_paragraph_spans
 from .chunking import TextChunk, tail
 from .claude import CONTEXT_CHARS, MIN_LENGTH_RATIO, MAX_TOKENS_RELECTURE, MAX_TOKENS_STRUCTURE, STRUCTURE_INPUT_LIMIT
-from .structure import insert_headings, parse_json_object
+from .structure import insert_headings, insert_wikilinks, parse_json_object
 
 logger = logging.getLogger(__name__)
 
@@ -103,13 +104,17 @@ class NimProofreader:
                 if len(body) > STRUCTURE_INPUT_LIMIT:
                     half = STRUCTURE_INPUT_LIMIT // 2
                     body = f"{body[:half]}\n\n[…]\n\n{body[-half:]}"
-                data = parse_json_object(self.complete(system=prompts.STRUCTURE_SYSTEM, user=prompts.STRUCTURE_USER.format(body=body), max_tokens=MAX_TOKENS_STRUCTURE))
+                notes = vault_index.search(self.settings, limit=80) if self.settings.obsidian_vault_path else []
+                titles = {str(note.get("title") or "").strip() for note in notes}
+                data = parse_json_object(self.complete(system=prompts.STRUCTURE_SYSTEM, user=prompts.STRUCTURE_USER.format(body=body, vault_notes="\n".join(f"- {title}" for title in sorted(titles)) or "(aucune note)"), max_tokens=MAX_TOKENS_STRUCTURE))
                 if data:
                     result.title = str(data.get("title") or "").strip()[:120]
                     if isinstance(data.get("summary"), list):
                         result.summary = [str(point).strip() for point in data["summary"] if str(point).strip()][:8]
                     if isinstance(data.get("sections"), list):
                         result.text = insert_headings(result.text, [item for item in data["sections"] if isinstance(item, dict)])
+                    if isinstance(data.get("wikilinks"), list):
+                        result.text = insert_wikilinks(result.text, data["wikilinks"], titles)
             except ProofreadError as exc:
                 logger.warning("Sommaire NIM non généré : %s", exc)
         if on_progress:

@@ -578,7 +578,15 @@ Les sept bugs de l'historique du projet, et leur sort :
 7. **`runpod.serverless.start()` non détecté** — l'appel reste inconditionnel,
    au niveau module, dans `handler.py`.
 
-## RunPod : transcription pure, et rien d'autre
+## Archive technique : ancienne documentation RunPod
+
+> Cette section historique décrit l'ancien mode **Serverless**, supprimé du
+> produit. Ne suivez pas ses instructions. Verbatim v2 utilise uniquement un
+> pod HTTP et `POST /transcribe` avec le fichier audio entier ; WhisperX y
+> produit les mots et, avec `HF_TOKEN`, la diarisation pyannote. La procédure
+> opérationnelle actuelle est décrite dans `docs/PLAN.md` et `docs/RECETTE.md`.
+
+### Ancien fonctionnement Serverless (archivé)
 
 Le worker RunPod reçoit de l'audio et rend du texte avec ses horodatages. Il
 ne relit pas, ne structure pas, ne vérifie pas, n'appelle aucun autre service.

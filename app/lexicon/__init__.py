@@ -115,6 +115,32 @@ def save_user_term(term: Term) -> None:
     load_lexicon(refresh=True)
 
 
+def delete_user_term(terme: str) -> bool:
+    """Supprime un ajout local sans toucher au lexique livré.
+
+    Si le terme remplaçait une entrée livrée, celle-ci redevient simplement
+    visible après suppression : le jeu de référence reste donc immuable.
+    """
+    terme = str(terme or "").strip()
+    if not terme:
+        return False
+    path = _user_lexicon_path()
+    entries = _load_file(path)
+    kept = [entry for entry in entries if str(entry.get("terme") or "") != terme]
+    if len(kept) == len(entries):
+        return False
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(kept, indent=2, ensure_ascii=False), encoding="utf-8")
+    tmp.replace(path)
+    load_lexicon(refresh=True)
+    return True
+
+
+def user_term_names() -> set[str]:
+    """Noms modifiables depuis l'interface (fichier utilisateur seulement)."""
+    return {str(entry.get("terme") or "") for entry in _load_file(_user_lexicon_path())}
+
+
 def _from_dict(raw: dict) -> Term | None:
     terme = str(raw.get("terme") or "").strip()
     if not terme:

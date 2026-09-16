@@ -115,6 +115,16 @@ def test_publier_ecrit_un_verbatim_horodate_et_lie_a_la_fiche(vault, settings):
     assert "verbatim: \"[[2026-09-14 — Introduction à la tutelle (verbatim)]]\"" in fiche
 
 
+def test_publier_ecrit_une_fiche_revision_compatible_spaced_repetition(vault, settings):
+    j = job(revision={"points_cles": ["Point important"], "flashcards": [{"recto": "Question", "verso": "Réponse"}]})
+    obsidian.publish(j, settings=settings)
+
+    revision = (vault / j["_obsidian_revision_path"]).read_text(encoding="utf-8")
+    assert revision.startswith("---\ntype: revision")
+    assert "Point important" in revision
+    assert "Question::Réponse" in revision
+
+
 def test_republier_reutilise_le_meme_verbatim(vault, settings):
     j = job(review_blocks=[{"start": 0, "text": "Version initiale."}])
     obsidian.publish(j, settings=settings)
