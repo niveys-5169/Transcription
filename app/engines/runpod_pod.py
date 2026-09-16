@@ -292,23 +292,34 @@ class PodFallbackSession:
     ) -> dict:
         """Envoie le média entier au pod, sans base64 ni limite de taille JSON."""
         url = f"{self._client.proxy_url(self.pod_id, self.settings.runpod_pod_port)}/transcribe"
-        try:
-            response = self._http.post(
-                url,
-                data={
-                    "model": model, "language": language or "auto",
-                    "initial_prompt": initial_prompt or "", "diarize": str(bool(diarize)).lower(),
-                },
-                files={"audio": ("audio.wav", audio_bytes, "audio/wav")},
-            )
-        except httpx.HTTPError as exc:
-            raise TranscriptionError(f"Pod RunPod injoignable : {exc}") from exc
-        if response.status_code == 413:
-            raise TranscriptionError("Le pod a refusé le fichier complet (HTTP 413).")
-        try:
-            output = response.json()
-        except ValueError as exc:
-            raise TranscriptionError(f"Réponse du pod illisible (HTTP {response.status_code}).") from exc
+        attempts = 3
+        for attempt in range(1, attempts + 1):
+            try:
+                response = self._http.post(
+                    url,
+                    data={
+                        "model": model, "language": language or "auto",
+                        "initial_prompt": initial_prompt or "", "diarize": str(bool(diarize)).lower(),
+                    },
+                    files={"audio": ("audio.wav", audio_bytes, "audio/wav")},
+                )
+            except httpx.HTTPError as exc:
+                raise TranscriptionError(f"Pod RunPod injoignable : {exc}") from exc
+            if response.status_code == 413:
+                raise TranscriptionError("Le pod a refusé le fichier complet (HTTP 413).")
+            try:
+                output = response.json()
+            except ValueError as exc:
+                # Même course de propagation que pour les tronçons : le
+                # health-check peut réussir un instant avant que le proxy
+                # publie la route POST du pod.
+                if response.status_code == 404 and attempt < attempts:
+                    time.sleep(POLL_INTERVAL)
+                    continue
+                raise TranscriptionError(
+                    f"Réponse du pod illisible (HTTP {response.status_code})."
+                ) from exc
+            break
         if response.status_code >= 400 or output.get("error"):
             raise TranscriptionError(f"Le pod a échoué : {output.get('error') or response.status_code}")
         return output
