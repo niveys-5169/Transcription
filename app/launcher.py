@@ -37,11 +37,11 @@ _MACOS_APP_BROWSERS = (
     "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
 )
 _WINDOWS_APP_BROWSERS = (
-    r"%ProgramFiles(x86)%\Microsoft\Edge\Application\msedge.exe",
-    r"%ProgramFiles%\Microsoft\Edge\Application\msedge.exe",
     r"%ProgramFiles%\Google\Chrome\Application\chrome.exe",
     r"%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe",
     r"%LocalAppData%\Google\Chrome\Application\chrome.exe",
+    r"%ProgramFiles(x86)%\Microsoft\Edge\Application\msedge.exe",
+    r"%ProgramFiles%\Microsoft\Edge\Application\msedge.exe",
 )
 
 

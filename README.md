@@ -134,6 +134,9 @@ Le téléchargement se fait en arrière-plan : le bouton indique sa progression
 et le journal est créé dès le premier essai réseau. Une connexion qui ne
 répond pas échoue après 20 secondes au lieu de laisser l’application bloquée.
 
+Sous Windows, Verbatim ouvre sa fenêtre dédiée avec Google Chrome en priorité ;
+Microsoft Edge reste uniquement une solution de secours si Chrome est absent.
+
 ## Réviser une transcription
 
 L'interface est organisée en trois panneaux : la **bibliothèque** à gauche,
