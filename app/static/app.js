@@ -19,6 +19,8 @@ const state = {
   playerSpeed: 1,
   annotations: [],
   annotationsJobId: null,
+  editingAnnotationId: null,
+  contextMenuBlockId: null,
   editorMatches: [],
   editorMatchIndex: -1,
   globalResults: [],
@@ -833,13 +835,6 @@ async function loadAnnotations(job) {
 }
 
 function renderAnnotations() {
-  const active = state.blocks.find((block) => block.id === state.activeBlockId);
-  const composer = $("annotation-composer");
-  $("active-block-label").textContent = active
-    ? `Bloc actif — ${clock(active.start)}`
-    : "Sélectionnez un bloc dans la transcription.";
-  composer.hidden = !active;
-
   const filter = $("annotation-filter").value;
   const annotations = state.annotations.filter((item) => !filter || item.status === filter);
   const list = $("annotation-list");
@@ -850,13 +845,30 @@ function renderAnnotations() {
   list.innerHTML = annotations.map((item) => {
     const block = state.blocks.find((candidate) => candidate.id === item.block_id);
     const label = block ? clock(block.start) : "Bloc supprimé";
-    const content = item.content ? `<p>${escapeHtml(item.content)}</p>` : "";
     const color = item.color ? ` annotation-highlight-${escapeHtml(item.color)}` : "";
+    const isEditing = state.editingAnnotationId === item.id;
+    const canEditContent = item.type !== "highlight";
+    const content = isEditing
+      ? `<textarea class="annotation-edit" data-annotation-edit-id="${item.id}">${escapeHtml(item.content || "")}</textarea>`
+      : item.content ? `<p>${escapeHtml(item.content)}</p>` : "";
+    const needsReview = item.status === "a_verifier";
+    const quickActions = needsReview && !isEditing
+      ? `<div class="annotation-actions annotation-actions-top">
+          <button type="button" class="btn btn-mini btn-primary" data-annotation-action="valider">Valider</button>
+          ${canEditContent ? `<button type="button" class="btn btn-mini btn-ghost" data-annotation-action="edit">Modifier</button>` : ""}
+        </div>` : "";
+    const editActions = isEditing
+      ? `<div class="annotation-actions annotation-actions-top">
+          <button type="button" class="btn btn-mini btn-primary" data-annotation-action="save-edit">Enregistrer</button>
+          <button type="button" class="btn btn-mini btn-ghost" data-annotation-action="cancel-edit">Annuler</button>
+        </div>` : "";
     return `<article class="annotation ${escapeHtml(item.type)}${color}" data-annotation-id="${item.id}">
       <div class="annotation-head">
         <button type="button" class="annotation-jump" data-annotation-action="jump" data-block-id="${escapeHtml(item.block_id)}">${label}</button>
         <span class="badge">${escapeHtml(item.type === "review" ? "révision" : item.type === "highlight" ? "surlignage" : "note")}</span>
       </div>
+      ${quickActions}
+      ${editActions}
       ${content}
       <div class="annotation-actions">
         <select data-annotation-action="status" aria-label="État de l’annotation">
@@ -868,16 +880,15 @@ function renderAnnotations() {
   }).join("");
 }
 
-async function createAnnotation(kind, extra = {}) {
+async function createAnnotation(blockId, kind, extra = {}) {
   const job = state.detail;
-  if (!job || !state.activeBlockId) return;
+  if (!job || !blockId) return;
   try {
     const item = await api(`/api/jobs/${job.id}/annotations`, {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ block_id: state.activeBlockId, type: kind, ...extra }),
+      body: JSON.stringify({ block_id: blockId, type: kind, ...extra }),
     });
     state.annotations.push(item);
-    $("annotation-content").value = "";
     renderAnnotations();
     renderTimelineMarkers();
     refreshJobs().catch(() => {});
@@ -1465,6 +1476,87 @@ function initBlocksList() {
     const input = event.target.closest('[data-action="speaker"]');
     if (input) saveSpeakerField(input.dataset.id, { speaker: input.value.trim() || null });
   });
+  $("blocks-list").addEventListener("contextmenu", (event) => {
+    if (event.target.closest(".block-edit")) return; // laisser le menu natif pour l'édition en cours
+    const blockEl = event.target.closest(".block");
+    if (!blockEl) return;
+    event.preventDefault();
+    openBlockContextMenu(event.clientX, event.clientY, blockEl.dataset.blockId);
+  });
+}
+
+/* ------------------------------------------- menu contextuel (transcription) */
+
+function openBlockContextMenu(x, y, blockId) {
+  const menu = $("block-context-menu");
+  state.contextMenuBlockId = blockId;
+  state.activeBlockId = blockId;
+  renderBlocks();
+  menu.querySelector(".context-menu-main").hidden = false;
+  const noteView = menu.querySelector(".context-menu-note");
+  noteView.hidden = true;
+  $("context-menu-note-content").value = "";
+  menu.hidden = false;
+  // Position dans la fenêtre visible, sans déborder du bord droit/bas.
+  const rect = menu.getBoundingClientRect();
+  const maxX = window.innerWidth - rect.width - 8;
+  const maxY = window.innerHeight - rect.height - 8;
+  menu.style.left = `${Math.max(8, Math.min(x, maxX))}px`;
+  menu.style.top = `${Math.max(8, Math.min(y, maxY))}px`;
+}
+
+function closeBlockContextMenu() {
+  const menu = $("block-context-menu");
+  if (menu.hidden) return;
+  menu.hidden = true;
+  state.contextMenuBlockId = null;
+}
+
+function showContextMenuNoteEditor() {
+  const menu = $("block-context-menu");
+  menu.querySelector(".context-menu-main").hidden = true;
+  menu.querySelector(".context-menu-note").hidden = false;
+  $("context-menu-note-content").focus();
+}
+
+function initBlockContextMenu() {
+  const menu = $("block-context-menu");
+  menu.addEventListener("click", (event) => {
+    const action = event.target.dataset.menuAction;
+    const highlight = event.target.dataset.menuHighlight;
+    const blockId = state.contextMenuBlockId;
+    if (!blockId) return;
+    if (action === "note") { showContextMenuNoteEditor(); return; }
+    if (action === "review") {
+      createAnnotation(blockId, "review", { status: "a_verifier" });
+      closeBlockContextMenu();
+      return;
+    }
+    if (highlight) {
+      createAnnotation(blockId, "highlight", { color: highlight, status: "a_verifier" });
+      closeBlockContextMenu();
+      return;
+    }
+  });
+  $("context-menu-note-save").addEventListener("click", () => {
+    const blockId = state.contextMenuBlockId;
+    const content = $("context-menu-note-content").value.trim();
+    if (!blockId) return;
+    if (!content) return toast("Écrivez une note avant de l’ajouter.", true);
+    createAnnotation(blockId, "note", { content, status: "a_verifier" });
+    closeBlockContextMenu();
+  });
+  $("context-menu-note-cancel").addEventListener("click", closeBlockContextMenu);
+
+  document.addEventListener("click", (event) => {
+    if (menu.hidden || menu.contains(event.target)) return;
+    closeBlockContextMenu();
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") closeBlockContextMenu();
+  });
+  window.addEventListener("scroll", closeBlockContextMenu, true);
+  window.addEventListener("resize", closeBlockContextMenu);
 }
 
 /* -------------------------------------------------- recherche bibliothèque */
@@ -2006,27 +2098,32 @@ function initActions() {
   $("editor-search-prev").addEventListener("click", () => moveEditorMatch(-1));
   $("editor-search-next").addEventListener("click", () => moveEditorMatch(1));
 
-  $("add-note-btn").addEventListener("click", () => {
-    const content = $("annotation-content").value.trim();
-    if (!content) return toast("Écrivez une note avant de l’ajouter.", true);
-    createAnnotation("note", { content, status: "a_verifier" });
-  });
-  $("add-review-btn").addEventListener("click", () => createAnnotation("review", { status: "a_verifier" }));
-  document.querySelectorAll("[data-highlight-color]").forEach((button) =>
-    button.addEventListener("click", () => createAnnotation("highlight", {
-      color: button.dataset.highlightColor, status: "a_verifier",
-    }))
-  );
   $("annotation-filter").addEventListener("change", renderAnnotations);
   $("annotation-list").addEventListener("click", (event) => {
     const action = event.target.dataset.annotationAction;
     const card = event.target.closest("[data-annotation-id]");
     if (!action || !card) return;
+    const annotationId = card.dataset.annotationId;
     if (action === "jump") {
       state.activeBlockId = event.target.dataset.blockId;
       renderBlocks(); renderAnnotations(); seekToBlock(state.activeBlockId);
     } else if (action === "delete") {
-      removeAnnotation(card.dataset.annotationId);
+      removeAnnotation(annotationId);
+    } else if (action === "valider") {
+      updateAnnotation(annotationId, { status: "valide" });
+    } else if (action === "edit") {
+      state.editingAnnotationId = annotationId;
+      renderAnnotations();
+      const textarea = card.querySelector(`[data-annotation-edit-id="${annotationId}"]`);
+      if (textarea) { textarea.focus(); textarea.setSelectionRange(textarea.value.length, textarea.value.length); }
+    } else if (action === "cancel-edit") {
+      state.editingAnnotationId = null;
+      renderAnnotations();
+    } else if (action === "save-edit") {
+      const textarea = card.querySelector(`[data-annotation-edit-id="${annotationId}"]`);
+      const content = textarea ? textarea.value.trim() : "";
+      state.editingAnnotationId = null;
+      updateAnnotation(annotationId, { content });
     }
   });
   $("annotation-list").addEventListener("change", (event) => {
@@ -2113,6 +2210,7 @@ function initActions() {
   initPlayer();
   initTimelineInteraction();
   initBlocksList();
+  initBlockContextMenu();
   initKeyboardShortcuts();
   try {
     await loadStatus();

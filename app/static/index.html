@@ -288,23 +288,12 @@
         <div id="panel-sources"></div>
       </section>
 
-      <!-- Zone stable : notes et surlignages du bloc actif (phase 4). -->
+      <!-- Zone stable : notes et surlignages (phase 4). Les actions de -->
+      <!-- creation passent par le menu contextuel (clic droit) sur la -->
+      <!-- transcription -- voir #block-context-menu en fin de page. -->
       <section class="analysis-section" id="annotations-zone">
-        <h3>Notes du bloc actif</h3>
-        <p id="active-block-label" class="meta">Sélectionnez un bloc dans la transcription.</p>
-        <div id="annotation-composer" class="annotation-composer" hidden>
-          <textarea id="annotation-content" rows="3" placeholder="Ajouter une note au bloc actif"></textarea>
-          <div class="annotation-controls">
-            <button type="button" class="btn btn-mini btn-primary" id="add-note-btn">Ajouter une note</button>
-            <button type="button" class="btn btn-mini btn-ghost" id="add-review-btn">À vérifier</button>
-          </div>
-          <div class="highlight-controls" aria-label="Surligner le bloc actif">
-            <span>Surligner</span>
-            <button type="button" class="highlight-color color-yellow" data-highlight-color="yellow" aria-label="Jaune"></button>
-            <button type="button" class="highlight-color color-blue" data-highlight-color="blue" aria-label="Bleu"></button>
-            <button type="button" class="highlight-color color-green" data-highlight-color="green" aria-label="Vert"></button>
-          </div>
-        </div>
+        <h3>Notes et éléments</h3>
+        <p class="meta">Sélectionnez du texte dans la transcription puis faites un clic droit pour ajouter une note, un surlignage ou marquer un passage à vérifier.</p>
         <div class="annotation-list-head">
           <label for="annotation-filter">Éléments</label>
           <select id="annotation-filter">
@@ -630,6 +619,28 @@
     <button type="button" class="btn btn-ghost" id="passage-close">Fermer</button>
   </div>
 </dialog>
+
+<!-- ------------------------- menu contextuel de la transcription -->
+<div id="block-context-menu" class="context-menu" hidden role="menu" aria-label="Actions sur le bloc">
+  <div class="context-menu-main">
+    <button type="button" class="context-menu-item" data-menu-action="note" role="menuitem">Ajouter une note</button>
+    <button type="button" class="context-menu-item" data-menu-action="review" role="menuitem">Marquer à vérifier</button>
+    <div class="context-menu-separator"></div>
+    <div class="context-menu-label">Surligner</div>
+    <div class="context-menu-highlights" aria-label="Surligner le bloc">
+      <button type="button" class="highlight-color color-yellow" data-menu-highlight="yellow" aria-label="Jaune"></button>
+      <button type="button" class="highlight-color color-blue" data-menu-highlight="blue" aria-label="Bleu"></button>
+      <button type="button" class="highlight-color color-green" data-menu-highlight="green" aria-label="Vert"></button>
+    </div>
+  </div>
+  <div class="context-menu-note" hidden>
+    <textarea id="context-menu-note-content" rows="3" placeholder="Ajouter une note au bloc"></textarea>
+    <div class="context-menu-note-actions">
+      <button type="button" class="btn btn-mini btn-primary" id="context-menu-note-save">Ajouter</button>
+      <button type="button" class="btn btn-mini btn-ghost" id="context-menu-note-cancel">Annuler</button>
+    </div>
+  </div>
+</div>
 
 <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 
