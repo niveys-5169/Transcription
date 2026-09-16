@@ -94,6 +94,7 @@ MIGRATIONS = {
     "factcheck_report": "TEXT",
     "entities": "TEXT",
     "obsidian_path": "TEXT",
+    "obsidian_verbatim_path": "TEXT",
     "review_blocks": "TEXT",
     "review_version": "INTEGER DEFAULT 0",
     # Relecture humaine optionnelle, indépendante de la relecture IA.
@@ -148,7 +149,7 @@ STATUSES = (
 LIST_COLUMNS = (
     "id, filename, media_path, wav_path, size_bytes, duration, engine, model, "
     "language, proofread, structure, verify, chain, factcheck, publish, manual_review_status, task, "
-    "status, stage, progress, title, summary, error, obsidian_path, obsidian_published_at, "
+    "status, stage, progress, title, summary, error, obsidian_path, obsidian_verbatim_path, obsidian_published_at, "
     "notebooklm_status, notebooklm_synced_at, notebooklm_error, notebooklm_doc_id, "
     "created_at, updated_at, finished_at"
 )
