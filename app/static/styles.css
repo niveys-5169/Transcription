@@ -693,10 +693,7 @@ audio#audio-player { display: block; }
   gap: 8px;
 }
 
-.annotation-composer { display: grid; gap: 8px; }
-.annotation-composer textarea { width: 100%; font: inherit; resize: vertical; padding: 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text); }
-.annotation-controls, .highlight-controls, .annotation-list-head, .annotation-actions, .tag-editor { display: flex; align-items: center; gap: 7px; }
-.highlight-controls { font-size: 12px; color: var(--text-soft); }.highlight-controls span { margin-right: 2px; }
+.annotation-list-head, .annotation-actions, .tag-editor { display: flex; align-items: center; gap: 7px; }
 .highlight-color { width: 21px; height: 21px; border-radius: 50%; border: 2px solid var(--surface); box-shadow: 0 0 0 1px var(--border); cursor: pointer; }
 .color-yellow { background: #e7c74d; }.color-blue { background: #72a8e8; }.color-green { background: #76bc8d; }
 .annotation-list-head { justify-content: space-between; margin-top: 13px; font-size: 12px; font-weight: 600; }.annotation-list-head select { width: auto; font-size: 12px; padding: 5px; }
@@ -705,6 +702,29 @@ audio#audio-player { display: block; }
 .annotation p { margin: 7px 0; white-space: pre-wrap; }.annotation-head { display: flex; align-items: center; gap: 6px; }.annotation-jump { border: 0; padding: 0; background: none; color: var(--accent); cursor: pointer; font: 12px var(--mono); }.annotation-actions { justify-content: space-between; }.annotation-actions select { width: auto; padding: 4px; font-size: 11px; }
 .tag-editor input { min-width: 0; flex: 1; }
 .menu-items button { display: block; width: 100%; border: 0; padding: 8px 10px; border-radius: 6px; text-align: left; background: none; color: var(--text); cursor: pointer; font: inherit; font-size: 13px; }.menu-items button:hover { background: var(--surface-2); }
+
+.annotation-edit { width: 100%; font: inherit; resize: vertical; padding: 6px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface); color: var(--text); margin: 7px 0; }
+.annotation-actions-top { justify-content: flex-start; margin-bottom: 6px; }
+
+/* ----------------------------------------------- menu contextuel (transcription) */
+.context-menu {
+  position: fixed;
+  z-index: 60;
+  min-width: 210px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+  padding: 6px;
+}
+.context-menu-item { display: block; width: 100%; border: 0; padding: 8px 10px; border-radius: 6px; text-align: left; background: none; color: var(--text); cursor: pointer; font: inherit; font-size: 13px; }
+.context-menu-item:hover { background: var(--surface-2); }
+.context-menu-separator { height: 1px; background: var(--border); margin: 5px 2px; }
+.context-menu-label { padding: 4px 10px; font-size: 11px; color: var(--text-soft); }
+.context-menu-highlights { display: flex; align-items: center; gap: 8px; padding: 2px 10px 6px; }
+.context-menu-note { display: grid; gap: 8px; padding: 4px; }
+.context-menu-note textarea { width: 100%; font: inherit; resize: vertical; padding: 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text); }
+.context-menu-note-actions { display: flex; gap: 7px; }
 
 .publish-actions { display: flex; flex-direction: column; gap: 8px; }
 .publish-actions .btn { display: inline-flex; align-items: center; justify-content: center; width: 100%; }
@@ -730,7 +750,7 @@ audio#audio-player { display: block; }
 .jobs-panel { padding: 15px; }
 .jobs-head { gap: 8px; }
 .jobs-head h2 { color: #d9deea; font-size: 12px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
-select, input[type="text"], input[type="password"], input[type="number"], input[type="search"], .annotation-composer textarea { border-color: #343d4d; background: #121722; color: var(--text); border-radius: 7px; }
+select, input[type="text"], input[type="password"], input[type="number"], input[type="search"], .context-menu-note textarea { border-color: #343d4d; background: #121722; color: var(--text); border-radius: 7px; }
 .job-list { gap: 5px; }
 .job { position: relative; border-color: transparent; border-radius: 7px; padding: 10px; background: transparent; }
 .job:hover { border-color: #343d4d; background: #202633; }
