@@ -88,9 +88,11 @@ def _transcribe_with_whisperx(
     model = whisperx.load_model(
         model_size, device, compute_type="float16", language=language,
         download_root=_model_cache_dir(),
+        # FasterWhisperPipeline.transcribe() ne reçoit pas d'options ASR
+        # personnalisées. WhisperX les fixe lors du chargement du modèle.
+        asr_options={"initial_prompt": initial_prompt or None},
     )
-    result = model.transcribe(audio_path, batch_size=16, language=language,
-                              initial_prompt=initial_prompt or None)
+    result = model.transcribe(audio_path, batch_size=16, language=language)
     detected_language = result.get("language") or language or ""
     align_model, metadata = whisperx.load_align_model(
         language_code=detected_language, device=device,
@@ -266,6 +268,7 @@ class Handler(BaseHTTPRequestHandler):
 
 def main() -> None:
     port = int(os.environ.get("PORT", "8000"))
+    print(f"[pod_server] HF_TOKEN présent : {'oui' if os.environ.get('HF_TOKEN') else 'non'}.")
     server = ThreadingHTTPServer(("0.0.0.0", port), Handler)
     print(f"[pod_server] En écoute sur le port {port}…")
     server.serve_forever()

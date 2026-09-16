@@ -54,7 +54,7 @@ def test_create_renvoie_l_identifiant_du_pod():
         assert entree["dockerArgs"] == "python3 -u /pod_server.py"
         assert entree["ports"] == "8000/http"
         return httpx.Response(
-            200, json={"data": {"podFindAndDeployOnDemand": {"id": "pod123"}}}
+            200, json={"data": {"podFindAndDeployOnDemand": {"id": "pod123", "env": []}}}
         )
 
     client = _mock_client(handler)
@@ -164,7 +164,7 @@ def test_start_attend_que_le_health_check_reponde(monkeypatch):
 
     def graphql(request: httpx.Request) -> httpx.Response:
         creations.append(1)
-        return httpx.Response(200, json={"data": {"podFindAndDeployOnDemand": {"id": "pod123"}}})
+        return httpx.Response(200, json={"data": {"podFindAndDeployOnDemand": {"id": "pod123", "env": ["HF_TOKEN=hf_test_token"]}}})
 
     reponses = iter([httpx.Response(503), httpx.Response(200, json={"status": "ok"})])
 
@@ -199,6 +199,25 @@ def test_start_transmet_le_volume_reseau_configure(monkeypatch):
 
     assert entrees[0]["networkVolumeId"] == "vol123"
     assert entrees[0]["volumeMountPath"] == VOLUME_MOUNT_PATH
+
+
+def test_start_transmet_le_jeton_hugging_face_au_pod():
+    entrees = []
+
+    def graphql(request: httpx.Request) -> httpx.Response:
+        entrees.append(json.loads(request.content)["variables"]["input"])
+        return httpx.Response(200, json={"data": {"podFindAndDeployOnDemand": {"id": "pod123"}}})
+
+    def http(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"status": "ok"})
+
+    class _SettingsAvecJeton(_Settings):
+        hf_token = "hf_test_token"
+
+    session = _session(_SettingsAvecJeton(), graphql, http)
+    session.start()
+
+    assert entrees[0]["env"] == [{"key": "HF_TOKEN", "value": "hf_test_token"}]
 
 
 def test_start_leve_une_erreur_si_le_pod_ne_repond_jamais(monkeypatch):

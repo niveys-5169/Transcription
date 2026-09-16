@@ -172,6 +172,39 @@ def test_une_erreur_de_transcription_est_renvoyee_proprement(worker, monkeypatch
     assert sortie["error"] == "plus de mémoire GPU"
 
 
+def test_whisperx_recoit_le_prompt_dans_les_options_du_modele(monkeypatch):
+    """WhisperX 3.3.1 ne prend pas ``initial_prompt`` dans ``transcribe``."""
+    appels = {}
+
+    class PipelineWhisperX:
+        def transcribe(self, audio, *, batch_size, language):
+            appels["transcribe"] = {
+                "audio": audio, "batch_size": batch_size, "language": language,
+            }
+            return {"language": "fr", "segments": [{"start": 0.0, "end": 1.0, "text": "Bonjour."}]}
+
+    faux_whisperx = types.ModuleType("whisperx")
+
+    def load_model(*args, **kwargs):
+        appels["load_model"] = {"args": args, "kwargs": kwargs}
+        return PipelineWhisperX()
+
+    faux_whisperx.load_model = load_model
+    faux_whisperx.load_align_model = lambda **kwargs: (object(), {})
+    faux_whisperx.align = lambda segments, *args, **kwargs: {"segments": segments}
+    monkeypatch.setitem(sys.modules, "whisperx", faux_whisperx)
+
+    spec = importlib.util.spec_from_file_location("pod_server_prompt", POD_SERVER)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    output = module._transcribe_with_whisperx("cours.wav", "large-v3", "fr", "MJPM, APL", False)
+
+    assert output["text"] == "Bonjour."
+    assert appels["load_model"]["kwargs"]["asr_options"] == {"initial_prompt": "MJPM, APL"}
+    assert appels["transcribe"] == {"audio": "cours.wav", "batch_size": 16, "language": "fr"}
+
+
 # ------------------------------------------------------------- routes HTTP
 
 

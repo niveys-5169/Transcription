@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import atexit
 import base64
+import logging
 import os
 import threading
 import time
@@ -37,6 +38,8 @@ import uuid
 import httpx
 
 from .base import TranscriptionError
+
+logger = logging.getLogger(__name__)
 
 GRAPHQL_URL = "https://api.runpod.io/graphql"
 POLL_INTERVAL = 3.0
@@ -109,7 +112,7 @@ class RunPodPodClient:
     ) -> str:
         query = """
         mutation PodCreate($input: PodFindAndDeployOnDemandInput!) {
-          podFindAndDeployOnDemand(input: $input) { id }
+          podFindAndDeployOnDemand(input: $input) { id env }
         }
         """
         variables = {
@@ -136,12 +139,17 @@ class RunPodPodClient:
                 {"key": key, "value": value} for key, value in env.items()
             ]
         data = self._graphql(query, variables)
-        pod_id = (data.get("podFindAndDeployOnDemand") or {}).get("id")
+        pod_data = data.get("podFindAndDeployOnDemand") or {}
+        pod_id = pod_data.get("id")
         if not pod_id:
             raise TranscriptionError(
                 "RunPod n'a pas pu déployer de pod de secours (aucun GPU "
                 "disponible pour ce type, ou quota atteint)."
             )
+        if env:
+            returned_env = pod_data.get("env") or []
+            token_present = any(str(item).startswith("HF_TOKEN=") for item in returned_env)
+            logger.info("Pod RunPod %s créé : HF_TOKEN transmis=%s.", pod_id, token_present)
         return pod_id
 
     def terminate(self, pod_id: str) -> None:
@@ -189,6 +197,8 @@ class PodFallbackSession:
             )
 
         name = f"transcription-fallback-{uuid.uuid4().hex[:8]}"
+        token_env = _hf_token_env(settings)
+        logger.info("Création d'un pod RunPod : HF_TOKEN configuré=%s.", bool(token_env))
         self.pod_id = self._client.create(
             name=name,
             image=settings.runpod_pod_image,
@@ -197,7 +207,7 @@ class PodFallbackSession:
             port=settings.runpod_pod_port,
             start_command="python3 -u /pod_server.py",
             network_volume_id=getattr(settings, "runpod_pod_network_volume_id", "") or None,
-            env=_hf_token_env(settings),
+            env=token_env,
         )
         self._wait_ready()
 
