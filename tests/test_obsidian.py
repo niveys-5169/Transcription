@@ -206,3 +206,11 @@ def test_glossaire_est_genere_depuis_le_lexique(vault, settings):
     glossaire = read(vault / settings.obsidian_glossary_note)
     assert "Glossaire MJPM" in glossaire
     assert "DIPM" in glossaire or "Document individuel" in glossaire
+
+
+def test_domaine_parametrable_apparait_dans_la_fiche_et_le_glossaire(vault, settings):
+    settings.domain_label = "Droit social"
+    settings.obsidian_glossary_note = "Formation/Droit social/Glossaire Droit social.md"
+    relative = obsidian.publish(job(), settings=settings)
+    assert "domaine: Droit social" in (vault / relative).read_text(encoding="utf-8")
+    assert "# Glossaire Droit social" in (vault / settings.obsidian_glossary_note).read_text(encoding="utf-8")

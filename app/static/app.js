@@ -1820,6 +1820,7 @@ function chooseFolderBrowserPath() {
   const path = $("folder-browser").dataset.path;
   if (path) $("obsidian_vault_path").value = path;
   $("folder-browser").hidden = true;
+  $("domain_label").value = settings.domain_label || "MJPM";
 }
 
 function openSettings() {
@@ -1910,6 +1911,7 @@ async function saveSettings() {
     factcheck_max_searches: Number($("factcheck_max_searches").value) || 8,
     lexicon_enabled: $("lexicon_enabled").checked,
     lexicon_whisper_prompt: $("lexicon_whisper_prompt").checked,
+    domain_label: $("domain_label").value.trim() || "MJPM",
     obsidian_vault_path: $("obsidian_vault_path").value.trim(),
     obsidian_notes_folder: $("obsidian_notes_folder").value.trim(),
     obsidian_entities_folder: $("obsidian_entities_folder").value.trim(),

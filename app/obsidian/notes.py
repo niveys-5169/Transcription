@@ -24,11 +24,11 @@ _CATEGORY_TO_FIELD = {
 }
 
 
-def render_note(job: dict) -> str:
+def render_note(job: dict, *, settings=None) -> str:
     """La fiche complète, telle qu'elle sera écrite dans le coffre."""
     from .. import config
 
-    settings = config.load_settings()
+    settings = settings or config.load_settings()
     findings = _findings(job)
     entities = job.get("entities") or []
     ran = job.get("status") in ("checked", "published") and job.get("factcheck_report") is not None
@@ -138,7 +138,7 @@ def _frontmatter(job: dict, *, entities: list[dict], findings: list[dict], statu
     lines = [
         "---",
         "type: transcription",
-        "domaine: MJPM",
+        f"domaine: {_yaml_str(settings.domain_label)}",
         f"statut_verification: {status}",
         f"points_incertains: {len(reels)}",
         f"titre: {_yaml_str(job.get('title') or job.get('filename') or 'Transcription')}",

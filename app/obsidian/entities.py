@@ -1,4 +1,4 @@
-"""Fiches d'entités, MOC et glossaire — le second brain MJPM.
+"""Fiches d'entités, MOC et glossaire — le second brain du domaine choisi.
 
 Une note d'entité existante n'est jamais modifiée, seulement liée : rien de
 ce que l'utilisateur y a écrit à la main ne peut être écrasé, les backlinks
@@ -92,7 +92,7 @@ def update_index(
 
 
 def write_glossary(settings) -> None:
-    """Régénère la note « Glossaire MJPM » à partir du lexique.
+    """Régénère le glossaire du domaine à partir du lexique.
 
     Entièrement dérivée du lexique de l'application : rien n'y est jamais
     écrit à la main, elle peut donc être régénérée en entier sans risque.
@@ -106,7 +106,7 @@ def write_glossary(settings) -> None:
         by_category.setdefault(term.categorie, []).append(term)
 
     lines = [
-        "# Glossaire MJPM",
+        f"# Glossaire {settings.domain_label}",
         "",
         "_Généré automatiquement depuis le lexique de l'application — les "
         "modifications faites ici seraient écrasées à la prochaine publication._",

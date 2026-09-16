@@ -64,6 +64,17 @@ CLAUDE_BACKENDS = ["cli", "api"]
 # Champs considérés comme secrets : jamais renvoyés en clair par l'API.
 SECRET_FIELDS = {"runpod_api_key", "anthropic_api_key", "nim_api_key"}
 
+
+def obsidian_domain_defaults(domain_label: str) -> dict[str, str]:
+    """Chemins Obsidian proposés pour un domaine, sans imposer l'organisation."""
+    label = (domain_label or "MJPM").strip() or "MJPM"
+    return {
+        "obsidian_entities_folder": f"Formation/{label}/Entités",
+        "obsidian_index_note": f"Formation/{label}/MOC Formation.md",
+        "obsidian_glossary_note": f"Formation/{label}/Glossaire {label}.md",
+        "obsidian_tags": f"formation/{label}",
+    }
+
 _lock = threading.Lock()
 
 
@@ -159,7 +170,8 @@ class Settings:
     # Recherches web autorisées par affirmation à vérifier.
     factcheck_max_searches: int = 8
 
-    # --- Lexique MJPM ---
+    # --- Domaine et lexique ---
+    domain_label: str = "MJPM"
     lexicon_enabled: bool = True
     # Amorcer Whisper avec les sigles et noms propres du lexique
     # (`initial_prompt`) — voir app/lexicon/.
@@ -290,6 +302,13 @@ def save_settings(updates: dict) -> Settings:
     known = {f.name for f in fields(Settings)}
 
     with _lock:
+        requested_domain = str(updates.get("domain_label", settings.domain_label)).strip() or "MJPM"
+        if requested_domain != settings.domain_label:
+            old_defaults = obsidian_domain_defaults(settings.domain_label)
+            new_defaults = obsidian_domain_defaults(requested_domain)
+            for key, old_value in old_defaults.items():
+                if updates.get(key, getattr(settings, key)) == old_value:
+                    updates = {**updates, key: new_defaults[key]}
         for key, value in updates.items():
             if key not in known:
                 continue

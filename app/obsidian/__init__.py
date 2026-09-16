@@ -32,7 +32,7 @@ def publish(job: dict, *, settings=None) -> str:
         relative = f"{settings.obsidian_notes_folder}/{name}.md"
 
     path = resolve(settings.obsidian_vault_path, relative)
-    write_atomic(path, render_note(job))
+    write_atomic(path, render_note(job, settings=settings))
 
     entities = job.get("entities") or []
     ensure_entity_notes(settings, entities)
