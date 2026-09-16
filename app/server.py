@@ -91,6 +91,19 @@ async def check_update() -> dict:
     return updates.check()
 
 
+@app.post("/api/shutdown")
+async def shutdown() -> dict:
+    """Arrête complètement l'application, pas seulement l'onglet du navigateur.
+
+    Fermer l'onglet laisse le serveur tourner en arrière-plan (thread démon
+    ou icône de barre système) : ce point d'entrée est le seul moyen, depuis
+    la page, de vraiment quitter. La réponse part avant l'arrêt du process,
+    d'où le petit délai (même mécanisme que la mise à jour ci-dessus).
+    """
+    threading.Timer(0.3, lambda: os._exit(0)).start()
+    return {"stopping": True}
+
+
 @app.post("/api/update")
 async def apply_update() -> dict:
     update = updates.check()

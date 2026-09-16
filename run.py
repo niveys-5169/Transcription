@@ -55,6 +55,8 @@ def main() -> int:
     from app import media
     from app.launcher import find_available_port, open_browser_later, start_server
 
+    browser_profile_dir = config.DATA_DIR / "browser-profile"
+
     if not media.ffmpeg_available():
         print(
             "Attention : ffmpeg est introuvable. L'extraction audio échouera.\n"
@@ -86,7 +88,7 @@ def main() -> int:
         # d'uvicorn.run(), incompatible avec le thread démon de ServerHandle
         # — flag de développement uniquement, on bloque ici comme avant.
         if not args.no_browser:
-            open_browser_later(url)
+            open_browser_later(url, profile_dir=browser_profile_dir)
         try:
             uvicorn.run(
                 "app.server:app",
@@ -113,7 +115,7 @@ def main() -> int:
         return 1
 
     if not args.no_browser:
-        open_browser_later(url, delay=0)
+        open_browser_later(url, delay=0, profile_dir=browser_profile_dir)
 
     try:
         while True:
