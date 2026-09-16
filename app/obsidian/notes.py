@@ -67,6 +67,24 @@ def filename_for(job: dict, template: str) -> str:
     return name[:150] or "Transcription"
 
 
+def render_verbatim(job: dict, *, settings=None, fiche_name: str = "") -> str:
+    """Version relue conservée telle quelle, avec tours de parole et temps."""
+    from .. import config
+    settings = settings or config.load_settings()
+    title = job.get("title") or job.get("filename") or "Transcription"
+    lines = ["---", "type: verbatim", f"titre: {_yaml_str(title)}", f"date: {_date(job)}",
+             f"fiche: \"[[{fiche_name}]]\"" if fiche_name else "", "---", "", f"# {title} (verbatim)", ""]
+    for block in job.get("review_blocks") or []:
+        start = float(block.get("start") or 0)
+        speaker = str(block.get("speaker") or "Locuteur")
+        text = str(block.get("text") or "").strip()
+        if text:
+            hours, rem = divmod(int(start), 3600); minutes, seconds = divmod(rem, 60)
+            lines.append(f"**[{hours:02d}:{minutes:02d}:{seconds:02d}] {speaker}** — {text}")
+            lines.append("")
+    return "\n".join(line for line in lines if line is not None).rstrip() + "\n"
+
+
 # ------------------------------------------------------------------ détail
 
 
@@ -144,6 +162,7 @@ def _frontmatter(job: dict, *, entities: list[dict], findings: list[dict], statu
         f"titre: {_yaml_str(job.get('title') or job.get('filename') or 'Transcription')}",
         f"date: {_date(job)}",
         f"source_fichier: {_yaml_str(job.get('filename') or '')}",
+        f"verbatim: \"[[{_note_name(job.get('obsidian_verbatim_path'))}]]\"" if job.get("obsidian_verbatim_path") else "",
         f"duree_minutes: {round(duree / 60, 1)}",
         f"moteur: {_yaml_str(job.get('engine') or '')}",
         f"modele: {_yaml_str(job.get('model') or '')}",
@@ -155,7 +174,13 @@ def _frontmatter(job: dict, *, entities: list[dict], findings: list[dict], statu
         f"job_id: {job.get('id') or ''}",
         "---",
     ]
-    return "\n".join(lines)
+    return "\n".join(line for line in lines if line)
+
+
+def _note_name(relative_path: str | None) -> str:
+    """Nom Obsidian d'un chemin relatif, sans extension Markdown."""
+    name = str(relative_path or "").replace("\\", "/").rsplit("/", 1)[-1]
+    return name[:-3] if name.lower().endswith(".md") else name
 
 
 def _date(job: dict) -> str:

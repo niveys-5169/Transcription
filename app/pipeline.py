@@ -758,6 +758,7 @@ def run_publish(job_id: str) -> None:
             progress=1.0,
             task=None,
             obsidian_path=relative_path,
+            obsidian_verbatim_path=job.get("_obsidian_verbatim_path"),
             obsidian_published_at=db.now(),
         )
         final_status = "published"
