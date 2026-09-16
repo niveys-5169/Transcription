@@ -103,6 +103,7 @@ MIGRATIONS = {
     "notebooklm_synced_at": "TEXT",
     "notebooklm_error": "TEXT",
     "notebooklm_doc_id": "TEXT",
+    "revision": "TEXT",
 }
 
 ANNOTATION_MIGRATIONS = {
@@ -192,7 +193,7 @@ def init_db(db_path: Path | None = None) -> None:
 def _row_to_dict(row: sqlite3.Row) -> dict:
     data = dict(row)
     for colonne in (
-        "segments", "review_blocks", "verification", "factcheck_report", "entities",
+        "segments", "review_blocks", "verification", "factcheck_report", "entities", "revision",
     ):
         if colonne in data:
             try:

@@ -518,6 +518,7 @@ function renderDetail() {
 
   renderVerification(job);
   renderSources(job);
+  renderRevision(job);
 
   // Chaque étape est à part : on peut la lancer, ou la relancer avec
   // d'autres réglages, sur n'importe quel travail déjà à l'étape d'avant.
@@ -590,6 +591,20 @@ function renderDetail() {
 
   renderJobTags(job);
 
+}
+
+function renderRevision(job) {
+  const zone = $("revision-zone");
+  const panel = $("panel-revision");
+  const button = $("revision-btn");
+  const revision = job.revision;
+  zone.hidden = !isProofread(job);
+  button.disabled = job.task === "revision";
+  button.textContent = revision ? "Régénérer la fiche" : "Générer la fiche";
+  if (!revision) { panel.innerHTML = ""; return; }
+  const points = Array.isArray(revision.points_cles) ? revision.points_cles : [];
+  const questions = Array.isArray(revision.questions) ? revision.questions : [];
+  panel.innerHTML = `${points.length ? `<h4>Points clés</h4><ul>${points.map((point) => `<li>${escapeHtml(point)}</li>`).join("")}</ul>` : ""}${questions.length ? `<h4>Questions</h4>${questions.slice(0, 5).map((item) => `<details><summary>${escapeHtml(item.q || "Question")}</summary><p>${escapeHtml(item.r || "")}</p></details>`).join("")}` : ""}`;
 }
 
 const KIND_LABELS = {
@@ -2143,6 +2158,15 @@ function initActions() {
   });
   $("retry-nim-btn").addEventListener("click", () => {
     launchProofread($("retry-nim-btn"), "nim");
+  });
+
+  $("revision-btn").addEventListener("click", async () => {
+    if (!state.detail) return;
+    try {
+      await api(`/api/jobs/${state.detail.id}/revision`, { method: "POST" });
+      toast("Fiche de révision en cours de génération.");
+      refreshJobs();
+    } catch (error) { toast(error.message, true); }
   });
 
   $("factcheck-btn").addEventListener("click", async () => {

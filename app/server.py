@@ -600,6 +600,18 @@ async def proofread_job(job_id: str, payload: dict = Body(default={})) -> dict:
     return _decorate(db.get_job(job_id, with_content=False))
 
 
+@app.post("/api/jobs/{job_id}/revision")
+async def revision_job(job_id: str) -> dict:
+    job = db.get_job(job_id, with_content=False)
+    if job is None:
+        raise HTTPException(404, "Travail introuvable.")
+    if job["status"] not in {"done", "checked", "published"}:
+        raise HTTPException(409, "La fiche de révision exige un cours relu.")
+    db.update_job(job_id, task=pipeline.TASK_REVISION, stage="Fiche de révision en attente", progress=0.0)
+    pipeline.enqueue(job_id, pipeline.TASK_REVISION)
+    return _decorate(db.get_job(job_id, with_content=False))
+
+
 @app.post("/api/jobs/{job_id}/factcheck")
 async def factcheck_job(job_id: str) -> dict:
     """Lance (ou relance) la vérification externe d'un travail déjà relu.

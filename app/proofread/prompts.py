@@ -62,6 +62,12 @@ JSON demandé.
 
 {body}"""
 
+REVISION_SYSTEM = """Tu prépares une fiche de révision fidèle au cours.
+Réponds uniquement en JSON : {"points_cles":["..."],"definitions":[{"terme":"...","definition":"..."}],"questions":[{"q":"...","r":"..."}],"flashcards":[{"recto":"...","verso":"..."}],"plan":["..."]}. Ne crée aucune information absente du cours."""
+REVISION_USER = """Cours relu :
+
+{body}"""
+
 VERIFICATION_SYSTEM = """\
 Tu vérifies la relecture d'une transcription de cours. On te donne deux \
 versions d'un même passage : la version BRUTE, sortie telle quelle d'un \
