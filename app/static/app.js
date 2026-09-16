@@ -510,6 +510,7 @@ function renderDetail() {
   $("summary-list").innerHTML = summary.map((point) => `<li>${escapeHtml(point)}</li>`).join("");
 
   loadPlayerForJob(job);
+  renderWaveform(job);
   loadReviewBlocks(job);
   loadAnnotations(job);
   renderComparisonPanel(job);
@@ -1115,6 +1116,18 @@ function updatePlayerTimeDisplay() {
   $("player-time").textContent = `${clock(media.currentTime)} / ${clock(duration)}`;
   updateTimelineProgress();
   updateActiveBlockFromTime();
+  updateActiveWordFromTime();
+}
+
+function updateActiveWordFromTime() {
+  const previous = document.querySelector(".word.is-playing");
+  const block = state.blocks.find((item) => item.id === state.activeBlockId);
+  const time = activeMedia().currentTime;
+  const word = block && (block.words || []).find((item) => time >= Number(item.start) && time <= Number(item.end));
+  const next = word && document.querySelector(`.word[data-time="${Number(word.start)}"]`);
+  if (previous === next) return;
+  if (previous) previous.classList.remove("is-playing");
+  if (next) next.classList.add("is-playing");
 }
 
 function initPlayer() {
@@ -1270,6 +1283,10 @@ function confidenceClass(score) {
 function renderBlockText(block, index, segments) {
   const edited = isBlockEdited(block, index, segments);
   const cls = edited ? "" : confidenceClass(block.confidence);
+  if (!edited && Array.isArray(block.words) && block.words.length) {
+    const words = block.words.map((word) => `<span class="word ${confidenceClass(word.confidence)}" data-action="seek-word" data-time="${Number(word.start)}" title="${clock(word.start)}">${escapeHtml(word.text)}</span>`).join("");
+    return `<p class="block-text ${cls}" data-action="edit">${words}</p>`;
+  }
   const highlights = state.annotations.filter((item) => item.type === "highlight" && item.block_id === block.id && Number.isInteger(item.range_start) && Number.isInteger(item.range_end))
     .sort((a, b) => a.range_start - b.range_start);
   let cursor = 0;
@@ -1306,6 +1323,13 @@ function renderSpeakerControls(block) {
   </div>`;
 }
 
+function speakerColorClass(speaker) {
+  if (!speaker) return "speaker-color-0";
+  let hash = 0;
+  for (const char of speaker) hash = ((hash << 5) - hash + char.charCodeAt(0)) | 0;
+  return `speaker-color-${Math.abs(hash) % 6}`;
+}
+
 function renderBlocks() {
   const list = $("blocks-list");
   const job = state.detail;
@@ -1339,7 +1363,10 @@ function renderBlocks() {
       }).join(" ");
       const hasReviewed = job && ["done", "checked", "published"].includes(job.status);
       const rawControl = hasReviewed ? `<details class="block-raw"><summary>Brut</summary><p>${escapeHtml(raw)}</p><button type="button" class="btn btn-mini btn-ghost" data-action="seek" data-id="${block.id}">Écouter ce passage</button></details>` : "";
-      return `<div class="block ${confidence}${needsReview ? " needs-review" : ""}${isActive ? " is-active-block" : ""}" data-block-id="${block.id}">
+      const previous = visible[index - 1];
+      const groupHeader = block.speaker && (!previous || previous.speaker !== block.speaker)
+        ? `<div class="speaker-turn ${speakerColorClass(block.speaker)}"><span class="speaker-dot"></span><b>${escapeHtml(block.speaker)}</b><span>tour de parole</span></div>` : "";
+      return `${groupHeader}<div class="block ${speakerColorClass(block.speaker)} ${confidence}${needsReview ? " needs-review" : ""}${isActive ? " is-active-block" : ""}" data-block-id="${block.id}">
         <time class="block-time${needsReview ? " needs-review" : ""}" data-action="seek" data-id="${block.id}" title="${needsReview ? "Passage à vérifier" : "Aller à cet horodatage"}">${clock(block.start)}</time>
         <div class="block-body">${speakerControls}${body}${confidenceLabel}${rawControl}</div>
       </div>`;
@@ -1399,6 +1426,25 @@ async function saveSpeakerField(blockId, fields) {
 function seekToBlock(blockId) {
   const block = state.blocks.find((b) => b.id === blockId);
   if (block) seekTo(block.start);
+}
+
+async function renderWaveform(job) {
+  const canvas = $("timeline-waveform");
+  if (!job || !canvas) return;
+  try {
+    const { peaks } = await api(`/api/jobs/${job.id}/peaks`);
+    const width = Math.max(1, canvas.clientWidth || 600), height = Math.max(1, canvas.clientHeight || 42);
+    const ratio = window.devicePixelRatio || 1;
+    canvas.width = width * ratio; canvas.height = height * ratio;
+    const ctx = canvas.getContext("2d"); ctx.scale(ratio, ratio); ctx.clearRect(0, 0, width, height);
+    ctx.strokeStyle = "rgba(174, 160, 255, .55)"; ctx.lineWidth = 1;
+    const middle = height / 2;
+    peaks.forEach((peak, index) => {
+      const x = (index / Math.max(1, peaks.length - 1)) * width;
+      const amplitude = Math.max(1, peak * middle);
+      ctx.beginPath(); ctx.moveTo(x, middle - amplitude); ctx.lineTo(x, middle + amplitude); ctx.stroke();
+    });
+  } catch (_) { canvas.hidden = true; }
 }
 
 function focusBlock(blockId) {
@@ -1503,6 +1549,12 @@ async function saveBlockEdit(blockId) {
 
 function initBlocksList() {
   $("blocks-list").addEventListener("click", (event) => {
+    const wordTarget = event.target.closest('[data-action="seek-word"]');
+    if (wordTarget) {
+      event.stopPropagation();
+      seekTo(Number(wordTarget.dataset.time));
+      return;
+    }
     const seekTarget = event.target.closest('[data-action="seek"]');
     if (seekTarget) {
       state.activeBlockId = seekTarget.dataset.id;

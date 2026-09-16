@@ -378,6 +378,34 @@ async def job_media(job_id: str) -> FileResponse:
     return FileResponse(source, media_type=media_type or "application/octet-stream")
 
 
+@app.get("/api/jobs/{job_id}/peaks")
+async def job_peaks(job_id: str) -> dict:
+    """Profil RMS compact pour la forme d'onde, calculé une seule fois."""
+    job = db.get_job(job_id, with_content=False)
+    if job is None:
+        raise HTTPException(404, "Travail introuvable.")
+    wav = Path(job.get("wav_path") or "")
+    if not wav.is_file():
+        raise HTTPException(404, "Audio extrait indisponible.")
+    cache = config.MEDIA_DIR / job_id / "peaks.json"
+    source_mtime = wav.stat().st_mtime_ns
+    try:
+        cached = json.loads(cache.read_text(encoding="utf-8"))
+        if cached.get("source_mtime") == source_mtime:
+            return cached
+    except (OSError, ValueError, TypeError):
+        pass
+    values = media._rms_profile(wav, window_seconds=0.05)
+    peak = float(values.max()) if values.size else 0.0
+    # 2 000 points suffisent au canvas tout en restant très légers à servir.
+    stride = max(1, (len(values) + 1999) // 2000)
+    peaks = [round(float(value / peak), 4) if peak else 0.0 for value in values[::stride]]
+    payload = {"peaks": peaks, "window_seconds": round(0.05 * stride, 4), "source_mtime": source_mtime}
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    cache.write_text(json.dumps(payload), encoding="utf-8")
+    return payload
+
+
 @app.get("/api/jobs/{job_id}/review-blocks")
 async def get_review_blocks(job_id: str) -> dict:
     if db.get_job(job_id, with_content=False) is None:
