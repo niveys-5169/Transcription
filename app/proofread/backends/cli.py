@@ -39,6 +39,7 @@ import threading
 from pathlib import Path
 
 from ...config import Settings, load_settings
+from ...process import hidden_console_flags
 from ..base import ProofreadError
 from ..structure import parse_json_array, parse_json_object
 from .base import BackendResult
@@ -104,6 +105,7 @@ class CliBackend:
                 encoding="utf-8",
                 errors="replace",
                 timeout=15,
+                creationflags=hidden_console_flags(),
             )
         except (OSError, subprocess.TimeoutExpired) as exc:
             return False, f"Le CLI « claude » n'a pas répondu ({exc})."
@@ -206,6 +208,7 @@ class CliBackend:
             text=True,
             encoding="utf-8",
             errors="replace",
+            creationflags=hidden_console_flags(),
         )
         assert process.stdin is not None and process.stdout is not None
 

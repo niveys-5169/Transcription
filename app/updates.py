@@ -11,6 +11,7 @@ import zipfile
 from pathlib import Path
 
 from .build_info import BUILD_ID
+from .process import hidden_console_flags
 
 REPOSITORY = "niveys-5169/Transcription"
 RELEASE_URL = f"https://api.github.com/repos/{REPOSITORY}/releases/tags/latest"
@@ -68,4 +69,11 @@ def download_and_restart(download_url: str) -> None:
         "del \"%~f0\"\r\n",
         encoding="utf-8",
     )
-    subprocess.Popen(["cmd.exe", "/c", str(script)], creationflags=subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS)
+    subprocess.Popen(
+        ["cmd.exe", "/c", str(script)],
+        creationflags=(
+            subprocess.CREATE_NEW_PROCESS_GROUP
+            | subprocess.DETACHED_PROCESS
+            | hidden_console_flags()
+        ),
+    )

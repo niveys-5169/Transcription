@@ -23,6 +23,8 @@ from typing import Callable, Iterator
 
 import numpy as np
 
+from .process import hidden_console_flags
+
 SAMPLE_RATE = 16_000
 CHANNELS = 1
 SAMPLE_WIDTH = 2  # 16 bits
@@ -69,6 +71,17 @@ def ffmpeg_available() -> bool:
         return False
 
 
+def _ffmpeg_process_options() -> dict[str, int]:
+    """Options de lancement de ffmpeg adaptées à la plate-forme.
+
+    Sous Windows, ``ffmpeg.exe`` ne doit pas créer de fenêtre de console :
+    l'application est graphique et l'extraction se déroule en arrière-plan.
+    La constante n'existe pas sur les autres systèmes, où la valeur 0 reste
+    explicitement sans effet.
+    """
+    return {"creationflags": hidden_console_flags()}
+
+
 def _run(cmd: list[str]) -> subprocess.CompletedProcess:
     return subprocess.run(
         cmd,
@@ -76,6 +89,7 @@ def _run(cmd: list[str]) -> subprocess.CompletedProcess:
         stderr=subprocess.PIPE,
         text=True,
         errors="replace",
+        **_ffmpeg_process_options(),
     )
 
 
@@ -159,6 +173,7 @@ def extract_wav(
         stderr=subprocess.PIPE,
         text=True,
         errors="replace",
+        **_ffmpeg_process_options(),
     )
     assert process.stdout is not None
 

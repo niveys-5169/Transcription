@@ -132,6 +132,21 @@ def test_le_prompt_part_par_stdin_pas_en_argument(backend, monkeypatch):
     assert all(len(arg) < len(prompt) for arg in captured["cmd"])
 
 
+def test_le_cli_ne_cree_pas_de_console(backend, monkeypatch):
+    _make_available(monkeypatch)
+    monkeypatch.setattr("app.process.subprocess.CREATE_NO_WINDOW", 0x08000000, raising=False)
+    captured = {}
+
+    def fake_popen(cmd, **kwargs):
+        captured.update(kwargs)
+        return _FakeProcess(_stream(_result("ok")))
+
+    monkeypatch.setattr("subprocess.Popen", fake_popen)
+    backend.complete(system="s", user="u", max_tokens=100)
+
+    assert captured["creationflags"] == 0x08000000
+
+
 def test_jamais_bare_toujours_permission_prompts_none(backend, monkeypatch):
     _make_available(monkeypatch)
     captured = {}

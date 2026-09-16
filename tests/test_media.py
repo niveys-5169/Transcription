@@ -80,3 +80,8 @@ def test_ffmpeg_manquant_donne_un_message_utile(monkeypatch):
     )
     with pytest.raises(media.MediaError, match="ffmpeg est introuvable"):
         media.ffmpeg_exe()
+
+
+def test_ffmpeg_n_ouvre_pas_de_console_sous_windows(monkeypatch):
+    monkeypatch.setattr(media.subprocess, "CREATE_NO_WINDOW", 0x08000000, raising=False)
+    assert media._ffmpeg_process_options() == {"creationflags": 0x08000000}
