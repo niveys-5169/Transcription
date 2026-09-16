@@ -50,16 +50,6 @@ WHISPER_MODELS = ["tiny", "base", "small", "medium", "large-v3"]
 # Moteurs de transcription disponibles.
 ENGINES = ["local", "runpod"]
 
-# Comment le moteur RunPod démarre le calcul :
-# - "off" : uniquement le serverless. Si aucun worker ne le prend en charge,
-#   la transcription échoue avec un message explicite.
-# - "fallback" : le serverless d'abord ; si aucun worker ne prend en charge
-#   le premier tronçon avant runpod_launch_timeout_seconds, bascule sur un
-#   pod créé à ce moment-là.
-# - "always" : pod dès le premier tronçon, sans jamais essayer le
-#   serverless — utile quand on sait déjà qu'il n'a pas de capacité, pour ne
-#   pas perdre runpod_launch_timeout_seconds à l'attendre pour rien.
-RUNPOD_POD_MODES = ["off", "fallback", "always"]
 
 # Modes de relecture. NVIDIA NIM reste un repli opt-in de Claude ; il n'est
 # pas proposé comme moteur principal afin de ne pas basculer silencieusement
@@ -88,7 +78,6 @@ class Settings:
 
     # --- RunPod (GPU cloud, optionnel) ---
     runpod_api_key: str = ""
-    runpod_endpoint_id: str = ""
     # Taille des tronçons envoyés à RunPod. L'API /run plafonne la charge utile
     # à ~10 Mo ; un WAV 16 kHz mono 16 bits encodé en base64 pèse ~42 ko/s, donc
     # un cours d'une heure ne peut pas partir en un seul appel.
@@ -96,11 +85,6 @@ class Settings:
     # défaut) donnait ≈ 9,8 Mo — trop près du plafond une fois l'enveloppe
     # JSON ajoutée, avec un risque d'échec intermittent selon les tronçons.
     runpod_chunk_seconds: int = 180
-    # Combien de temps un premier tronçon peut rester « en file » avant de
-    # conclure qu'aucun worker serverless ne va démarrer (voir pod de secours
-    # ci-dessous). Sans rapport avec MAX_WAIT_PER_CHUNK, qui borne l'attente
-    # totale une fois qu'un worker a effectivement pris le job.
-    runpod_launch_timeout_seconds: int = 90
 
     # --- RunPod : pod (optionnel) ---
     # Une machine GPU louée à la minute (pas à la requête comme le
@@ -111,7 +95,6 @@ class Settings:
     # Contrairement au serverless, un pod n'a pas de build automatique depuis
     # ce dépôt : il faut construire et pousser l'image vous-même (voir le
     # README) et renseigner sa référence ici.
-    runpod_pod_mode: str = "off"
     runpod_pod_image: str = ""
     runpod_pod_gpu_type_id: str = "NVIDIA L4"
     # Volume reseau RunPod (optionnel) : persiste le cache Hugging Face
@@ -231,26 +214,6 @@ class Settings:
 _settings: Settings | None = None
 
 
-def _normalize_runpod_endpoint_id(value: str) -> str:
-    """Nettoie l'identifiant de endpoint RunPod.
-
-    Erreur fréquente : coller l'URL affichée dans la console RunPod
-    (« https://api.runpod.ai/v2/<id>/run ») plutôt que le seul identifiant.
-    Le code construit alors une URL avec l'identifiant à l'intérieur d'une
-    autre URL, que RunPod renvoie en 404 sans indice sur la cause. On
-    retrouve donc le segment utile, et on retire au passage guillemets et
-    espaces qu'un copier-coller laisse parfois.
-    """
-    cleaned = value.strip().strip("'\"").strip()
-    if "api.runpod.ai/v2/" in cleaned:
-        cleaned = cleaned.split("api.runpod.ai/v2/", 1)[1]
-    cleaned = cleaned.strip("/")
-    for suffix in ("/run", "/runsync", "/health", "/status", "/cancel"):
-        if cleaned.endswith(suffix):
-            cleaned = cleaned[: -len(suffix)]
-    return cleaned.split("/", 1)[0]
-
-
 # Valeurs acceptées pour un réglage booléen venant de l'environnement — les
 # variables d'environnement n'ont que des chaînes, contrairement à
 # data/config.json qui garde le vrai type JSON.
@@ -265,7 +228,6 @@ def _from_env(settings: Settings) -> Settings:
     """Applique les variables d'environnement par-dessus les réglages."""
     env_map = {
         "runpod_api_key": "RUNPOD_API_KEY",
-        "runpod_endpoint_id": "RUNPOD_ENDPOINT_ID",
         "anthropic_api_key": "ANTHROPIC_API_KEY",
         "nim_api_key": "NIM_API_KEY",
         "nim_base_url": "NIM_BASE_URL",
@@ -284,8 +246,6 @@ def _from_env(settings: Settings) -> Settings:
         value = os.environ.get(env_name)
         if value:
             value = value.strip()
-            if attr == "runpod_endpoint_id":
-                value = _normalize_runpod_endpoint_id(value)
             setattr(settings, attr, value)
 
     # Seul réglage booléen venant de l'environnement pour l'instant : traité
@@ -347,8 +307,6 @@ def save_settings(updates: dict) -> Settings:
                     setattr(settings, key, int(value))
                 except (TypeError, ValueError):
                     pass
-            elif key == "runpod_endpoint_id" and value:
-                setattr(settings, key, _normalize_runpod_endpoint_id(str(value)))
             else:
                 setattr(settings, key, value)
 

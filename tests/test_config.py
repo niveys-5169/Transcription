@@ -22,36 +22,6 @@ def _isolated_settings(tmp_path, monkeypatch):
     config._settings = None
 
 
-@pytest.mark.parametrize(
-    "raw, expected",
-    [
-        ("abc123xyz", "abc123xyz"),
-        ("  abc123xyz  ", "abc123xyz"),
-        ('"abc123xyz"', "abc123xyz"),
-        ("https://api.runpod.ai/v2/abc123xyz", "abc123xyz"),
-        ("https://api.runpod.ai/v2/abc123xyz/run", "abc123xyz"),
-        ("https://api.runpod.ai/v2/abc123xyz/", "abc123xyz"),
-        ("api.runpod.ai/v2/abc123xyz/runsync", "abc123xyz"),
-        ("abc123xyz/status/jobid", "abc123xyz"),
-    ],
-)
-def test_normalize_runpod_endpoint_id(raw, expected):
-    assert config._normalize_runpod_endpoint_id(raw) == expected
-
-
-def test_save_settings_normalizes_endpoint_id():
-    settings = config.save_settings(
-        {"runpod_endpoint_id": "https://api.runpod.ai/v2/abc123xyz/run"}
-    )
-    assert settings.runpod_endpoint_id == "abc123xyz"
-
-
-def test_env_normalizes_endpoint_id(monkeypatch):
-    monkeypatch.setenv("RUNPOD_ENDPOINT_ID", "https://api.runpod.ai/v2/abc123xyz/run")
-    settings = config.load_settings(refresh=True)
-    assert settings.runpod_endpoint_id == "abc123xyz"
-
-
 def test_default_data_dir_uses_cwd_in_source_mode(monkeypatch):
     monkeypatch.setattr(sys, "frozen", False, raising=False)
     assert config._default_data_dir() == Path.cwd() / "data"

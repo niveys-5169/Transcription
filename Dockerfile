@@ -10,7 +10,7 @@ COPY requirements.txt /requirements.txt
 # pod de secours a échoué en production avec « No module named
 # 'faster_whisper' » alors que ce `pip install` avait pourtant réussi.
 RUN python3 -m pip install --no-cache-dir -r /requirements.txt \
-    && python3 -c "import faster_whisper, runpod"
+    && python3 -c "import faster_whisper"
 
 # Le modele large-v3 n'est plus precharge ici (comme avant) : ca gonflait
 # cette image de plusieurs Go, et RunPod doit la retirer en entier a chaque
@@ -23,11 +23,10 @@ RUN python3 -m pip install --no-cache-dir -r /requirements.txt \
 # alourdir l'image elle-meme (voir le README, section « Pod : volume
 # reseau »).
 
-COPY handler.py /handler.py
 COPY pod_server.py /pod_server.py
 
 # Le serverless démarre toujours handler.py. pod_server.py n'est utilisé que
 # si un pod de secours est créé (voir app/engines/runpod_pod.py) : sa
 # création override la commande de démarrage du conteneur pour lancer
 # pod_server.py à la place — la même image sert les deux usages.
-CMD ["python3", "-u", "/handler.py"]
+CMD ["python3", "-u", "/pod_server.py"]

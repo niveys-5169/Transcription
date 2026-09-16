@@ -1831,9 +1831,7 @@ function openSettings() {
   $("nim_fallback_enabled").checked = Boolean(settings.nim_fallback_enabled);
   $("nim_model").value = settings.nim_model || "";
   $("nim_base_url").value = settings.nim_base_url || "";
-  $("runpod_endpoint_id").value = settings.runpod_endpoint_id || "";
   $("runpod_chunk_seconds").value = settings.runpod_chunk_seconds || 180;
-  $("runpod_pod_mode").value = settings.runpod_pod_mode || "off";
   $("runpod_pod_image").value = settings.runpod_pod_image || "";
   $("runpod_pod_gpu_type_id").value = settings.runpod_pod_gpu_type_id || "NVIDIA L4";
   $("runpod_pod_network_volume_id").value = settings.runpod_pod_network_volume_id || "";
@@ -1898,9 +1896,7 @@ async function saveSettings() {
     nim_fallback_enabled: $("nim_fallback_enabled").checked,
     nim_model: $("nim_model").value.trim(),
     nim_base_url: $("nim_base_url").value.trim(),
-    runpod_endpoint_id: $("runpod_endpoint_id").value.trim(),
     runpod_chunk_seconds: Number($("runpod_chunk_seconds").value) || 180,
-    runpod_pod_mode: $("runpod_pod_mode").value,
     runpod_pod_image: $("runpod_pod_image").value.trim(),
     runpod_pod_gpu_type_id: $("runpod_pod_gpu_type_id").value.trim() || "NVIDIA L4",
     runpod_pod_network_volume_id: $("runpod_pod_network_volume_id").value.trim(),

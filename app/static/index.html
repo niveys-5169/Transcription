@@ -530,10 +530,6 @@
         <small id="runpod-state"></small>
       </label>
       <label class="field">
-        <span>Identifiant du endpoint</span>
-        <input type="text" id="runpod_endpoint_id" placeholder="abc123xyz">
-      </label>
-      <label class="field">
         <span>Durée d'un tronçon (secondes)</span>
         <input type="number" id="runpod_chunk_seconds" min="30" max="600" step="10">
         <small>180 s ≈ 7,3 Mo encodés, avec une vraie marge sous le plafond de
@@ -549,20 +545,6 @@
         README) : le serverless se construit seul depuis ce dépôt, pas un
         pod.
       </p>
-      <label class="field">
-        <span>Démarrage</span>
-        <select id="runpod_pod_mode">
-          <option value="off">Serverless uniquement</option>
-          <option value="fallback">Serverless, avec bascule sur pod si aucun worker ne démarre</option>
-          <option value="always">Pod dès le premier tronçon, sans passer par le serverless</option>
-        </select>
-        <small>
-          « Serverless, avec bascule » attend un peu avant de basculer, au
-          cas où un worker démarre. « Pod dès le premier tronçon » saute
-          cette attente : à choisir si vous savez déjà que le serverless n'a
-          pas de capacité.
-        </small>
-      </label>
       <label class="field">
         <span>Image Docker du pod</span>
         <input type="text" id="runpod_pod_image" placeholder="mon-registre/transcription-pod:latest">
