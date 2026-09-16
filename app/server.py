@@ -652,6 +652,25 @@ async def knowledge_job(job_id: str) -> dict:
     return _decorate(db.get_job(job_id, with_content=False))
 
 
+@app.post("/api/jobs/{job_id}/knowledge/validate")
+async def validate_knowledge_job(job_id: str, payload: dict = Body(...)) -> dict:
+    job = db.get_job(job_id)
+    if job is None:
+        raise HTTPException(404, "Travail introuvable.")
+    if not isinstance(job.get("knowledge"), dict) or job["knowledge"].get("status") != "proposed":
+        raise HTTPException(409, "Aucune proposition de mémoire à valider.")
+    from .knowledge import validate_knowledge
+    try:
+        knowledge = await asyncio.to_thread(
+            validate_knowledge, job, config.load_settings(),
+            concepts=list(payload.get("concepts") or []), themes=list(payload.get("themes") or []),
+        )
+    except (ValueError, obsidian.ObsidianError) as exc:
+        raise HTTPException(409, str(exc)) from exc
+    db.update_job(job_id, knowledge=knowledge, stage="Mémoire publiée")
+    return _decorate(db.get_job(job_id))
+
+
 @app.post("/api/jobs/{job_id}/factcheck")
 async def factcheck_job(job_id: str) -> dict:
     """Lance (ou relance) la vérification externe d'un travail déjà relu.
