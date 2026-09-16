@@ -1,16 +1,11 @@
 """
-Serveur HTTP pour le pod RunPod de secours.
+Serveur HTTP du pod GPU RunPod.
 
-Même image Docker, même calcul que ``handler.py`` — faster-whisper sur GPU,
-même contrat d'entrée/sortie — mais exposé en HTTP continu plutôt qu'en
-job serverless, puisqu'un pod RunPod n'a pas de file de jobs intégrée : on
-lui parle directement via son URL de proxy
+Le pod expose une transcription GPU continue par son URL de proxy
 (``https://{pod_id}-{port}.proxy.runpod.net``).
 
-Ce script n'est jamais lancé par défaut : l'image RunPod Serverless démarre
-toujours ``handler.py`` (voir le ``CMD`` du Dockerfile). C'est l'application
-qui, en créant le pod de secours, remplace la commande de démarrage pour
-lancer celui-ci à la place (voir ``app/engines/runpod_pod.py``).
+L'image Docker démarre directement ce serveur. RunPod Serverless ne fait plus
+partie de l'architecture.
 """
 from __future__ import annotations
 

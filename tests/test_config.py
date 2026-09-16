@@ -48,3 +48,9 @@ def test_nim_key_is_masked_in_public_settings():
     assert public["nim_api_key"] == ""
     assert public["nim_api_key_set"] is True
     assert public["nim_fallback_enabled"] is True
+
+
+def test_domain_label_updates_only_default_obsidian_paths():
+    settings = config.save_settings({"domain_label": "Droit social"})
+    assert settings.obsidian_entities_folder == "Formation/Droit social/Entités"
+    assert settings.obsidian_glossary_note == "Formation/Droit social/Glossaire Droit social.md"
