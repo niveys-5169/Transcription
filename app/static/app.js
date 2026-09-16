@@ -612,14 +612,16 @@ function renderKnowledge(job) {
   const zone = $("knowledge-zone");
   const panel = $("panel-knowledge");
   const button = $("knowledge-btn");
+  const validateButton = $("knowledge-validate-btn");
   const knowledge = job.knowledge;
   zone.hidden = !isProofread(job);
   button.disabled = job.task === "capitalisation";
   button.textContent = knowledge ? "Régénérer les propositions" : "Proposer des concepts";
+  validateButton.hidden = !knowledge || knowledge.status !== "proposed";
   if (!knowledge) { panel.innerHTML = ""; return; }
   const concepts = Array.isArray(knowledge.concepts) ? knowledge.concepts : [];
   const themes = Array.isArray(knowledge.themes) ? knowledge.themes : [];
-  panel.innerHTML = `<p class="meta">À valider avant publication dans le coffre.</p>${concepts.length ? `<h4>Concepts</h4><ul>${concepts.map((item) => `<li><strong>${escapeHtml(item.nom || "")}</strong> — ${escapeHtml(item.definition || "")}</li>`).join("")}</ul>` : ""}${themes.length ? `<h4>Thèmes</h4><ul>${themes.map((item) => `<li>${escapeHtml(item.nom || "")}</li>`).join("")}</ul>` : ""}`;
+  panel.innerHTML = `<p class="meta">${knowledge.status === "proposed" ? "À valider avant publication dans le coffre." : "Mémoire publiée."}</p>${concepts.length ? `<h4>Concepts</h4><ul>${concepts.map((item, i) => `<li><label><input type="checkbox" checked data-knowledge-kind="concept" data-knowledge-index="${i}"> <input class="knowledge-name" value="${escapeHtml(item.nom || "")}"></label> — ${escapeHtml(item.definition || "")}</li>`).join("")}</ul>` : ""}${themes.length ? `<h4>Thèmes</h4><ul>${themes.map((item, i) => `<li><label><input type="checkbox" checked data-knowledge-kind="theme" data-knowledge-index="${i}"> <input class="knowledge-name" value="${escapeHtml(item.nom || "")}"></label></li>`).join("")}</ul>` : ""}`;
 }
 
 const KIND_LABELS = {
@@ -2190,6 +2192,21 @@ function initActions() {
       await api(`/api/jobs/${state.detail.id}/knowledge`, { method: "POST" });
       toast("Propositions de mémoire en cours de génération.");
       refreshJobs();
+    } catch (error) { toast(error.message, true); }
+  });
+  $("knowledge-validate-btn").addEventListener("click", async () => {
+    if (!state.detail || !state.detail.knowledge) return;
+    const selected = { concepts: [], themes: [] };
+    document.querySelectorAll("[data-knowledge-kind]:checked").forEach((input) => {
+      const kind = input.dataset.knowledgeKind;
+      const item = { ...(state.detail.knowledge[kind === "concept" ? "concepts" : "themes"][Number(input.dataset.knowledgeIndex)] || {}) };
+      item.nom = input.closest("label").querySelector(".knowledge-name").value.trim();
+      selected[kind === "concept" ? "concepts" : "themes"].push(item);
+    });
+    try {
+      await api(`/api/jobs/${state.detail.id}/knowledge/validate`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(selected) });
+      toast("Mémoire publiée dans le coffre.");
+      await refreshJobs();
     } catch (error) { toast(error.message, true); }
   });
 
