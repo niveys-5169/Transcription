@@ -99,6 +99,35 @@ def test_fiche_obsidian_utilise_les_blocs_corriges_sans_toucher_au_brut(vault, s
     assert j["raw_text"] == "Texte brut intact."
 
 
+def test_publier_ecrit_un_verbatim_horodate_et_lie_a_la_fiche(vault, settings):
+    j = job(review_blocks=[
+        {"id": "segment-1", "start": 65.9, "speaker": "SPEAKER_01", "text": "Version humaine."},
+    ])
+    relative = obsidian.publish(j, settings=settings)
+
+    verbatim_relative = j["_obsidian_verbatim_path"]
+    verbatim = (vault / verbatim_relative).read_text(encoding="utf-8")
+    fiche = (vault / relative).read_text(encoding="utf-8")
+    assert verbatim_relative.startswith(settings.obsidian_verbatim_folder)
+    assert "type: verbatim" in verbatim
+    assert "fiche: \"[[2026-09-14 — Introduction à la tutelle]]\"" in verbatim
+    assert "**[00:01:05] SPEAKER_01** — Version humaine." in verbatim
+    assert "verbatim: \"[[2026-09-14 — Introduction à la tutelle (verbatim)]]\"" in fiche
+
+
+def test_republier_reutilise_le_meme_verbatim(vault, settings):
+    j = job(review_blocks=[{"start": 0, "text": "Version initiale."}])
+    obsidian.publish(j, settings=settings)
+    j["obsidian_path"] = f"{settings.obsidian_notes_folder}/2026-09-14 — Introduction à la tutelle.md"
+    j["obsidian_verbatim_path"] = j["_obsidian_verbatim_path"]
+    j["review_blocks"] = [{"start": 0, "text": "Version mise à jour."}]
+    obsidian.publish(j, settings=settings)
+
+    verbatims = list((vault / settings.obsidian_verbatim_folder).glob("*.md"))
+    assert len(verbatims) == 1
+    assert "Version mise à jour." in verbatims[0].read_text(encoding="utf-8")
+
+
 def test_encart_warning_si_points_incertains(vault, settings):
     j = job(
         verification={

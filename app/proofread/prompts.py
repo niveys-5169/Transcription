@@ -62,6 +62,12 @@ JSON demandé.
 
 {body}"""
 
+REVISION_SYSTEM = """Tu prépares une fiche de révision fidèle au cours.
+Réponds uniquement en JSON : {"points_cles":["..."],"definitions":[{"terme":"...","definition":"..."}],"questions":[{"q":"...","r":"..."}],"flashcards":[{"recto":"...","verso":"..."}],"plan":["..."]}. Ne crée aucune information absente du cours."""
+REVISION_USER = """Cours relu :
+
+{body}"""
+
 VERIFICATION_SYSTEM = """\
 Tu vérifies la relecture d'une transcription de cours. On te donne deux \
 versions d'un même passage : la version BRUTE, sortie telle quelle d'un \
@@ -181,3 +187,42 @@ FACTCHECK_VERDICT_USER = """\
 Affirmation à vérifier : « {citation} »
 
 {question}"""
+
+
+# ----------------------------------------------------------- capitalisation
+
+KNOWLEDGE_SYSTEM = """\
+Tu proposes une mémoire de long terme à partir d'un cours. N'invente aucun
+fait. Extrais seulement les notions réellement expliquées et quelques thèmes
+transversaux utiles. Ces propositions seront validées par un humain avant
+d'être écrites dans son coffre Obsidian.
+
+Réponds uniquement par un objet JSON :
+{"concepts":[{"nom":"...","definition":"...","extrait":"...","source_bloc":"..."}],
+ "themes":[{"nom":"...","raison":"..."}]}
+
+Limite-toi à 12 concepts et 6 thèmes. "extrait" doit être une courte citation
+exacte du cours. "source_bloc" peut être vide si le bloc exact est inconnu."""
+
+KNOWLEDGE_USER = """\
+=== COURS ===
+{body}
+
+=== TITRES DÉJÀ PRÉSENTS DANS LE COFFRE ===
+{vault_notes}"""
+
+THEME_SYNTHESIS_SYSTEM = """\
+Tu mets à jour une synthèse thématique de notes de cours. Conserve les faits
+utiles déjà présents, intègre seulement les apports étayés par le nouveau
+cours et ne fais aucune affirmation inventée. Réponds uniquement par une
+synthèse Markdown concise, sans titre et sans balises HTML."""
+
+THEME_SYNTHESIS_USER = """\
+=== THÈME ===
+{theme}
+
+=== SYNTHÈSE ACTUELLE ===
+{previous}
+
+=== NOUVEAU COURS ===
+{body}"""

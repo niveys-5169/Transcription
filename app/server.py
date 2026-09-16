@@ -17,6 +17,7 @@ from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingRes
 from fastapi.staticfiles import StaticFiles
 
 from . import __version__, config, db, exporters, lexicon, media, obsidian, pipeline, updates
+from .obsidian import index as vault_index
 from .engines import availability as engine_availability
 from .proofread import factcheck as factcheck_module
 from .proofread.claude import ClaudeProofreader
@@ -213,6 +214,32 @@ async def post_lexicon(payload: dict = Body(...)) -> dict:
     return {"terms": [t.to_dict() for t in lexicon.load_lexicon()]}
 
 
+# -------------------------------------------------------------- index coffre
+
+
+@app.get("/api/vault/index")
+async def get_vault_index(q: str = "") -> dict:
+    settings = config.load_settings()
+    if not settings.obsidian_vault_path:
+        raise HTTPException(409, "Aucun coffre Obsidian configuré dans les réglages.")
+    try:
+        return {"notes": await asyncio.to_thread(vault_index.search, settings, q)}
+    except obsidian.ObsidianError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@app.post("/api/vault/reindex")
+async def reindex_vault() -> dict:
+    settings = config.load_settings()
+    if not settings.obsidian_vault_path:
+        raise HTTPException(409, "Aucun coffre Obsidian configuré dans les réglages.")
+    try:
+        notes = await asyncio.to_thread(vault_index.build, settings, force=True)
+    except obsidian.ObsidianError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return {"notes": notes, "count": len(notes)}
+
+
 # -------------------------------------------------------- navigation de dossiers
 
 
@@ -376,6 +403,34 @@ async def job_media(job_id: str) -> FileResponse:
         )
     media_type, _ = mimetypes.guess_type(job["filename"] or source.name)
     return FileResponse(source, media_type=media_type or "application/octet-stream")
+
+
+@app.get("/api/jobs/{job_id}/peaks")
+async def job_peaks(job_id: str) -> dict:
+    """Profil RMS compact pour la forme d'onde, calculé une seule fois."""
+    job = db.get_job(job_id, with_content=False)
+    if job is None:
+        raise HTTPException(404, "Travail introuvable.")
+    wav = Path(job.get("wav_path") or "")
+    if not wav.is_file():
+        raise HTTPException(404, "Audio extrait indisponible.")
+    cache = config.MEDIA_DIR / job_id / "peaks.json"
+    source_mtime = wav.stat().st_mtime_ns
+    try:
+        cached = json.loads(cache.read_text(encoding="utf-8"))
+        if cached.get("source_mtime") == source_mtime:
+            return cached
+    except (OSError, ValueError, TypeError):
+        pass
+    values = media._rms_profile(wav, window_seconds=0.05)
+    peak = float(values.max()) if values.size else 0.0
+    # 2 000 points suffisent au canvas tout en restant très légers à servir.
+    stride = max(1, (len(values) + 1999) // 2000)
+    peaks = [round(float(value / peak), 4) if peak else 0.0 for value in values[::stride]]
+    payload = {"peaks": peaks, "window_seconds": round(0.05 * stride, 4), "source_mtime": source_mtime}
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    cache.write_text(json.dumps(payload), encoding="utf-8")
+    return payload
 
 
 @app.get("/api/jobs/{job_id}/review-blocks")
@@ -570,6 +625,50 @@ async def proofread_job(job_id: str, payload: dict = Body(default={})) -> dict:
     )
     pipeline.enqueue(job_id, pipeline.TASK_PROOFREAD)
     return _decorate(db.get_job(job_id, with_content=False))
+
+
+@app.post("/api/jobs/{job_id}/revision")
+async def revision_job(job_id: str) -> dict:
+    job = db.get_job(job_id, with_content=False)
+    if job is None:
+        raise HTTPException(404, "Travail introuvable.")
+    if job["status"] not in {"done", "checked", "published"}:
+        raise HTTPException(409, "La fiche de révision exige un cours relu.")
+    db.update_job(job_id, task=pipeline.TASK_REVISION, stage="Fiche de révision en attente", progress=0.0)
+    pipeline.enqueue(job_id, pipeline.TASK_REVISION)
+    return _decorate(db.get_job(job_id, with_content=False))
+
+
+@app.post("/api/jobs/{job_id}/knowledge")
+async def knowledge_job(job_id: str) -> dict:
+    """Prépare des propositions de mémoire, sans publier quoi que ce soit."""
+    job = db.get_job(job_id, with_content=False)
+    if job is None:
+        raise HTTPException(404, "Travail introuvable.")
+    if job["status"] not in {"done", "checked", "published"}:
+        raise HTTPException(409, "La capitalisation exige un cours relu.")
+    db.update_job(job_id, task=pipeline.TASK_KNOWLEDGE, stage="Capitalisation en attente", progress=0.0)
+    pipeline.enqueue(job_id, pipeline.TASK_KNOWLEDGE)
+    return _decorate(db.get_job(job_id, with_content=False))
+
+
+@app.post("/api/jobs/{job_id}/knowledge/validate")
+async def validate_knowledge_job(job_id: str, payload: dict = Body(...)) -> dict:
+    job = db.get_job(job_id)
+    if job is None:
+        raise HTTPException(404, "Travail introuvable.")
+    if not isinstance(job.get("knowledge"), dict) or job["knowledge"].get("status") != "proposed":
+        raise HTTPException(409, "Aucune proposition de mémoire à valider.")
+    from .knowledge import validate_knowledge
+    try:
+        knowledge = await asyncio.to_thread(
+            validate_knowledge, job, config.load_settings(),
+            concepts=list(payload.get("concepts") or []), themes=list(payload.get("themes") or []),
+        )
+    except (ValueError, obsidian.ObsidianError) as exc:
+        raise HTTPException(409, str(exc)) from exc
+    db.update_job(job_id, knowledge=knowledge, stage="Mémoire publiée")
+    return _decorate(db.get_job(job_id))
 
 
 @app.post("/api/jobs/{job_id}/factcheck")

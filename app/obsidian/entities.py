@@ -15,6 +15,8 @@ from .vault import read, resolve, write_atomic
 
 MOC_START = "<!-- transcriptions:début -->"
 MOC_END = "<!-- transcriptions:fin -->"
+THEMES_START = "<!-- themes:début -->"
+THEMES_END = "<!-- themes:fin -->"
 
 _SAFE_NAME = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
 
@@ -28,6 +30,11 @@ def ensure_entity_notes(settings, entities: list[dict]) -> None:
     if not settings.obsidian_create_entities:
         return
     for entity in entities:
+        # L'index du coffre a déjà trouvé une note, éventuellement hors du
+        # dossier d'entités géré par Verbatim : la lier suffit, créer un stub
+        # ici donnerait un doublon.
+        if entity.get("vault_path"):
+            continue
         wikilink = str(entity.get("wikilink") or entity.get("nom") or "").strip()
         if not wikilink:
             continue
@@ -89,6 +96,22 @@ def update_index(
 
     new_content = f"{before}{MOC_START}\n" + "\n".join(lines) + f"\n{MOC_END}{after}"
     write_atomic(path, new_content)
+
+
+def update_themes_index(settings, themes: list[str]) -> None:
+    """Ajoute les thèmes validés dans une région dédiée du MOC."""
+    path = resolve(settings.obsidian_vault_path, settings.obsidian_index_note)
+    content = read(path)
+    if THEMES_START not in content or THEMES_END not in content:
+        content = content.rstrip() + f"\n\n## Thèmes\n\n{THEMES_START}\n{THEMES_END}\n"
+    before, rest = content.split(THEMES_START, 1)
+    inside, after = rest.split(THEMES_END, 1)
+    lines = [line for line in inside.strip().splitlines() if line.strip()]
+    for theme in themes:
+        line = f"- [[{theme}]]"
+        if line not in lines:
+            lines.append(line)
+    write_atomic(path, f"{before}{THEMES_START}\n" + "\n".join(lines) + f"\n{THEMES_END}{after}")
 
 
 def write_glossary(settings) -> None:

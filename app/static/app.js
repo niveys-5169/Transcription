@@ -510,6 +510,7 @@ function renderDetail() {
   $("summary-list").innerHTML = summary.map((point) => `<li>${escapeHtml(point)}</li>`).join("");
 
   loadPlayerForJob(job);
+  renderWaveform(job);
   loadReviewBlocks(job);
   loadAnnotations(job);
   renderComparisonPanel(job);
@@ -517,6 +518,8 @@ function renderDetail() {
 
   renderVerification(job);
   renderSources(job);
+  renderRevision(job);
+  renderKnowledge(job);
 
   // Chaque étape est à part : on peut la lancer, ou la relancer avec
   // d'autres réglages, sur n'importe quel travail déjà à l'étape d'avant.
@@ -559,6 +562,13 @@ function renderDetail() {
   }
 
   const notebookButton = $("notebooklm-btn");
+  const courseDocLink = $("notebooklm-course-link");
+  if (job.notebooklm_doc_id) {
+    courseDocLink.href = `https://docs.google.com/document/d/${encodeURIComponent(job.notebooklm_doc_id)}/edit`;
+    courseDocLink.hidden = false;
+  } else {
+    courseDocLink.hidden = true;
+  }
   const notebookReady = Boolean(
     state.settings.notebooklm_sync_enabled && state.settings.notebooklm_master_doc_id
   );
@@ -582,6 +592,36 @@ function renderDetail() {
 
   renderJobTags(job);
 
+}
+
+function renderRevision(job) {
+  const zone = $("revision-zone");
+  const panel = $("panel-revision");
+  const button = $("revision-btn");
+  const revision = job.revision;
+  zone.hidden = !isProofread(job);
+  button.disabled = job.task === "revision";
+  button.textContent = revision ? "Régénérer la fiche" : "Générer la fiche";
+  if (!revision) { panel.innerHTML = ""; return; }
+  const points = Array.isArray(revision.points_cles) ? revision.points_cles : [];
+  const questions = Array.isArray(revision.questions) ? revision.questions : [];
+  panel.innerHTML = `${points.length ? `<h4>Points clés</h4><ul>${points.map((point) => `<li>${escapeHtml(point)}</li>`).join("")}</ul>` : ""}${questions.length ? `<h4>Questions</h4>${questions.slice(0, 5).map((item) => `<details><summary>${escapeHtml(item.q || "Question")}</summary><p>${escapeHtml(item.r || "")}</p></details>`).join("")}` : ""}`;
+}
+
+function renderKnowledge(job) {
+  const zone = $("knowledge-zone");
+  const panel = $("panel-knowledge");
+  const button = $("knowledge-btn");
+  const validateButton = $("knowledge-validate-btn");
+  const knowledge = job.knowledge;
+  zone.hidden = !isProofread(job);
+  button.disabled = job.task === "capitalisation";
+  button.textContent = knowledge ? "Régénérer les propositions" : "Proposer des concepts";
+  validateButton.hidden = !knowledge || knowledge.status !== "proposed";
+  if (!knowledge) { panel.innerHTML = ""; return; }
+  const concepts = Array.isArray(knowledge.concepts) ? knowledge.concepts : [];
+  const themes = Array.isArray(knowledge.themes) ? knowledge.themes : [];
+  panel.innerHTML = `<p class="meta">${knowledge.status === "proposed" ? "À valider avant publication dans le coffre." : "Mémoire publiée."}</p>${concepts.length ? `<h4>Concepts</h4><ul>${concepts.map((item, i) => `<li><label><input type="checkbox" checked data-knowledge-kind="concept" data-knowledge-index="${i}"> <input class="knowledge-name" value="${escapeHtml(item.nom || "")}"></label> — ${escapeHtml(item.definition || "")}</li>`).join("")}</ul>` : ""}${themes.length ? `<h4>Thèmes</h4><ul>${themes.map((item, i) => `<li><label><input type="checkbox" checked data-knowledge-kind="theme" data-knowledge-index="${i}"> <input class="knowledge-name" value="${escapeHtml(item.nom || "")}"></label>${item.synthesis ? `<details><summary>Aperçu de la synthèse</summary><p><del>${escapeHtml(item.previous_synthesis || "Nouvelle synthèse")}</del></p><p>${escapeHtml(item.synthesis)}</p></details>` : ""}</li>`).join("")}</ul>` : ""}`;
 }
 
 const KIND_LABELS = {
@@ -1115,6 +1155,18 @@ function updatePlayerTimeDisplay() {
   $("player-time").textContent = `${clock(media.currentTime)} / ${clock(duration)}`;
   updateTimelineProgress();
   updateActiveBlockFromTime();
+  updateActiveWordFromTime();
+}
+
+function updateActiveWordFromTime() {
+  const previous = document.querySelector(".word.is-playing");
+  const block = state.blocks.find((item) => item.id === state.activeBlockId);
+  const time = activeMedia().currentTime;
+  const word = block && (block.words || []).find((item) => time >= Number(item.start) && time <= Number(item.end));
+  const next = word && document.querySelector(`.word[data-time="${Number(word.start)}"]`);
+  if (previous === next) return;
+  if (previous) previous.classList.remove("is-playing");
+  if (next) next.classList.add("is-playing");
 }
 
 function initPlayer() {
@@ -1270,6 +1322,10 @@ function confidenceClass(score) {
 function renderBlockText(block, index, segments) {
   const edited = isBlockEdited(block, index, segments);
   const cls = edited ? "" : confidenceClass(block.confidence);
+  if (!edited && Array.isArray(block.words) && block.words.length) {
+    const words = block.words.map((word) => `<span class="word ${confidenceClass(word.confidence)}" data-action="seek-word" data-time="${Number(word.start)}" title="${clock(word.start)}">${escapeHtml(word.text)}</span>`).join("");
+    return `<p class="block-text ${cls}" data-action="edit">${words}</p>`;
+  }
   const highlights = state.annotations.filter((item) => item.type === "highlight" && item.block_id === block.id && Number.isInteger(item.range_start) && Number.isInteger(item.range_end))
     .sort((a, b) => a.range_start - b.range_start);
   let cursor = 0;
@@ -1306,6 +1362,13 @@ function renderSpeakerControls(block) {
   </div>`;
 }
 
+function speakerColorClass(speaker) {
+  if (!speaker) return "speaker-color-0";
+  let hash = 0;
+  for (const char of speaker) hash = ((hash << 5) - hash + char.charCodeAt(0)) | 0;
+  return `speaker-color-${Math.abs(hash) % 6}`;
+}
+
 function renderBlocks() {
   const list = $("blocks-list");
   const job = state.detail;
@@ -1339,7 +1402,10 @@ function renderBlocks() {
       }).join(" ");
       const hasReviewed = job && ["done", "checked", "published"].includes(job.status);
       const rawControl = hasReviewed ? `<details class="block-raw"><summary>Brut</summary><p>${escapeHtml(raw)}</p><button type="button" class="btn btn-mini btn-ghost" data-action="seek" data-id="${block.id}">Écouter ce passage</button></details>` : "";
-      return `<div class="block ${confidence}${needsReview ? " needs-review" : ""}${isActive ? " is-active-block" : ""}" data-block-id="${block.id}">
+      const previous = visible[index - 1];
+      const groupHeader = block.speaker && (!previous || previous.speaker !== block.speaker)
+        ? `<div class="speaker-turn ${speakerColorClass(block.speaker)}"><span class="speaker-dot"></span><b>${escapeHtml(block.speaker)}</b><span>tour de parole</span></div>` : "";
+      return `${groupHeader}<div class="block ${speakerColorClass(block.speaker)} ${confidence}${needsReview ? " needs-review" : ""}${isActive ? " is-active-block" : ""}" data-block-id="${block.id}">
         <time class="block-time${needsReview ? " needs-review" : ""}" data-action="seek" data-id="${block.id}" title="${needsReview ? "Passage à vérifier" : "Aller à cet horodatage"}">${clock(block.start)}</time>
         <div class="block-body">${speakerControls}${body}${confidenceLabel}${rawControl}</div>
       </div>`;
@@ -1399,6 +1465,25 @@ async function saveSpeakerField(blockId, fields) {
 function seekToBlock(blockId) {
   const block = state.blocks.find((b) => b.id === blockId);
   if (block) seekTo(block.start);
+}
+
+async function renderWaveform(job) {
+  const canvas = $("timeline-waveform");
+  if (!job || !canvas) return;
+  try {
+    const { peaks } = await api(`/api/jobs/${job.id}/peaks`);
+    const width = Math.max(1, canvas.clientWidth || 600), height = Math.max(1, canvas.clientHeight || 42);
+    const ratio = window.devicePixelRatio || 1;
+    canvas.width = width * ratio; canvas.height = height * ratio;
+    const ctx = canvas.getContext("2d"); ctx.scale(ratio, ratio); ctx.clearRect(0, 0, width, height);
+    ctx.strokeStyle = "rgba(174, 160, 255, .55)"; ctx.lineWidth = 1;
+    const middle = height / 2;
+    peaks.forEach((peak, index) => {
+      const x = (index / Math.max(1, peaks.length - 1)) * width;
+      const amplitude = Math.max(1, peak * middle);
+      ctx.beginPath(); ctx.moveTo(x, middle - amplitude); ctx.lineTo(x, middle + amplitude); ctx.stroke();
+    });
+  } catch (_) { canvas.hidden = true; }
 }
 
 function focusBlock(blockId) {
@@ -1503,6 +1588,12 @@ async function saveBlockEdit(blockId) {
 
 function initBlocksList() {
   $("blocks-list").addEventListener("click", (event) => {
+    const wordTarget = event.target.closest('[data-action="seek-word"]');
+    if (wordTarget) {
+      event.stopPropagation();
+      seekTo(Number(wordTarget.dataset.time));
+      return;
+    }
     const seekTarget = event.target.closest('[data-action="seek"]');
     if (seekTarget) {
       state.activeBlockId = seekTarget.dataset.id;
@@ -1838,6 +1929,7 @@ function openSettings() {
   $("runpod_pod_network_volume_id").value = settings.runpod_pod_network_volume_id || "";
   $("keep_media").checked = Boolean(settings.keep_media);
   $("notebooklm_sync_enabled").checked = Boolean(settings.notebooklm_sync_enabled);
+  $("notebooklm_master_doc_enabled").checked = settings.notebooklm_master_doc_enabled !== false;
   $("notebooklm_drive_folder_id").value = settings.notebooklm_drive_folder_id || "";
   $("notebooklm_master_doc_id").value = settings.notebooklm_master_doc_id || "";
   $("notebooklm-settings-state").textContent = settings.notebooklm_master_doc_id
@@ -1927,6 +2019,7 @@ async function saveSettings() {
     obsidian_filename_template: $("obsidian_filename_template").value.trim(),
     obsidian_create_entities: $("obsidian_create_entities").checked,
     notebooklm_sync_enabled: $("notebooklm_sync_enabled").checked,
+    notebooklm_master_doc_enabled: $("notebooklm_master_doc_enabled").checked,
     notebooklm_drive_folder_id: $("notebooklm_drive_folder_id").value.trim(),
   };
   const anthropic = $("anthropic_api_key").value.trim();
@@ -2082,6 +2175,39 @@ function initActions() {
   });
   $("retry-nim-btn").addEventListener("click", () => {
     launchProofread($("retry-nim-btn"), "nim");
+  });
+
+  $("revision-btn").addEventListener("click", async () => {
+    if (!state.detail) return;
+    try {
+      await api(`/api/jobs/${state.detail.id}/revision`, { method: "POST" });
+      toast("Fiche de révision en cours de génération.");
+      refreshJobs();
+    } catch (error) { toast(error.message, true); }
+  });
+
+  $("knowledge-btn").addEventListener("click", async () => {
+    if (!state.detail) return;
+    try {
+      await api(`/api/jobs/${state.detail.id}/knowledge`, { method: "POST" });
+      toast("Propositions de mémoire en cours de génération.");
+      refreshJobs();
+    } catch (error) { toast(error.message, true); }
+  });
+  $("knowledge-validate-btn").addEventListener("click", async () => {
+    if (!state.detail || !state.detail.knowledge) return;
+    const selected = { concepts: [], themes: [] };
+    document.querySelectorAll("[data-knowledge-kind]:checked").forEach((input) => {
+      const kind = input.dataset.knowledgeKind;
+      const item = { ...(state.detail.knowledge[kind === "concept" ? "concepts" : "themes"][Number(input.dataset.knowledgeIndex)] || {}) };
+      item.nom = input.closest("label").querySelector(".knowledge-name").value.trim();
+      selected[kind === "concept" ? "concepts" : "themes"].push(item);
+    });
+    try {
+      await api(`/api/jobs/${state.detail.id}/knowledge/validate`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(selected) });
+      toast("Mémoire publiée dans le coffre.");
+      await refreshJobs();
+    } catch (error) { toast(error.message, true); }
   });
 
   $("factcheck-btn").addEventListener("click", async () => {

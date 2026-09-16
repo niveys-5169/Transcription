@@ -49,6 +49,8 @@ TASK_PROOFREAD = "relecture"
 TASK_FACTCHECK = "verification_web"
 TASK_PUBLISH = "publication"
 TASK_NOTEBOOKLM = "synchronisation_notebooklm"
+TASK_REVISION = "revision"
+TASK_KNOWLEDGE = "capitalisation"
 
 # Poids de chaque phase dans la barre de progression, par étape.
 EXTRACTION_SHARE = 0.15
@@ -212,7 +214,7 @@ def _export_course_markdown(job_id: str) -> Path | None:
         return None
 
 
-def _sync_notebooklm() -> tuple[bool, str]:
+def _sync_notebooklm(job_id: str | None = None) -> tuple[bool, str]:
     """Pousse la compilation de data/cours/ vers le Doc maître Drive.
 
     Étape non bloquante, comme la publication Obsidian : ``sync_master_doc``
@@ -223,7 +225,19 @@ def _sync_notebooklm() -> tuple[bool, str]:
     try:
         from . import notebooklm_sync
 
-        return notebooklm_sync.sync_master_doc_with_detail(config.COURSES_DIR)
+        settings = config.load_settings()
+        job = db.get_job(job_id) if job_id else None
+        if job is not None:
+            course_ok, course_detail, course_doc_id = notebooklm_sync.sync_course_doc(
+                job, settings=settings
+            )
+            if not course_ok:
+                return False, course_detail
+            if course_doc_id:
+                db.update_job(job_id, notebooklm_doc_id=course_doc_id)
+            if not settings.notebooklm_master_doc_enabled:
+                return True, course_detail
+        return notebooklm_sync.sync_master_doc_with_detail(config.COURSES_DIR, settings=settings)
     except Exception:  # pragma: no cover - garde-fou ultime
         logger.exception("Synchronisation NotebookLM en échec de façon inattendue.")
         return False, "Erreur inattendue pendant la synchronisation NotebookLM."
@@ -745,6 +759,7 @@ def run_publish(job_id: str) -> None:
             progress=1.0,
             task=None,
             obsidian_path=relative_path,
+            obsidian_verbatim_path=job.get("_obsidian_verbatim_path"),
             obsidian_published_at=db.now(),
         )
         final_status = "published"
@@ -783,7 +798,7 @@ def run_publish(job_id: str) -> None:
     # synchronisation trompeur.
     if final_status == "published":
         sync_requested = config.load_settings().notebooklm_sync_enabled
-        synced, detail = _sync_notebooklm()
+        synced, detail = _sync_notebooklm(job_id)
         if sync_requested:
             _record_notebooklm_result(job_id, synced, detail)
 
@@ -803,7 +818,7 @@ def run_notebooklm_sync(job_id: str) -> None:
     progress = _Progress(job_id)
     progress(0.2, "Synchronisation du Doc maître NotebookLM…")
     _export_course_markdown(job_id)
-    success, detail = _sync_notebooklm()
+    success, detail = _sync_notebooklm(job_id)
     if success:
         db.update_job(
             job_id, task=None, stage="Publié — synchronisé NotebookLM", progress=1.0,
@@ -816,6 +831,32 @@ def run_notebooklm_sync(job_id: str) -> None:
     _release(job_id)
 
 
+def run_revision(job_id: str) -> None:
+    job = db.get_job(job_id)
+    if job is None:
+        return
+    progress = _Progress(job_id)
+    progress(0.2, "Génération de la fiche de révision…")
+    from .revision import build_revision
+    revision = build_revision(job, config.load_settings())
+    db.update_job(job_id, task=None, revision=revision, stage="Fiche de révision prête", progress=1.0)
+    _release(job_id)
+
+
+def run_knowledge(job_id: str) -> None:
+    """Propose des concepts et thèmes ; ne touche jamais au coffre."""
+    job = db.get_job(job_id)
+    if job is None:
+        return
+    progress = _Progress(job_id)
+    progress(0.2, "Proposition de capitalisation…")
+    from .knowledge import build_knowledge
+    knowledge = build_knowledge(job, config.load_settings())
+    stage = "Propositions de mémoire prêtes" if knowledge else "Capitalisation indisponible"
+    db.update_job(job_id, task=None, knowledge=knowledge, stage=stage, progress=1.0)
+    _release(job_id)
+
+
 _RUNNERS.update(
     {
         TASK_TRANSCRIPTION: run_transcription,
@@ -823,5 +864,7 @@ _RUNNERS.update(
         TASK_FACTCHECK: run_factcheck,
         TASK_PUBLISH: run_publish,
         TASK_NOTEBOOKLM: run_notebooklm_sync,
+        TASK_REVISION: run_revision,
+        TASK_KNOWLEDGE: run_knowledge,
     }
 )

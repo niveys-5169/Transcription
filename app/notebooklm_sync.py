@@ -44,6 +44,7 @@ SCOPES = ["https://www.googleapis.com/auth/drive.file"]
 
 MASTER_DOC_NAME = "Cours transcrits — compilation NotebookLM"
 GOOGLE_DOC_MIME = "application/vnd.google-apps.document"
+GOOGLE_FOLDER_MIME = "application/vnd.google-apps.folder"
 
 _TITLE_RE = re.compile(r"^#\s+(.+?)\s*$", re.MULTILINE)
 
@@ -241,6 +242,42 @@ def create_master_doc(drive_folder_id: str, creds) -> str:
         body["parents"] = [drive_folder_id]
     created = service.files().create(body=body, fields="id").execute()
     return created["id"]
+
+
+def _course_doc_name(job: dict) -> str:
+    date = str(job.get("created_at") or "")[:10] or "Cours"
+    title = str(job.get("title") or job.get("filename") or "Sans titre")
+    return f"{date} — {title}"
+
+
+def create_course_doc(job: dict, drive_folder_id: str, creds) -> str:
+    """Crée une fois le Doc dédié au cours, dans le dossier configuré."""
+    body: dict = {"name": _course_doc_name(job), "mimeType": GOOGLE_DOC_MIME}
+    if drive_folder_id:
+        body["parents"] = [drive_folder_id]
+    return _drive_service(creds).files().create(body=body, fields="id").execute()["id"]
+
+
+def sync_course_doc(job: dict, creds=None, *, settings=None) -> tuple[bool, str, str | None]:
+    """Crée/actualise le Doc d'un cours, sans rendre la publication fragile."""
+    settings = settings or config_module.load_settings()
+    if not settings.notebooklm_sync_enabled:
+        return False, "La synchronisation NotebookLM est désactivée dans les réglages.", None
+    try:
+        if creds is None:
+            creds = load_credentials(settings, interactive=False)
+        file_id = job.get("notebooklm_doc_id") or create_course_doc(
+            job, settings.notebooklm_drive_folder_id, creds
+        )
+        from .exporters import course_markdown
+
+        _update_master_doc(file_id, course_markdown(job), creds)
+        return True, "Doc du cours synchronisé.", file_id
+    except NotebookLMSyncError as exc:
+        return False, str(exc), None
+    except Exception as exc:  # noqa: BLE001 - Drive reste non bloquant
+        logger.warning("Synchronisation du Doc de cours en échec : %s", exc)
+        return False, f"{type(exc).__name__} : {exc}", None
 
 
 def _markdown_to_html(markdown: str) -> str:

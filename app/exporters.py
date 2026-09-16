@@ -157,6 +157,12 @@ def _markdown(job: dict) -> str:
     title = job.get("title") or job.get("filename") or "Transcription"
     parts.append(f"# {title}")
 
+    revision = job.get("revision") or {}
+    if isinstance(revision, dict) and revision.get("points_cles"):
+        lines = ["## Fiche de révision", "", "### Points clés", ""]
+        lines.extend(f"- {point}" for point in revision.get("points_cles", []) if point)
+        parts.append("\n".join(lines))
+
     summary = _summary_list(job)
     if summary:
         parts.append("## En bref\n\n" + "\n".join(f"- {point}" for point in summary))

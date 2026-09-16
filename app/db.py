@@ -94,6 +94,7 @@ MIGRATIONS = {
     "factcheck_report": "TEXT",
     "entities": "TEXT",
     "obsidian_path": "TEXT",
+    "obsidian_verbatim_path": "TEXT",
     "review_blocks": "TEXT",
     "review_version": "INTEGER DEFAULT 0",
     # Relecture humaine optionnelle, indépendante de la relecture IA.
@@ -102,6 +103,9 @@ MIGRATIONS = {
     "notebooklm_status": "TEXT DEFAULT 'non_configure'",
     "notebooklm_synced_at": "TEXT",
     "notebooklm_error": "TEXT",
+    "notebooklm_doc_id": "TEXT",
+    "revision": "TEXT",
+    "knowledge": "TEXT",
 }
 
 ANNOTATION_MIGRATIONS = {
@@ -120,6 +124,8 @@ HEAVY_COLUMNS = (
     "verification",
     "factcheck_report",
     "entities",
+    "revision",
+    "knowledge",
 )
 
 # Statuts d'un travail. Chaque étape est un état stable et exploitable, pas
@@ -146,8 +152,8 @@ STATUSES = (
 LIST_COLUMNS = (
     "id, filename, media_path, wav_path, size_bytes, duration, engine, model, "
     "language, proofread, structure, verify, chain, factcheck, publish, manual_review_status, task, "
-    "status, stage, progress, title, summary, error, obsidian_path, obsidian_published_at, "
-    "notebooklm_status, notebooklm_synced_at, notebooklm_error, "
+    "status, stage, progress, title, summary, error, obsidian_path, obsidian_verbatim_path, obsidian_published_at, "
+    "notebooklm_status, notebooklm_synced_at, notebooklm_error, notebooklm_doc_id, "
     "created_at, updated_at, finished_at"
 )
 
@@ -191,7 +197,7 @@ def init_db(db_path: Path | None = None) -> None:
 def _row_to_dict(row: sqlite3.Row) -> dict:
     data = dict(row)
     for colonne in (
-        "segments", "review_blocks", "verification", "factcheck_report", "entities",
+        "segments", "review_blocks", "verification", "factcheck_report", "entities", "revision", "knowledge",
     ):
         if colonne in data:
             try:
