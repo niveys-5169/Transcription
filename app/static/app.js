@@ -2207,6 +2207,15 @@ function initActions() {
   });
 
   $("open-settings").addEventListener("click", openSettings);
+  $("quit-app").addEventListener("click", async () => {
+    if (!window.confirm("Fermer l'application ? Le serveur s'arrêtera complètement.")) return;
+    try {
+      await api("/api/shutdown", { method: "POST" });
+    } catch (_) { /* le serveur s'arrête avant de répondre proprement */ }
+    document.body.innerHTML = "<p style=\"padding:2rem;font:1.1rem system-ui\">"
+      + "L'application est arrêtée. Vous pouvez fermer cette fenêtre.</p>";
+    window.close();
+  });
   $("update-btn").addEventListener("click", async () => {
     const button = $("update-btn");
     if (!window.confirm(`Installer la mise à jour ${button.dataset.version || ""} ? L'application va redémarrer.`)) return;

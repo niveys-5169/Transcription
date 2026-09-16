@@ -14,7 +14,13 @@ import webbrowser
 from pathlib import Path
 
 from . import config, media
-from .launcher import ServerHandle, find_available_port, port_is_taken, start_server
+from .launcher import (
+    ServerHandle,
+    find_available_port,
+    open_browser_window,
+    port_is_taken,
+    start_server,
+)
 from .logging_setup import setup_logging
 
 logger = logging.getLogger(__name__)
@@ -51,9 +57,11 @@ def main() -> int:
     setup_logging(config.DATA_DIR)
     logger.info("Démarrage de l'application (data_dir=%s)", config.DATA_DIR)
 
+    browser_profile_dir = config.DATA_DIR / "browser-profile"
+
     existing = _existing_instance_url(HOST, DEFAULT_PORT)
     if existing is not None:
-        webbrowser.open(existing)
+        open_browser_window(existing, browser_profile_dir)
         return 0
 
     if not media.ffmpeg_available():
@@ -71,7 +79,7 @@ def main() -> int:
         return 1
 
     url = f"http://{HOST}:{port}"
-    webbrowser.open(url)
+    open_browser_window(url, browser_profile_dir)
 
     try:
         import pystray
@@ -91,7 +99,7 @@ def main() -> int:
     image = Image.open(icon_path) if icon_path.exists() else Image.new("RGB", (64, 64), "black")
 
     def _on_open(icon, item) -> None:
-        webbrowser.open(url)
+        open_browser_window(url, browser_profile_dir)
 
     def _on_logs(icon, item) -> None:
         _open_logs_folder(config.DATA_DIR)

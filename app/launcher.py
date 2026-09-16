@@ -9,14 +9,88 @@ indéfinie (important depuis un callback de tray, qui ne doit jamais geler).
 from __future__ import annotations
 
 import logging
+import os
+import shutil
 import socket
+import subprocess
+import sys
 import threading
 import time
 import webbrowser
+from pathlib import Path
 
 import uvicorn
 
 logger = logging.getLogger(__name__)
+
+# Navigateurs à base Chromium, dans l'ordre de préférence : leur option
+# ``--app=`` ouvre l'URL dans une fenêtre dédiée (sans onglets ni barre
+# d'adresse), ce qu'aucune option standard de ``webbrowser`` ne permet.
+_LINUX_APP_BROWSERS = (
+    "google-chrome", "google-chrome-stable", "chromium", "chromium-browser",
+    "microsoft-edge", "microsoft-edge-stable", "brave-browser",
+)
+_MACOS_APP_BROWSERS = (
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+    "/Applications/Chromium.app/Contents/MacOS/Chromium",
+    "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
+)
+_WINDOWS_APP_BROWSERS = (
+    r"%ProgramFiles(x86)%\Microsoft\Edge\Application\msedge.exe",
+    r"%ProgramFiles%\Microsoft\Edge\Application\msedge.exe",
+    r"%ProgramFiles%\Google\Chrome\Application\chrome.exe",
+    r"%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe",
+    r"%LocalAppData%\Google\Chrome\Application\chrome.exe",
+)
+
+
+def _find_app_browser() -> str | None:
+    if sys.platform == "win32":
+        for candidate in _WINDOWS_APP_BROWSERS:
+            path = os.path.expandvars(candidate)
+            if os.path.isfile(path):
+                return path
+        return None
+    if sys.platform == "darwin":
+        return next((path for path in _MACOS_APP_BROWSERS if os.path.isfile(path)), None)
+    return next((shutil.which(name) for name in _LINUX_APP_BROWSERS if shutil.which(name)), None)
+
+
+def open_app_window(url: str, profile_dir: Path | None = None) -> bool:
+    """Ouvre ``url`` dans une fenêtre de navigateur dédiée, sans onglets.
+
+    Repose sur le mode « application » des navigateurs Chromium (Chrome,
+    Edge, Brave...) ; sans un tel navigateur, retourne ``False`` pour que
+    l'appelant se rabatte sur ``webbrowser.open`` (onglet classique).
+    Un profil dédié évite tout conflit avec le navigateur habituel de
+    l'utilisateur (verrou de profil, extensions, session déjà ouverte).
+    """
+    browser_path = _find_app_browser()
+    if not browser_path:
+        return False
+
+    args = [browser_path, f"--app={url}"]
+    if profile_dir is not None:
+        args.append(f"--user-data-dir={profile_dir}")
+
+    try:
+        subprocess.Popen(
+            args,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL,
+        )
+    except OSError:
+        logger.exception("Impossible d'ouvrir la fenêtre dédiée du navigateur.")
+        return False
+    return True
+
+
+def open_browser_window(url: str, profile_dir: Path | None = None) -> None:
+    """Ouvre ``url`` en fenêtre dédiée si possible, sinon en onglet classique."""
+    if not open_app_window(url, profile_dir):
+        webbrowser.open(url)
 
 
 def port_is_taken(host: str, port: int) -> bool:
@@ -46,11 +120,11 @@ def find_available_port(host: str, requested_port: int) -> int:
     raise OSError(f"Aucun port libre entre {requested_port} et 65535.")
 
 
-def open_browser_later(url: str, delay: float = 1.5) -> None:
+def open_browser_later(url: str, delay: float = 1.5, profile_dir: Path | None = None) -> None:
     def opener() -> None:
         time.sleep(delay)
         try:
-            webbrowser.open(url)
+            open_browser_window(url, profile_dir)
         except Exception:
             pass
 
