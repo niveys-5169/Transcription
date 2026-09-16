@@ -1,6 +1,16 @@
 # WhisperX orchestre Whisper, l'alignement mot à mot et pyannote sur le pod.
 # Les versions sont verrouillées : toute mise à jour CUDA/Torch se fait dans
 # une PR dédiée, validée par la construction de l'image RunPod.
+#
+# torch et torchaudio sont épinglés ensemble et à une version identique.
+# whisperx ne contraint que des bornes minimales (torch>=2, torchaudio>=2),
+# et torchaudio n'est plus publié comme paquet séparé au-delà de la 2.11.0
+# (Meta l'a arrêté) alors que torch continue de sortir des versions plus
+# récentes (2.14.0 par exemple) : sans épinglage, pip installe la dernière
+# version de torch mais reste bloqué sur torchaudio 2.11.0, une paire
+# incompatible qui casse l'import de pyannote.audio au build de l'image.
+torch==2.11.0
+torchaudio==2.11.0
 whisperx==3.3.1
 pyannote.audio==3.3.2
 # Backend de transfert accéléré de huggingface_hub (téléchargement des
