@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import urllib.request
 import zipfile
 from datetime import datetime
@@ -22,6 +23,7 @@ RELEASE_URL = f"https://api.github.com/repos/{REPOSITORY}/releases/tags/latest"
 ASSET_NAME = "Transcription-Windows.zip"
 DOWNLOAD_TIMEOUT_SECONDS = 20
 DOWNLOAD_CHUNK_SIZE = 1024 * 1024
+INSTALLER_START_TIMEOUT_SECONDS = 10
 
 logger = logging.getLogger(__name__)
 _state_lock = threading.Lock()
@@ -84,7 +86,12 @@ def _powershell_literal(value: Path | str) -> str:
     return "'" + str(value).replace("'", "''") + "'"
 
 
-def _write_update_script(work_dir: Path, source_dir: Path, install_dir: Path) -> Path:
+def _write_update_script(
+    work_dir: Path,
+    source_dir: Path,
+    install_dir: Path,
+    ready_file: Path | None = None,
+) -> Path:
     """Crée le panneau autonome qui applique et journalise la mise à jour.
 
     L'application FastAPI doit s'arrêter avant de pouvoir remplacer son propre
@@ -92,6 +99,7 @@ def _write_update_script(work_dir: Path, source_dir: Path, install_dir: Path) ->
     reste affichée pendant cet intervalle, y compris si la copie échoue.
     """
     script = work_dir / "apply-update.ps1"
+    ready_file = ready_file or work_dir / "installer-ready"
     log_dir = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local")) / "Transcription"
     script.write_text(
         "Add-Type -AssemblyName System.Windows.Forms\n"
@@ -100,6 +108,7 @@ def _write_update_script(work_dir: Path, source_dir: Path, install_dir: Path) ->
         f"$source = {_powershell_literal(source_dir)}\n"
         f"$target = {_powershell_literal(install_dir)}\n"
         f"$logDirectory = {_powershell_literal(log_dir)}\n"
+        f"$readyFile = {_powershell_literal(ready_file)}\n"
         "$logFile = Join-Path $logDirectory 'update.log'\n"
         "New-Item -ItemType Directory -Force -Path $logDirectory | Out-Null\n"
         "$form = New-Object System.Windows.Forms.Form\n"
@@ -131,6 +140,7 @@ def _write_update_script(work_dir: Path, source_dir: Path, install_dir: Path) ->
         "}\n"
         "$form.Show()\n"
         "& $writeLog 'Mise a jour lancee.'\n"
+        "Set-Content -LiteralPath $readyFile -Value 'ready' -NoNewline\n"
         "try {\n"
         "  & $writeLog 'Attente de la fermeture de Verbatim...'\n"
         "  while (Get-Process -Id $processIdToWait -ErrorAction SilentlyContinue) { Start-Sleep -Milliseconds 500; [System.Windows.Forms.Application]::DoEvents() }\n"
@@ -154,6 +164,26 @@ def _write_update_script(work_dir: Path, source_dir: Path, install_dir: Path) ->
         encoding="utf-8-sig",
     )
     return script
+
+
+def _wait_for_installer_ready(
+    process: subprocess.Popen, ready_file: Path, *, timeout: float = INSTALLER_START_TIMEOUT_SECONDS
+) -> None:
+    """Vérifie que PowerShell a réellement initialisé l'installateur.
+
+    ``Popen`` confirme seulement la création du processus. Sans cet accusé de
+    réception, l'application se ferme même si PowerShell échoue avant sa
+    première ligne utile, laissant un faux statut « Installateur démarré ».
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if ready_file.is_file():
+            return
+        exit_code = process.poll()
+        if exit_code is not None:
+            raise RuntimeError(f"L'installateur Windows s'est arrêté (code {exit_code}).")
+        time.sleep(0.1)
+    raise RuntimeError("L'installateur Windows n'a pas confirmé son démarrage.")
 
 
 def download_and_restart(download_url: str) -> None:
@@ -191,8 +221,9 @@ def download_and_restart(download_url: str) -> None:
     if not (source_dir / "Transcription.exe").is_file():
         raise ValueError("Le paquet de mise à jour est incomplet.")
 
-    script = _write_update_script(work_dir, source_dir, install_dir)
-    subprocess.Popen(
+    ready_file = work_dir / "installer-ready"
+    script = _write_update_script(work_dir, source_dir, install_dir, ready_file)
+    process = subprocess.Popen(
         ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script)],
         creationflags=(
             subprocess.CREATE_NEW_PROCESS_GROUP
@@ -200,6 +231,7 @@ def download_and_restart(download_url: str) -> None:
             | hidden_console_flags()
         ),
     )
+    _wait_for_installer_ready(process, ready_file)
     _set_state("restarting", "Installation démarrée, Verbatim redémarre.")
     _write_log("Installateur démarré.")
 
