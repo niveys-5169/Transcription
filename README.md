@@ -130,6 +130,10 @@ jour** affiche chaque étape et conserve les erreurs éventuelles dans
 `%LOCALAPPDATA%\Transcription\update.log`. Il faut donc toujours conserver le
 dossier `Transcription` entier, pas seulement le fichier `.exe`.
 
+Le téléchargement se fait en arrière-plan : le bouton indique sa progression
+et le journal est créé dès le premier essai réseau. Une connexion qui ne
+répond pas échoue après 20 secondes au lieu de laisser l’application bloquée.
+
 ## Réviser une transcription
 
 L'interface est organisée en trois panneaux : la **bibliothèque** à gauche,

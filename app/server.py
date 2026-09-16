@@ -9,7 +9,6 @@ import os
 import shutil
 import threading
 import uuid
-import zipfile
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -109,12 +108,13 @@ async def apply_update() -> dict:
     update = updates.check()
     if not update.get("available") or not update.get("download_url"):
         raise HTTPException(400, "Aucune mise à jour disponible.")
-    try:
-        updates.download_and_restart(update["download_url"])
-    except (OSError, ValueError, zipfile.BadZipFile) as exc:
-        raise HTTPException(500, f"Mise à jour impossible : {exc}") from exc
-    threading.Timer(1.0, lambda: os._exit(0)).start()
-    return {"restarting": True}
+    started = updates.start_download_and_restart(
+        update["download_url"],
+        lambda: threading.Timer(1.0, lambda: os._exit(0)).start(),
+    )
+    if not started:
+        raise HTTPException(409, "Une mise à jour est déjà en cours.")
+    return {"started": True, "installation": updates.status()}
 
 
 def _obsidian_status(settings) -> tuple[bool, str]:

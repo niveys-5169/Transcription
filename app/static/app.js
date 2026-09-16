@@ -167,7 +167,26 @@ async function checkForUpdate() {
     const update = await api("/api/update");
     $("update-btn").hidden = !update.available;
     if (update.available) $("update-btn").dataset.version = update.version || "";
+    renderUpdateProgress(update.installation);
   } catch (_) { /* Une mise à jour ne doit jamais bloquer l'application. */ }
+}
+
+function renderUpdateProgress(installation) {
+  if (!installation || installation.phase === "idle") return;
+  const button = $("update-btn");
+  if (installation.phase === "failed") {
+    button.disabled = false;
+    button.textContent = "Réessayer la mise à jour";
+    toast(`${installation.message} Consultez update.log.`, true);
+    return;
+  }
+  button.hidden = false;
+  button.disabled = true;
+  if (installation.phase === "downloading" && installation.total) {
+    button.textContent = `Téléchargement… ${Math.round(installation.downloaded / installation.total * 100)} %`;
+  } else {
+    button.textContent = installation.message || "Mise à jour en cours…";
+  }
 }
 
 function pill(ok, label, detail, optional = false) {
@@ -2295,7 +2314,13 @@ function initActions() {
     button.textContent = "Téléchargement…";
     try {
       await api("/api/update", { method: "POST" });
-      button.textContent = "Installation…";
+      const poll = window.setInterval(async () => {
+        try {
+          const update = await api("/api/update");
+          renderUpdateProgress(update.installation);
+          if (["failed", "restarting"].includes(update.installation?.phase)) window.clearInterval(poll);
+        } catch (_) { window.clearInterval(poll); }
+      }, 750);
     } catch (error) { button.disabled = false; button.textContent = "Mise à jour disponible"; toast(error.message, true); }
   });
   $("settings-save").addEventListener("click", saveSettings);

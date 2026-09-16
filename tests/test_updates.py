@@ -21,3 +21,23 @@ def test_update_script_shows_progress_and_preserves_logs(tmp_path, monkeypatch):
     assert "update.log" in content
     assert "ERREUR:" in content
     assert "Start-Process -FilePath" in content
+
+
+def test_download_writes_a_log_before_opening_the_network(tmp_path, monkeypatch):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local-app-data"))
+    monkeypatch.setattr(updates, "is_packaged", lambda: True)
+    monkeypatch.setattr(updates.sys, "executable", str(tmp_path / "Transcription" / "Transcription.exe"))
+    (tmp_path / "Transcription").mkdir()
+    (tmp_path / "Transcription" / "Transcription.exe").touch()
+
+    def network_failure(*_args, **_kwargs):
+        raise OSError("réseau indisponible")
+
+    monkeypatch.setattr(updates.urllib.request, "urlopen", network_failure)
+    try:
+        updates.download_and_restart("https://github.com/niveys-5169/Transcription/releases/download/latest/Transcription-Windows.zip")
+    except OSError:
+        pass
+
+    log = tmp_path / "local-app-data" / "Transcription" / "update.log"
+    assert "Téléchargement démarré" in log.read_text(encoding="utf-8")

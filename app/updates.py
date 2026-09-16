@@ -2,13 +2,17 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import subprocess
 import sys
 import tempfile
+import threading
 import urllib.request
 import zipfile
+from datetime import datetime
 from pathlib import Path
+from typing import Callable
 
 from .build_info import BUILD_ID
 from .process import hidden_console_flags
@@ -16,6 +20,37 @@ from .process import hidden_console_flags
 REPOSITORY = "niveys-5169/Transcription"
 RELEASE_URL = f"https://api.github.com/repos/{REPOSITORY}/releases/tags/latest"
 ASSET_NAME = "Transcription-Windows.zip"
+DOWNLOAD_TIMEOUT_SECONDS = 20
+DOWNLOAD_CHUNK_SIZE = 1024 * 1024
+
+logger = logging.getLogger(__name__)
+_state_lock = threading.Lock()
+_state: dict = {"phase": "idle", "message": ""}
+
+
+def _log_path() -> Path:
+    root = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local")) / "Transcription"
+    root.mkdir(parents=True, exist_ok=True)
+    return root / "update.log"
+
+
+def _set_state(phase: str, message: str, **extra: object) -> None:
+    with _state_lock:
+        _state.clear()
+        _state.update({"phase": phase, "message": message, **extra})
+
+
+def status() -> dict:
+    """État courant, séparé de la vérification distante de la release."""
+    with _state_lock:
+        return dict(_state)
+
+
+def _write_log(message: str) -> None:
+    line = f"{datetime.now():%H:%M:%S}  {message}"
+    with _log_path().open("a", encoding="utf-8") as stream:
+        stream.write(f"{line}\n")
+    logger.info("Mise à jour : %s", message)
 
 
 def is_packaged() -> bool:
@@ -33,9 +68,15 @@ def check() -> dict:
         asset = next((item for item in release.get("assets", []) if item.get("name") == ASSET_NAME), None)
         target = str(release.get("target_commitish") or "")
         available = bool(asset and target and not target.startswith(BUILD_ID))
-        return {"supported": True, "available": available, "version": target[:7], "download_url": asset.get("browser_download_url") if asset else None}
+        return {
+            "supported": True,
+            "available": available,
+            "version": target[:7],
+            "download_url": asset.get("browser_download_url") if asset else None,
+            "installation": status(),
+        }
     except Exception:
-        return {"supported": True, "available": False}
+        return {"supported": True, "available": False, "installation": status()}
 
 
 def _powershell_literal(value: Path | str) -> str:
@@ -125,7 +166,25 @@ def download_and_restart(download_url: str) -> None:
 
     work_dir = Path(tempfile.mkdtemp(prefix="transcription-update-"))
     archive = work_dir / ASSET_NAME
-    urllib.request.urlretrieve(download_url, archive)  # nosec B310: URL validée ci-dessus
+    _set_state("downloading", "Téléchargement de la mise à jour…", downloaded=0, total=None)
+    _write_log("Téléchargement démarré.")
+    request = urllib.request.Request(download_url, headers={"User-Agent": "Verbatim updater"})
+    with urllib.request.urlopen(request, timeout=DOWNLOAD_TIMEOUT_SECONDS) as response:  # nosec B310: URL validée ci-dessus
+        total_header = response.headers.get("Content-Length")
+        total = int(total_header) if total_header and total_header.isdigit() else None
+        downloaded = 0
+        with archive.open("wb") as output:
+            while chunk := response.read(DOWNLOAD_CHUNK_SIZE):
+                output.write(chunk)
+                downloaded += len(chunk)
+                _set_state("downloading", "Téléchargement de la mise à jour…", downloaded=downloaded, total=total)
+                if downloaded == len(chunk) or downloaded % (10 * DOWNLOAD_CHUNK_SIZE) < len(chunk):
+                    detail = f"{downloaded // (1024 * 1024)} Mo"
+                    if total:
+                        detail += f" / {total // (1024 * 1024)} Mo"
+                    _write_log(f"Téléchargement : {detail}.")
+    _write_log("Téléchargement terminé, vérification du paquet.")
+    _set_state("preparing", "Préparation de l’installation…")
     with zipfile.ZipFile(archive) as bundle:
         bundle.extractall(work_dir / "new")
     source_dir = work_dir / "new"
@@ -141,3 +200,27 @@ def download_and_restart(download_url: str) -> None:
             | hidden_console_flags()
         ),
     )
+    _set_state("restarting", "Installation démarrée, Verbatim redémarre.")
+    _write_log("Installateur démarré.")
+
+
+def start_download_and_restart(download_url: str, on_ready: Callable[[], None]) -> bool:
+    """Lance la mise à jour hors du thread web afin de garder l'UI réactive."""
+    with _state_lock:
+        if _state.get("phase") in {"downloading", "preparing"}:
+            return False
+        _state.clear()
+        _state.update({"phase": "downloading", "message": "Préparation du téléchargement…", "downloaded": 0, "total": None})
+
+    def worker() -> None:
+        try:
+            download_and_restart(download_url)
+        except Exception as exc:  # l'erreur doit rester visible même sans console PyInstaller
+            logger.exception("Échec de la mise à jour")
+            _set_state("failed", f"Mise à jour impossible : {exc}")
+            _write_log(f"ERREUR: {exc}")
+            return
+        on_ready()
+
+    threading.Thread(target=worker, name="verbatim-update", daemon=True).start()
+    return True
