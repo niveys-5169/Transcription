@@ -206,6 +206,9 @@ class Settings:
     # Identifiant du Doc maître, rempli une fois par --init puis réutilisé :
     # chaque sync fait un files().update() dessus, jamais un nouveau fichier.
     notebooklm_master_doc_id: str = ""
+    # La compilation globale reste disponible pour les usages existants, mais
+    # chaque cours possède désormais son propre Doc Google.
+    notebooklm_master_doc_enabled: bool = True
     # Identifiants OAuth « application de bureau » (Google Cloud Console) et
     # jeton obtenu après le premier consentement — chemins relatifs à la
     # racine du projet, ou absolus. Le jeton est réutilisé et rafraîchi tout

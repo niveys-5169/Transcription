@@ -212,7 +212,7 @@ def _export_course_markdown(job_id: str) -> Path | None:
         return None
 
 
-def _sync_notebooklm() -> tuple[bool, str]:
+def _sync_notebooklm(job_id: str | None = None) -> tuple[bool, str]:
     """Pousse la compilation de data/cours/ vers le Doc maître Drive.
 
     Étape non bloquante, comme la publication Obsidian : ``sync_master_doc``
@@ -223,7 +223,19 @@ def _sync_notebooklm() -> tuple[bool, str]:
     try:
         from . import notebooklm_sync
 
-        return notebooklm_sync.sync_master_doc_with_detail(config.COURSES_DIR)
+        settings = config.load_settings()
+        job = db.get_job(job_id) if job_id else None
+        if job is not None:
+            course_ok, course_detail, course_doc_id = notebooklm_sync.sync_course_doc(
+                job, settings=settings
+            )
+            if not course_ok:
+                return False, course_detail
+            if course_doc_id:
+                db.update_job(job_id, notebooklm_doc_id=course_doc_id)
+            if not settings.notebooklm_master_doc_enabled:
+                return True, course_detail
+        return notebooklm_sync.sync_master_doc_with_detail(config.COURSES_DIR, settings=settings)
     except Exception:  # pragma: no cover - garde-fou ultime
         logger.exception("Synchronisation NotebookLM en échec de façon inattendue.")
         return False, "Erreur inattendue pendant la synchronisation NotebookLM."
@@ -783,7 +795,7 @@ def run_publish(job_id: str) -> None:
     # synchronisation trompeur.
     if final_status == "published":
         sync_requested = config.load_settings().notebooklm_sync_enabled
-        synced, detail = _sync_notebooklm()
+        synced, detail = _sync_notebooklm(job_id)
         if sync_requested:
             _record_notebooklm_result(job_id, synced, detail)
 
@@ -803,7 +815,7 @@ def run_notebooklm_sync(job_id: str) -> None:
     progress = _Progress(job_id)
     progress(0.2, "Synchronisation du Doc maître NotebookLM…")
     _export_course_markdown(job_id)
-    success, detail = _sync_notebooklm()
+    success, detail = _sync_notebooklm(job_id)
     if success:
         db.update_job(
             job_id, task=None, stage="Publié — synchronisé NotebookLM", progress=1.0,

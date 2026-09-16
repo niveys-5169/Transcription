@@ -102,6 +102,7 @@ MIGRATIONS = {
     "notebooklm_status": "TEXT DEFAULT 'non_configure'",
     "notebooklm_synced_at": "TEXT",
     "notebooklm_error": "TEXT",
+    "notebooklm_doc_id": "TEXT",
 }
 
 ANNOTATION_MIGRATIONS = {
@@ -147,7 +148,7 @@ LIST_COLUMNS = (
     "id, filename, media_path, wav_path, size_bytes, duration, engine, model, "
     "language, proofread, structure, verify, chain, factcheck, publish, manual_review_status, task, "
     "status, stage, progress, title, summary, error, obsidian_path, obsidian_published_at, "
-    "notebooklm_status, notebooklm_synced_at, notebooklm_error, "
+    "notebooklm_status, notebooklm_synced_at, notebooklm_error, notebooklm_doc_id, "
     "created_at, updated_at, finished_at"
 )
 

@@ -57,6 +57,10 @@ def test_hugging_face_token_is_masked_in_public_settings():
     assert public["hf_token_set"] is True
 
 
+def test_doc_maitre_notebooklm_reste_active_par_defaut():
+    assert config.load_settings().notebooklm_master_doc_enabled is True
+
+
 def test_domain_label_updates_only_default_obsidian_paths():
     settings = config.save_settings({"domain_label": "Droit social"})
     assert settings.obsidian_entities_folder == "Formation/Droit social/Entités"

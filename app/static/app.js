@@ -560,6 +560,13 @@ function renderDetail() {
   }
 
   const notebookButton = $("notebooklm-btn");
+  const courseDocLink = $("notebooklm-course-link");
+  if (job.notebooklm_doc_id) {
+    courseDocLink.href = `https://docs.google.com/document/d/${encodeURIComponent(job.notebooklm_doc_id)}/edit`;
+    courseDocLink.hidden = false;
+  } else {
+    courseDocLink.hidden = true;
+  }
   const notebookReady = Boolean(
     state.settings.notebooklm_sync_enabled && state.settings.notebooklm_master_doc_id
   );
@@ -1890,6 +1897,7 @@ function openSettings() {
   $("runpod_pod_network_volume_id").value = settings.runpod_pod_network_volume_id || "";
   $("keep_media").checked = Boolean(settings.keep_media);
   $("notebooklm_sync_enabled").checked = Boolean(settings.notebooklm_sync_enabled);
+  $("notebooklm_master_doc_enabled").checked = settings.notebooklm_master_doc_enabled !== false;
   $("notebooklm_drive_folder_id").value = settings.notebooklm_drive_folder_id || "";
   $("notebooklm_master_doc_id").value = settings.notebooklm_master_doc_id || "";
   $("notebooklm-settings-state").textContent = settings.notebooklm_master_doc_id
@@ -1979,6 +1987,7 @@ async function saveSettings() {
     obsidian_filename_template: $("obsidian_filename_template").value.trim(),
     obsidian_create_entities: $("obsidian_create_entities").checked,
     notebooklm_sync_enabled: $("notebooklm_sync_enabled").checked,
+    notebooklm_master_doc_enabled: $("notebooklm_master_doc_enabled").checked,
     notebooklm_drive_folder_id: $("notebooklm_drive_folder_id").value.trim(),
   };
   const anthropic = $("anthropic_api_key").value.trim();

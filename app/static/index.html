@@ -339,6 +339,7 @@
           <button type="button" class="btn btn-ghost" id="notebooklm-btn" disabled>
             Synchroniser NotebookLM
           </button>
+          <a class="btn btn-ghost" id="notebooklm-course-link" href="#" target="_blank" hidden>Ouvrir le Doc du cours</a>
           <p id="publication-status" class="publication-status" aria-live="polite"></p>
           <div class="menu">
             <button type="button" class="btn btn-ghost" id="secondary-actions-btn" aria-haspopup="true">Autres actions ▾</button>
@@ -584,6 +585,7 @@
       <p class="notebooklm-settings-state" id="notebooklm-settings-state"></p>
       <div class="settings-inline-actions"><button type="button" class="btn btn-primary" id="notebooklm-initialize">Initialiser avec Google</button><button type="button" class="btn btn-ghost" id="notebooklm-test">Tester la synchronisation</button></div>
       <label class="check"><input type="checkbox" id="notebooklm_sync_enabled"><span>Synchroniser automatiquement après chaque publication Obsidian</span></label>
+      <label class="check"><input type="checkbox" id="notebooklm_master_doc_enabled"><span>Conserver aussi le Doc maître compilé</span></label>
       <label class="field"><span>Dossier Google Drive <small>(facultatif, vide = Mon Drive)</small></span><input type="text" id="notebooklm_drive_folder_id" placeholder="Identifiant du dossier Drive"></label>
       <label class="field"><span>Doc maître Google <small>(créé automatiquement à l'initialisation)</small></span><input type="text" id="notebooklm_master_doc_id" readonly></label>
     </details>

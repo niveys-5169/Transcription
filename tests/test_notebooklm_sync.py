@@ -14,7 +14,7 @@ import logging
 import pytest
 
 from app import config
-from app.notebooklm_sync import build_master_markdown, sync_master_doc, sync_master_doc_with_detail
+from app.notebooklm_sync import build_master_markdown, sync_master_doc, sync_master_doc_with_detail, _course_doc_name
 
 
 @pytest.fixture(autouse=True)
@@ -108,6 +108,10 @@ def test_fichier_sans_titre_utilise_le_nom_de_fichier(tmp_path):
 
 
 # ------------------------------------------------------------- sync_master_doc
+
+
+def test_nom_du_doc_de_cours_contient_date_et_titre():
+    assert _course_doc_name({"created_at": "2026-09-16T10:00:00Z", "title": "Droit civil"}) == "2026-09-16 — Droit civil"
 
 
 def test_sync_desactive_ne_fait_rien(tmp_path, caplog):
