@@ -140,11 +140,15 @@ def _yaml_list(values: list[str]) -> str:
 
 def _frontmatter(job: dict, *, entities: list[dict], findings: list[dict], status: str, settings) -> str:
     grouped: dict[str, list[str]] = {"personnes": [], "organismes": [], "references": []}
+    entity_aliases: list[str] = []
     for entity in entities:
         field = _CATEGORY_TO_FIELD.get(entity.get("categorie"))
         wikilink = entity.get("wikilink") or entity.get("nom")
         if field and wikilink and wikilink not in grouped[field]:
             grouped[field].append(wikilink)
+        original = str(entity.get("nom") or "").strip()
+        if original and wikilink and original != wikilink:
+            entity_aliases.append(f"{original} → {wikilink}")
 
     tags = [t.strip() for t in (settings.obsidian_tags or "").split(",") if t.strip()]
     if status != "verifie" and "à-vérifier" not in tags:
@@ -170,6 +174,7 @@ def _frontmatter(job: dict, *, entities: list[dict], findings: list[dict], statu
         f"personnes: {_yaml_list([f'[[{p}]]' for p in grouped['personnes']])}",
         f"organismes: {_yaml_list([f'[[{o}]]' for o in grouped['organismes']])}",
         f"references: {_yaml_list([f'[[{r}]]' for r in grouped['references']])}",
+        f"aliases_entites: {_yaml_list(entity_aliases)}",
         f"tags: {_yaml_list(tags)}",
         f"job_id: {job.get('id') or ''}",
         "---",

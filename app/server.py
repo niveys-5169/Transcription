@@ -17,6 +17,7 @@ from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingRes
 from fastapi.staticfiles import StaticFiles
 
 from . import __version__, config, db, exporters, lexicon, media, obsidian, pipeline, updates
+from .obsidian import index as vault_index
 from .engines import availability as engine_availability
 from .proofread import factcheck as factcheck_module
 from .proofread.claude import ClaudeProofreader
@@ -211,6 +212,32 @@ async def post_lexicon(payload: dict = Body(...)) -> dict:
     )
     lexicon.save_user_term(term)
     return {"terms": [t.to_dict() for t in lexicon.load_lexicon()]}
+
+
+# -------------------------------------------------------------- index coffre
+
+
+@app.get("/api/vault/index")
+async def get_vault_index(q: str = "") -> dict:
+    settings = config.load_settings()
+    if not settings.obsidian_vault_path:
+        raise HTTPException(409, "Aucun coffre Obsidian configuré dans les réglages.")
+    try:
+        return {"notes": await asyncio.to_thread(vault_index.search, settings, q)}
+    except obsidian.ObsidianError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@app.post("/api/vault/reindex")
+async def reindex_vault() -> dict:
+    settings = config.load_settings()
+    if not settings.obsidian_vault_path:
+        raise HTTPException(409, "Aucun coffre Obsidian configuré dans les réglages.")
+    try:
+        notes = await asyncio.to_thread(vault_index.build, settings, force=True)
+    except obsidian.ObsidianError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return {"notes": notes, "count": len(notes)}
 
 
 # -------------------------------------------------------- navigation de dossiers
