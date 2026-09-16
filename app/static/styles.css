@@ -865,10 +865,15 @@ dialog h2 { font-size: 17px; margin-bottom: 16px; }
 .passage-block mark { background: rgba(224, 163, 60, .3); color: var(--warn); border-radius: 3px; padding: 0 2px; }
 .passage-block .empty { color: var(--text-soft); font-style: italic; }
 
-fieldset { border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; margin: 0 0 16px; }
-legend { font-weight: 600; font-size: 13px; padding: 0 6px; }
+.settings-section { border: 1px solid var(--border); border-radius: 10px; margin: 0 0 10px; background: var(--surface-2); }
+.settings-section summary { cursor: pointer; list-style: none; padding: 13px 16px; font-weight: 600; font-size: 13px; display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.settings-section summary::-webkit-details-marker { display: none; }
+.settings-section summary::after { content: "⌄"; color: var(--text-soft); font-size: 18px; line-height: 1; }
+.settings-section[open] summary { border-bottom: 1px solid var(--border); }.settings-section[open] summary::after { transform: rotate(180deg); }
+.settings-section summary small { color: var(--text-soft); font-weight: 400; text-align: right; }.settings-section > :not(summary) { margin-left: 16px; margin-right: 16px; }.settings-section > .hint:first-of-type { margin-top: 14px; }.settings-section > .check:last-child, .settings-section > .field:last-child { margin-bottom: 14px; }
+.settings-inline-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }.notebooklm-settings-state { color: var(--text-soft); font-size: 12.5px; line-height: 1.45; }
 .hint { color: var(--text-soft); font-size: 12.5px; margin: 0 0 12px; }
-fieldset .field { margin-bottom: 12px; }
+.settings-section .field { margin-bottom: 12px; }
 
 .path-picker { display: flex; gap: 8px; }
 .path-picker input { flex: 1; }

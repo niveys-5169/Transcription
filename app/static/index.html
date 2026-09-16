@@ -354,8 +354,8 @@
   <form method="dialog" id="settings-form">
     <h2>Réglages</h2>
 
-    <fieldset>
-      <legend>Accès à Claude</legend>
+    <details class="settings-section" open>
+      <summary>Accès à Claude <small>relecture, sommaire et recherche web</small></summary>
       <p class="hint">
         Sert à la relecture, au sommaire et à la vérification par recherche
         web. Deux façons d'y accéder : le CLI <code>claude</code>, sur votre
@@ -394,19 +394,17 @@
           <option value="max">Maximal — le plus lent, le plus soigné</option>
         </select>
       </label>
-    </fieldset>
+    </details>
 
-    <fieldset>
-      <legend>Repli NVIDIA NIM</legend>
+    <details class="settings-section"><summary>Repli NVIDIA NIM <small>secours si Claude est indisponible</small></summary>
       <p class="hint">Si Claude est indisponible ou échoue, l'application peut relire avec NVIDIA NIM. La clé reste sur cette machine et n'est jamais renvoyée à l'interface. NIM ne remplace pas la recherche web de Claude.</p>
       <label class="check"><input type="checkbox" id="nim_fallback_enabled"><span>Utiliser NVIDIA NIM comme repli pour la relecture</span></label>
       <label class="field"><span>Clé API NVIDIA NIM</span><input type="password" id="nim_api_key" placeholder="nvapi-…" autocomplete="off"><small id="nim-state"></small></label>
       <label class="field"><span>Modèle NIM</span><input type="text" id="nim_model" placeholder="nvidia/llama-3.3-nemotron-super-49b-v1"></label>
       <label class="field"><span>URL API NIM</span><input type="url" id="nim_base_url" placeholder="https://integrate.api.nvidia.com/v1/chat/completions"></label>
-    </fieldset>
+    </details>
 
-    <fieldset>
-      <legend>Vérification externe (recherche web)</legend>
+    <details class="settings-section"><summary>Vérification externe <small>recherche web après relecture</small></summary>
       <p class="hint">
         Après la relecture, une recherche web ciblée vérifie les noms
         propres, titres de rapport, statistiques et références juridiques
@@ -422,10 +420,9 @@
         <span>Recherches web autorisées par affirmation</span>
         <input type="number" id="factcheck_max_searches" min="1" max="30" step="1">
       </label>
-    </fieldset>
+    </details>
 
-    <fieldset>
-      <legend>Lexique MJPM</legend>
+    <details class="settings-section"><summary>Lexique MJPM <small>termes et références métier</small></summary>
       <p class="hint">
         Sigles, acteurs, actes et références juridiques du domaine (MJPM,
         DIPM, CRG, curatelle renforcée…). Sert à amorcer la reconnaissance
@@ -440,10 +437,9 @@
         <input type="checkbox" id="lexicon_whisper_prompt">
         <span>Amorcer la transcription avec le lexique</span>
       </label>
-    </fieldset>
+    </details>
 
-    <fieldset>
-      <legend>Coffre Obsidian</legend>
+    <details class="settings-section"><summary>Coffre Obsidian <small>publication et organisation des fiches</small></summary>
       <p class="hint">
         Chemin d'un coffre existant sur cette machine. La fiche y est écrite
         directement ; les fiches d'entités et le glossaire suivent la même
@@ -519,10 +515,9 @@
         <input type="checkbox" id="obsidian_create_entities">
         <span>Créer une fiche pour chaque entité confirmée</span>
       </label>
-    </fieldset>
+    </details>
 
-    <fieldset>
-      <legend>RunPod (GPU dans le cloud, optionnel)</legend>
+    <details class="settings-section"><summary>RunPod <small>GPU cloud optionnel</small></summary>
       <p class="hint">
         Utile pour les cours longs en large-v3 quand le processeur devient trop
         lent. Le fichier est découpé sur des silences avant l'envoi.
@@ -542,10 +537,9 @@
         <small>180 s ≈ 7,3 Mo encodés, avec une vraie marge sous le plafond de
         l'API RunPod (~10 Mo). Au-delà de 220 s, le risque d'échec augmente.</small>
       </label>
-    </fieldset>
+    </details>
 
-    <fieldset>
-      <legend>Pod RunPod (avancé, optionnel)</legend>
+    <details class="settings-section"><summary>Pod RunPod avancé <small>machine GPU de secours</small></summary>
       <p class="hint">
         Un pod est une machine GPU louée à la minute (pas à la requête comme
         le serverless), créée puis détruite pour chaque transcription qui en
@@ -585,15 +579,24 @@
           chances de trouver un GPU libre.
         </small>
       </label>
-    </fieldset>
+    </details>
 
-    <fieldset>
-      <legend>Par défaut</legend>
+    <details class="settings-section" id="notebooklm-settings">
+      <summary>NotebookLM <small>Doc maître Google synchronisé automatiquement</small></summary>
+      <p class="hint">Initialisez une seule fois : Google ouvre une page de consentement, puis le jeton est renouvelé automatiquement et chaque publication met à jour le même Doc maître.</p>
+      <p class="notebooklm-settings-state" id="notebooklm-settings-state"></p>
+      <div class="settings-inline-actions"><button type="button" class="btn btn-primary" id="notebooklm-initialize">Initialiser avec Google</button><button type="button" class="btn btn-ghost" id="notebooklm-test">Tester la synchronisation</button></div>
+      <label class="check"><input type="checkbox" id="notebooklm_sync_enabled"><span>Synchroniser automatiquement après chaque publication Obsidian</span></label>
+      <label class="field"><span>Dossier Google Drive <small>(facultatif, vide = Mon Drive)</small></span><input type="text" id="notebooklm_drive_folder_id" placeholder="Identifiant du dossier Drive"></label>
+      <label class="field"><span>Doc maître Google <small>(créé automatiquement à l'initialisation)</small></span><input type="text" id="notebooklm_master_doc_id" readonly></label>
+    </details>
+
+    <details class="settings-section"><summary>Par défaut <small>préférences de conservation</small></summary>
       <label class="check">
         <input type="checkbox" id="keep_media">
         <span>Conserver le fichier d'origine après transcription</span>
       </label>
-    </fieldset>
+    </details>
 
     <div class="dialog-actions">
       <button type="button" class="btn btn-ghost" id="settings-cancel">Fermer</button>
