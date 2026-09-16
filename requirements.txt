@@ -7,10 +7,13 @@
 # cette API n'est plus présente dans torchaudio 2.11. Le Dockerfile installe
 # explicitement les roues CUDA 12.1 correspondantes depuis PyTorch avant ce
 # fichier ; les versions ci-dessous empêchent pip de les remplacer ensuite.
-torch==2.3.1
-torchaudio==2.3.1
+torch==2.5.1
+torchaudio==2.5.1
 whisperx==3.3.1
 pyannote.audio==3.3.2
+# pyannote 3.3.2 importe matplotlib à l'initialisation mais ne le déclare
+# pas dans ses dépendances publiées.
+matplotlib>=3.7,<4
 # Backend de transfert accéléré de huggingface_hub (téléchargement des
 # modèles Whisper) : sans lui, HF_XET_HIGH_PERFORMANCE (voir handler.py /
 # pod_server.py) n'a aucun effet et on retombe sur un simple GET HTTP.

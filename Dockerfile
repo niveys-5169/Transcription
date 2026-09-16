@@ -10,10 +10,11 @@ COPY requirements.txt /requirements.txt
 # pod a échoué en production avec une dépendance de transcription absente.
 # Les roues PyPI récentes de Torch embarquent une pile CUDA différente de
 # l'image CUDA 12.1. Installer d'abord le couple officiel CUDA 12.1 garantit
-# la présence de torchaudio.AudioMetaData, attendu par pyannote.audio 3.3.2.
+# la présence de torchaudio.AudioMetaData, attendu par pyannote.audio 3.3.2,
+# tout en restant compatible avec les versions récentes de Transformers.
 RUN python3 -m pip install --no-cache-dir \
       --index-url https://download.pytorch.org/whl/cu121 \
-      torch==2.3.1+cu121 torchaudio==2.3.1+cu121 \
+      torch==2.5.1+cu121 torchaudio==2.5.1+cu121 \
     && python3 -m pip install --no-cache-dir -r /requirements.txt \
     && python3 -c "import whisperx; import pyannote.audio"
 
