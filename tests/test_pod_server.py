@@ -209,5 +209,16 @@ def test_transcribe_via_http_rend_le_meme_contrat(serveur):
     assert corps["text"] == "Bonjour à tous. On commence le cours."
 
 
+def test_transcribe_via_multipart_accepte_un_fichier_entier(serveur):
+    reponse = httpx.post(
+        f"{serveur}/transcribe",
+        data={"model": "large-v3", "language": "auto", "diarize": "true"},
+        files={"audio": ("cours.wav", b"RIFF____WAVE", "audio/wav")},
+        timeout=5.0,
+    )
+    assert reponse.status_code == 200
+    assert reponse.json()["text"] == "Bonjour à tous. On commence le cours."
+
+
 def test_route_inconnue_rend_404(serveur):
     assert httpx.get(f"{serveur}/autre-chose", timeout=5.0).status_code == 404

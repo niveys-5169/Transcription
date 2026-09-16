@@ -85,6 +85,19 @@ def test_blocs_de_revision_sont_crees_a_la_demande_et_editables(client, tmp_path
     assert job["review_blocks"][0]["text"] == "Bonjour tout le monde."
 
 
+def test_correction_conserve_les_temps_des_mots_inchanges(tmp_path):
+    job_id = db.create_job(filename="cours.wav", media_path="", size_bytes=0, engine="local", model="tiny", language="fr", proofread="none", structure=False)
+    db.update_job(job_id, segments=[{"start": 0, "end": 3, "text": "Bonjour monde", "words": [
+        {"start": 0, "end": 1, "text": "Bonjour", "confidence": 0.9},
+        {"start": 1, "end": 3, "text": "monde", "confidence": 0.8},
+    ]}])
+    db.update_review_block(job_id, "segment-1", text="Bonjour nouveau monde")
+    words = db.ensure_review_blocks(job_id)[0]["words"]
+    assert words[0]["start"] == 0 and words[0]["end"] == 1
+    assert words[2]["start"] == 1 and words[2]["end"] == 3
+    assert words[1]["text"] == "nouveau"
+
+
 def test_annotations_sont_persistantes_et_validees(client, tmp_path):
     job_id = _job(tmp_path)
     annotation = client.post(
@@ -239,6 +252,15 @@ def test_review_blocks_propagent_la_confiance_quand_disponible():
         [{"start": 0.0, "end": 1.0, "text": "x", "confidence": 0.42}]
     )
     assert blocks[0]["confidence"] == 0.42
+
+
+def test_review_blocks_propagent_mots_et_locuteur():
+    blocks = db.review_blocks_from_segments([{
+        "start": 0.0, "end": 1.0, "text": "Bonjour", "speaker": "SPEAKER_00",
+        "words": [{"start": 0.0, "end": 1.0, "text": "Bonjour", "confidence": 0.9}],
+    }])
+    assert blocks[0]["speaker"] == "SPEAKER_00"
+    assert blocks[0]["words"][0]["text"] == "Bonjour"
 
 
 def test_review_blocks_tolerent_un_segment_sans_confiance():

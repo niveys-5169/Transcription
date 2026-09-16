@@ -50,6 +50,13 @@ def test_nim_key_is_masked_in_public_settings():
     assert public["nim_fallback_enabled"] is True
 
 
+def test_hugging_face_token_is_masked_in_public_settings():
+    settings = config.save_settings({"hf_token": "hf-secret"})
+    public = settings.public_dict()
+    assert public["hf_token"] == ""
+    assert public["hf_token_set"] is True
+
+
 def test_domain_label_updates_only_default_obsidian_paths():
     settings = config.save_settings({"domain_label": "Droit social"})
     assert settings.obsidian_entities_folder == "Formation/Droit social/Entités"

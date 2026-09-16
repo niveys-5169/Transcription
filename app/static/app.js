@@ -1846,6 +1846,7 @@ function openSettings() {
   $("anthropic_api_key").value = "";
   $("nim_api_key").value = "";
   $("runpod_api_key").value = "";
+  $("hf_token").value = "";
   $("anthropic-state").textContent = settings.anthropic_api_key_set
     ? "Une clé est enregistrée. Laissez vide pour la conserver."
     : "Aucune clé enregistrée.";
@@ -1855,6 +1856,10 @@ function openSettings() {
   $("runpod-state").textContent = settings.runpod_api_key_set
     ? "Une clé est enregistrée. Laissez vide pour la conserver."
     : "Aucune clé enregistrée.";
+  $("hf-token-state").textContent = settings.hf_token_set
+    ? "Jeton Hugging Face enregistré. Laissez vide pour le conserver."
+    : "Requis pour la diarisation pyannote sur le pod.";
+  $("diarization_enabled").checked = Boolean(settings.diarization_enabled);
   $("claude-state").textContent = settings.claude_backend === "cli"
     ? "Lancez « claude setup-token » une fois, sur cette machine, pour connecter l'abonnement."
     : "Facturé à l'usage sur le compte associé à la clé, indépendamment d'un abonnement Claude.";
@@ -1901,6 +1906,7 @@ async function saveSettings() {
     runpod_pod_image: $("runpod_pod_image").value.trim(),
     runpod_pod_gpu_type_id: $("runpod_pod_gpu_type_id").value.trim() || "NVIDIA L4",
     runpod_pod_network_volume_id: $("runpod_pod_network_volume_id").value.trim(),
+    diarization_enabled: $("diarization_enabled").checked,
     keep_media: $("keep_media").checked,
     default_engine: $("engine").value,
     default_model: $("model").value,
@@ -1929,6 +1935,8 @@ async function saveSettings() {
   if (nim) payload.nim_api_key = nim;
   const runpod = $("runpod_api_key").value.trim();
   if (runpod) payload.runpod_api_key = runpod;
+  const hfToken = $("hf_token").value.trim();
+  if (hfToken) payload.hf_token = hfToken;
 
   try {
     await api("/api/settings", {

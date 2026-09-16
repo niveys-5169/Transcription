@@ -1,4 +1,8 @@
-faster-whisper==1.2.1
+# WhisperX orchestre Whisper, l'alignement mot à mot et pyannote sur le pod.
+# Les versions sont verrouillées : toute mise à jour CUDA/Torch se fait dans
+# une PR dédiée, validée par la construction de l'image RunPod.
+whisperx==3.3.1
+pyannote.audio==3.3.2
 # Backend de transfert accéléré de huggingface_hub (téléchargement des
 # modèles Whisper) : sans lui, HF_XET_HIGH_PERFORMANCE (voir handler.py /
 # pod_server.py) n'a aucun effet et on retombe sur un simple GET HTTP.

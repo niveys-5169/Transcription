@@ -62,7 +62,7 @@ PROOFREAD_MODES = ["claude", "nim", "basic", "none"]
 CLAUDE_BACKENDS = ["cli", "api"]
 
 # Champs considérés comme secrets : jamais renvoyés en clair par l'API.
-SECRET_FIELDS = {"runpod_api_key", "anthropic_api_key", "nim_api_key"}
+SECRET_FIELDS = {"runpod_api_key", "anthropic_api_key", "nim_api_key", "hf_token"}
 
 
 def obsidian_domain_defaults(domain_label: str) -> dict[str, str]:
@@ -85,10 +85,13 @@ class Settings:
     # --- Moteur de transcription ---
     default_engine: str = "local"
     default_model: str = "large-v3"
-    language: str = "fr"
+    language: str = "fr"  # "auto" laisse Whisper détecter la langue.
 
     # --- RunPod (GPU cloud, optionnel) ---
     runpod_api_key: str = ""
+    # Jeton lecture seule requis par pyannote, jamais renvoyé au navigateur.
+    hf_token: str = ""
+    diarization_enabled: bool = True
     # Taille des tronçons envoyés à RunPod. L'API /run plafonne la charge utile
     # à ~10 Mo ; un WAV 16 kHz mono 16 bits encodé en base64 pèse ~42 ko/s, donc
     # un cours d'une heure ne peut pas partir en un seul appel.
