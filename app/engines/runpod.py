@@ -4,9 +4,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Iterator
 
-from .. import media
 from ..config import WHISPER_MODELS, load_settings
-from .base import CancelCheck, ProgressCallback, Segment, TranscriptionError
+from .base import CancelCheck, ProgressCallback, Segment, TranscriptionError, Word
 from .runpod_pod import pod_pool
 
 
@@ -32,36 +31,33 @@ class RunPodEngine:
         settings = load_settings()
         if model not in WHISPER_MODELS:
             model = "large-v3"
-        chunk_dir = workdir / "runpod-chunks"
-        chunks = media.split_wav(wav_path, float(settings.runpod_chunk_seconds), chunk_dir)
-        total = duration or sum(chunk.duration for chunk in chunks)
         session = None
         try:
             if on_progress:
                 on_progress(0.0, "Préparation du pod GPU…")
             session = pod_pool.acquire(settings)
-            for index, chunk in enumerate(chunks, start=1):
-                if should_cancel and should_cancel():
-                    raise TranscriptionError("Transcription annulée.")
-                label = f"tronçon {index}/{len(chunks)}"
-                if on_progress:
-                    on_progress(chunk.offset / total if total else 0.0, f"Envoi du {label} au pod…")
-                output = session.transcribe_chunk(chunk.path.read_bytes(), model, language,
-                                                  label=label, initial_prompt=initial_prompt)
-                for raw in output.get("segments") or []:
-                    text = (raw.get("text") or "").strip()
-                    if text:
-                        yield Segment(start=float(raw.get("start", 0.0)), end=float(raw.get("end", 0.0)),
-                                      text=text, confidence=raw.get("confidence")).shifted(chunk.offset)
-                if on_progress and total:
-                    on_progress(min((chunk.offset + chunk.duration) / total, 1.0), f"{label} transcrit.")
+            if should_cancel and should_cancel():
+                raise TranscriptionError("Transcription annulée.")
+            if on_progress:
+                on_progress(0.05, "Envoi du fichier complet au pod…")
+            output = session.transcribe_audio(
+                wav_path.read_bytes(), model, language, initial_prompt=initial_prompt,
+                diarize=bool(settings.diarization_enabled),
+            )
+            for raw in output.get("segments") or []:
+                text = (raw.get("text") or "").strip()
+                if text:
+                    yield Segment(
+                        start=float(raw.get("start", 0.0)), end=float(raw.get("end", 0.0)),
+                        text=text, confidence=raw.get("confidence"), words=[
+                            Word(start=float(word.get("start", 0)), end=float(word.get("end", 0)),
+                                 text=str(word.get("text") or ""), confidence=word.get("confidence"))
+                            for word in (raw.get("words") or []) if str(word.get("text") or "").strip()
+                        ] or None,
+                        speaker=raw.get("speaker"),
+                    )
+            if on_progress:
+                on_progress(1.0, "Transcription terminée.")
         finally:
             if session is not None:
                 pod_pool.release(settings)
-            for chunk in chunks:
-                if chunk.path != wav_path:
-                    chunk.path.unlink(missing_ok=True)
-            try:
-                chunk_dir.rmdir()
-            except OSError:
-                pass

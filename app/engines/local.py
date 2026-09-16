@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Iterator
 
 from ..config import WHISPER_MODELS
-from .base import CancelCheck, ProgressCallback, Segment, TranscriptionError
+from .base import CancelCheck, ProgressCallback, Segment, TranscriptionError, Word
 
 # Les modèles restent chargés entre deux travaux : recharger « large-v3 »
 # prend plusieurs dizaines de secondes.
@@ -100,6 +100,7 @@ class LocalWhisperEngine:
             vad_filter=False,
             beam_size=5,
             initial_prompt=initial_prompt or None,
+            word_timestamps=True,
         )
 
         total = duration or getattr(info, "duration", 0.0) or 0.0
@@ -115,6 +116,15 @@ class LocalWhisperEngine:
                     confidence=_confidence_from_logprob(
                         getattr(segment, "avg_logprob", None)
                     ),
+                    words=[
+                        Word(
+                            start=round(word.start, 3), end=round(word.end, 3),
+                            text=word.word,
+                            confidence=_confidence_from_logprob(getattr(word, "probability", None)),
+                        )
+                        for word in (getattr(segment, "words", None) or [])
+                        if getattr(word, "word", "").strip()
+                    ] or None,
                 )
             if on_progress and total > 0:
                 on_progress(

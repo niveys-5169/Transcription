@@ -47,7 +47,7 @@ POLL_INTERVAL = 3.0
 VOLUME_MOUNT_PATH = "/runpod-volume"
 
 
-def _hf_token_env() -> dict[str, str] | None:
+def _hf_token_env(settings=None) -> dict[str, str] | None:
     """Transmet HF_TOKEN au pod créé, s'il est défini côté application.
 
     Sans jeton, huggingface_hub télécharge le modèle en anonyme et se heurte
@@ -57,7 +57,7 @@ def _hf_token_env() -> dict[str, str] | None:
     la création, d'où ce transfert explicite plutôt qu'un simple `os.getenv`
     côté pod.
     """
-    token = os.environ.get("HF_TOKEN")
+    token = getattr(settings, "hf_token", "") or os.environ.get("HF_TOKEN")
     return {"HF_TOKEN": token} if token else None
 
 
@@ -197,7 +197,7 @@ class PodFallbackSession:
             port=settings.runpod_pod_port,
             start_command="python3 -u /pod_server.py",
             network_volume_id=getattr(settings, "runpod_pod_network_volume_id", "") or None,
-            env=_hf_token_env(),
+            env=_hf_token_env(settings),
         )
         self._wait_ready()
 
@@ -285,6 +285,33 @@ class PodFallbackSession:
                 f"Le pod de secours a échoué sur le {label} : {output['error']}"
             )
         return output if isinstance(output, dict) else {}
+
+    def transcribe_audio(
+        self, audio_bytes: bytes, model: str, language: str | None, *,
+        initial_prompt: str | None = None, diarize: bool = True,
+    ) -> dict:
+        """Envoie le média entier au pod, sans base64 ni limite de taille JSON."""
+        url = f"{self._client.proxy_url(self.pod_id, self.settings.runpod_pod_port)}/transcribe"
+        try:
+            response = self._http.post(
+                url,
+                data={
+                    "model": model, "language": language or "auto",
+                    "initial_prompt": initial_prompt or "", "diarize": str(bool(diarize)).lower(),
+                },
+                files={"audio": ("audio.wav", audio_bytes, "audio/wav")},
+            )
+        except httpx.HTTPError as exc:
+            raise TranscriptionError(f"Pod RunPod injoignable : {exc}") from exc
+        if response.status_code == 413:
+            raise TranscriptionError("Le pod a refusé le fichier complet (HTTP 413).")
+        try:
+            output = response.json()
+        except ValueError as exc:
+            raise TranscriptionError(f"Réponse du pod illisible (HTTP {response.status_code}).") from exc
+        if response.status_code >= 400 or output.get("error"):
+            raise TranscriptionError(f"Le pod a échoué : {output.get('error') or response.status_code}")
+        return output
 
     def close(self) -> None:
         if self._closed:

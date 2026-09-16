@@ -7,6 +7,8 @@ qu'on ne partage pas une connexion entre threads.
 from __future__ import annotations
 
 import json
+import difflib
+import re
 import sqlite3
 import uuid
 from datetime import datetime, timezone
@@ -382,8 +384,9 @@ def ensure_review_blocks(job_id: str) -> list[dict]:
 
 def review_blocks_from_segments(segments: list[dict]) -> list[dict]:
     """Copie normalisée des segments pour l'éditeur, sans toucher au brut."""
-    return [
-        {
+    blocks = []
+    for index, segment in enumerate(segments, start=1):
+        block = {
             "id": f"segment-{index}",
             "start": float(segment.get("start") or 0),
             "end": float(segment.get("end") or 0),
@@ -394,11 +397,15 @@ def review_blocks_from_segments(segments: list[dict]) -> list[dict]:
             # La diarisation n'est pas devinée : Whisper ne fournit pas une
             # identité fiable. Ces champs permettent à la personne qui écoute
             # de distinguer sans ambiguïté professeur, élève et intervenants.
-            "speaker": None,
+            "speaker": segment.get("speaker"),
             "role": None,
         }
-        for index, segment in enumerate(segments, start=1)
-    ]
+        # Les travaux existants n'ont pas de mots : ne pas leur ajouter une
+        # clé vide afin de garder les réponses historiques identiques.
+        if segment.get("words") is not None:
+            block["words"] = segment["words"]
+        blocks.append(block)
+    return blocks
 
 
 def review_blocks_from_pairs(pairs, segments: list[dict]) -> list[dict]:
@@ -421,13 +428,39 @@ def review_blocks_from_pairs(pairs, segments: list[dict]) -> list[dict]:
             "id": block_id, "start": pair.start, "end": pair.end,
             "text": pair.clean, "raw_text": pair.raw,
             "source_segment_ids": source_ids, "confidence": None,
-            "speaker": None, "role": None,
+            "words": None, "speaker": None, "role": None,
         })
     return blocks
 
 
 def clean_text_from_blocks(blocks: list[dict]) -> str:
     return "\n\n".join(str(block.get("text") or "").strip() for block in blocks if str(block.get("text") or "").strip())
+
+
+def _retime_words(block: dict, text: str) -> list[dict] | None:
+    """Préserve les mots alignés inchangés, interpole les autres dans le bloc."""
+    old_words = block.get("words")
+    if not isinstance(old_words, list) or not old_words:
+        return None
+    old_tokens = [str(word.get("text") or "").strip() for word in old_words]
+    new_tokens = re.findall(r"\S+", text)
+    if not new_tokens:
+        return []
+    start, end = float(block.get("start") or 0), float(block.get("end") or 0)
+    step = (end - start) / len(new_tokens)
+    words = [
+        {"start": round(start + index * step, 3), "end": round(start + (index + 1) * step, 3),
+         "text": token, "confidence": None}
+        for index, token in enumerate(new_tokens)
+    ]
+    for match in difflib.SequenceMatcher(a=old_tokens, b=new_tokens, autojunk=False).get_matching_blocks():
+        for offset in range(match.size):
+            original = old_words[match.a + offset]
+            words[match.b + offset] = {
+                "start": original.get("start"), "end": original.get("end"),
+                "text": new_tokens[match.b + offset], "confidence": original.get("confidence"),
+            }
+    return words
 
 
 def archive_review_version(job_id: str, *, reason: str) -> str | None:
@@ -496,6 +529,9 @@ def update_review_block(
 
     if text is not None:
         target["text"] = text
+        retimed = _retime_words(target, text)
+        if retimed is not None:
+            target["words"] = retimed
 
     # ``None`` signifie « non renseigné » et efface donc une attribution
     # précédente ; les anciens blocs restent compatibles.

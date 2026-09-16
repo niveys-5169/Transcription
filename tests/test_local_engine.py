@@ -9,10 +9,16 @@ import pytest
 from app.engines.local import LocalWhisperEngine, _confidence_from_logprob
 
 
+class _FauxWord:
+    def __init__(self, start, end, word, probability=None):
+        self.start, self.end, self.word, self.probability = start, end, word, probability
+
+
 class _FauxSegment:
     def __init__(self, start, end, text, avg_logprob=None):
         self.start, self.end, self.text = start, end, text
         self.avg_logprob = avg_logprob
+        self.words = [_FauxWord(start, end, text, 0.9)]
 
 
 class _FauxInfo:
@@ -55,6 +61,7 @@ def test_la_confiance_est_deduite_de_avg_logprob(moteur, tmp_path):
     )
     assert segments[0].confidence is not None
     assert 0.0 <= segments[0].confidence <= 1.0
+    assert segments[0].words[0].text == "Bonjour à tous."
 
 
 def test_confidence_none_quand_avg_logprob_absent(moteur, tmp_path):

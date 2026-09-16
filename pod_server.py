@@ -10,6 +10,8 @@ partie de l'architecture.
 from __future__ import annotations
 
 import base64
+from email import policy
+from email.parser import BytesParser
 import json
 import os
 import tempfile
@@ -70,8 +72,66 @@ def get_model(model_size):
     return _model_cache[model_size]
 
 
+def _transcribe_with_whisperx(
+    audio_path: str, model_size: str, language: str | None,
+    initial_prompt: str | None, diarize: bool,
+) -> dict:
+    """WhisperX : transcription, alignement mot à mot et diarisation optionnelle."""
+    import whisperx
+
+    if model_size not in VALID_MODELS:
+        model_size = "large-v3"
+    if os.path.isdir(VOLUME_ROOT):
+        os.environ.setdefault("HF_HOME", os.path.join(VOLUME_ROOT, "huggingface-cache"))
+    device = "cuda"
+    language = None if language in (None, "", "auto") else language
+    model = whisperx.load_model(
+        model_size, device, compute_type="float16", language=language,
+        download_root=_model_cache_dir(),
+    )
+    result = model.transcribe(audio_path, batch_size=16, language=language,
+                              initial_prompt=initial_prompt or None)
+    detected_language = result.get("language") or language or ""
+    align_model, metadata = whisperx.load_align_model(
+        language_code=detected_language, device=device,
+    )
+    result = whisperx.align(result["segments"], align_model, metadata, audio_path, device)
+
+    token = os.environ.get("HF_TOKEN")
+    speakers: list[str] = []
+    if diarize and token:
+        diarizer = whisperx.DiarizationPipeline(use_auth_token=token, device=device)
+        diarized = diarizer(audio_path)
+        result = whisperx.assign_word_speakers(diarized, result)
+        speakers = sorted({str(segment["speaker"]) for segment in result["segments"] if segment.get("speaker")})
+
+    segments = []
+    for segment in result.get("segments") or []:
+        words = [
+            {
+                "start": round(float(word["start"]), 3),
+                "end": round(float(word["end"]), 3),
+                "text": str(word.get("word") or word.get("text") or "").strip(),
+                "confidence": word.get("score"),
+            }
+            for word in segment.get("words") or []
+            if word.get("start") is not None and word.get("end") is not None
+        ]
+        segments.append({
+            "start": round(float(segment.get("start") or 0), 3),
+            "end": round(float(segment.get("end") or 0), 3),
+            "text": str(segment.get("text") or ""),
+            "confidence": segment.get("score"),
+            "speaker": segment.get("speaker"),
+            "words": words,
+        })
+    return {"text": "".join(segment["text"] for segment in segments).strip(),
+            "segments": segments, "language": detected_language, "speakers": speakers}
+
+
 def transcribe(
-    audio_b64: str, model_size: str, language: str | None, initial_prompt: str | None = None
+    audio_b64: str, model_size: str, language: str | None, initial_prompt: str | None = None,
+    diarize: bool = False,
 ) -> dict:
     if not audio_b64:
         return {"error": "audio_base64 manquant dans la requête."}
@@ -87,6 +147,15 @@ def transcribe(
             tmp.write(audio_bytes)
             tmp_path = tmp.name
 
+        # L'image de production contient WhisperX. Le fallback conserve le
+        # contrat pour un ancien pod pendant la phase de déploiement et rend
+        # les tests sans GPU autonomes.
+        try:
+            return _transcribe_with_whisperx(tmp_path, model_size, language, initial_prompt, diarize)
+        except ModuleNotFoundError as exc:
+            if exc.name != "whisperx":
+                raise
+
         model = get_model(model_size)
         # vad_filter=False pour la même raison que sur handler.py et le
         # moteur local : le filtre de détection de voix a déjà classé un
@@ -94,7 +163,7 @@ def transcribe(
         # erreur. Mieux vaut traiter un peu de silence que perdre du contenu.
         segments_iter, info = model.transcribe(
             tmp_path,
-            language=language,
+            language=None if language == "auto" else language,
             vad_filter=False,
             beam_size=5,
             initial_prompt=initial_prompt or None,
@@ -155,6 +224,30 @@ class Handler(BaseHTTPRequestHandler):
 
         length = int(self.headers.get("Content-Length", "0") or "0")
         raw = self.rfile.read(length) if length else b"{}"
+        content_type = self.headers.get("Content-Type", "")
+        if content_type.startswith("multipart/form-data"):
+            try:
+                message = BytesParser(policy=policy.default).parsebytes(
+                    f"Content-Type: {content_type}\r\nMIME-Version: 1.0\r\n\r\n".encode()
+                    + raw
+                )
+                fields = {
+                    part.get_param("name", header="content-disposition"): part
+                    for part in message.iter_parts()
+                }
+                audio = fields["audio"].get_payload(decode=True) or b""
+                result = transcribe(
+                    base64.b64encode(audio).decode("ascii"),
+                    fields.get("model").get_content() if fields.get("model") else "large-v3",
+                    fields.get("language").get_content() if fields.get("language") else "auto",
+                    fields.get("initial_prompt").get_content() if fields.get("initial_prompt") else None,
+                    (fields.get("diarize").get_content().strip().lower() == "true") if fields.get("diarize") else False,
+                )
+            except (KeyError, ValueError, TypeError) as exc:
+                self._send_json(400, {"error": f"multipart invalide : {exc}"})
+                return
+            self._send_json(400 if "error" in result else 200, result)
+            return
         try:
             job_input = json.loads(raw or b"{}")
         except json.JSONDecodeError as e:
@@ -166,6 +259,7 @@ class Handler(BaseHTTPRequestHandler):
             job_input.get("model", "large-v3"),
             job_input.get("language") or None,
             job_input.get("initial_prompt") or None,
+            bool(job_input.get("diarize")),
         )
         self._send_json(400 if "error" in result else 200, result)
 

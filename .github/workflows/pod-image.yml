@@ -1,6 +1,6 @@
-name: Image du pod de secours RunPod
+name: Image du pod RunPod
 
-# Construit et pousse l'image utilisée par le pod de secours RunPod
+# Construit et pousse l'image utilisée par le pod RunPod
 # (voir app/engines/runpod_pod.py) vers GitHub Container Registry, à chaque
 # modification d'un fichier dont elle dépend. Le worker serverless, lui, n'a
 # pas besoin de ce workflow : RunPod le construit lui-même depuis le dépôt.
@@ -24,7 +24,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # L'image part d'une base CUDA (runpod/base) et embarque ctranslate2 :
+      # L'image part d'une base CUDA (runpod/base) et embarque WhisperX :
       # plusieurs Go, alors que le runner GitHub n'a qu'une quinzaine de Go
       # libres une fois ses outils préinstallés (.NET, Android, Haskell...)
       # comptés. Sans ce nettoyage, le build finit en "No space left on

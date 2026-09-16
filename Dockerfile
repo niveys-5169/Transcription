@@ -7,10 +7,9 @@ COPY requirements.txt /requirements.txt
 # vers des environnements différents (Conda notamment). L'import de
 # vérification fait échouer le build tout de suite si ce n'est pas le cas,
 # plutôt que de livrer une image qui ne le découvre qu'à l'exécution — un
-# pod de secours a échoué en production avec « No module named
-# 'faster_whisper' » alors que ce `pip install` avait pourtant réussi.
+# pod a échoué en production avec une dépendance de transcription absente.
 RUN python3 -m pip install --no-cache-dir -r /requirements.txt \
-    && python3 -c "import faster_whisper"
+    && python3 -c "import whisperx; import pyannote.audio"
 
 # Le modele large-v3 n'est plus precharge ici (comme avant) : ca gonflait
 # cette image de plusieurs Go, et RunPod doit la retirer en entier a chaque

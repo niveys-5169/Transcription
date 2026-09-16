@@ -76,6 +76,7 @@
             <label class="field">
               <span>Langue</span>
               <select id="language" name="language">
+                <option value="auto">Détecter automatiquement</option>
                 <option value="fr">Français</option>
                 <option value="en">Anglais</option>
                 <option value="es">Espagnol</option>
@@ -534,6 +535,12 @@
         <input type="password" id="runpod_api_key" placeholder="rpa_…" autocomplete="off">
         <small id="runpod-state"></small>
       </label>
+      <label class="field">
+        <span>Jeton Hugging Face <small>(pyannote / diarisation)</small></span>
+        <input type="password" id="hf_token" placeholder="hf_…" autocomplete="off">
+        <small id="hf-token-state"></small>
+      </label>
+      <label class="check"><input type="checkbox" id="diarization_enabled"><span>Identifier automatiquement les locuteurs</span></label>
       <label class="field">
         <span>Durée d'un tronçon (secondes)</span>
         <input type="number" id="runpod_chunk_seconds" min="30" max="600" step="10">

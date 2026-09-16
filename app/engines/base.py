@@ -11,6 +11,22 @@ class TranscriptionError(RuntimeError):
 
 
 @dataclass
+class Word:
+    """Un mot aligné dans le média, sans effet sur le texte édité."""
+
+    start: float
+    end: float
+    text: str
+    confidence: float | None = None
+
+    def shifted(self, offset: float) -> "Word":
+        return Word(
+            start=round(self.start + offset, 3), end=round(self.end + offset, 3),
+            text=self.text, confidence=self.confidence,
+        )
+
+
+@dataclass
 class Segment:
     """Un fragment de texte transcrit, horodaté dans le média d'origine."""
 
@@ -18,6 +34,8 @@ class Segment:
     end: float
     text: str
     confidence: float | None = None
+    words: list[Word] | None = None
+    speaker: str | None = None
     """Score indicatif [0, 1] dérivé du moteur (ex. avg_logprob) ; n'affecte
     jamais le texte ni son édition — purement informatif pour l'affichage."""
 
@@ -27,6 +45,8 @@ class Segment:
             end=round(self.end + offset, 3),
             text=self.text,
             confidence=self.confidence,
+            words=[word.shifted(offset) for word in self.words] if self.words else None,
+            speaker=self.speaker,
         )
 
     def to_dict(self) -> dict:
