@@ -98,6 +98,39 @@ def test_correction_conserve_les_temps_des_mots_inchanges(tmp_path):
     assert words[1]["text"] == "nouveau"
 
 
+def test_horodatage_de_bloc_est_modifiable_sans_chevauchement(client, tmp_path):
+    job_id = _job(tmp_path)
+    client.get(f"/api/jobs/{job_id}/review-blocks")
+
+    updated = client.put(f"/api/jobs/{job_id}/review-blocks/segment-1", json={"start": 1.5, "end": 3.8})
+    assert updated.status_code == 200
+    assert updated.json()["start"] == 1.5
+    overlap = client.put(f"/api/jobs/{job_id}/review-blocks/segment-1", json={"end": 4.1})
+    assert overlap.status_code == 409
+
+
+def test_scission_et_fusion_conservent_mots_et_annotations(client, tmp_path):
+    source = tmp_path / "mots.wav"; source.write_bytes(b"source")
+    job_id = db.create_job(filename="mots.wav", media_path=str(source), size_bytes=6, engine="local", model="tiny", language="fr", proofread="none", structure=False)
+    db.update_job(job_id, segments=[{"start": 0, "end": 4, "text": "Bonjour à tous maintenant", "words": [
+        {"start": 0, "end": 1, "text": "Bonjour"}, {"start": 1, "end": 2, "text": "à"},
+        {"start": 2, "end": 3, "text": "tous"}, {"start": 3, "end": 4, "text": "maintenant"},
+    ]}])
+    client.get(f"/api/jobs/{job_id}/review-blocks")
+    annotation = client.post(f"/api/jobs/{job_id}/annotations", json={"block_id": "segment-1", "type": "highlight", "range_start": 10, "range_end": 15}).json()
+    split = client.post(f"/api/jobs/{job_id}/review-blocks/segment-1/split", json={"word_index": 2})
+    assert split.status_code == 200
+    assert split.json()["snapshot_id"]
+    left, right = split.json()["blocks"]
+    assert left["text"] == "Bonjour à" and right["text"] == "tous maintenant"
+    moved = client.get(f"/api/jobs/{job_id}/annotations").json()["annotations"][0]
+    assert moved["id"] == annotation["id"] and moved["block_id"] == right["id"]
+    merged = client.post(f"/api/jobs/{job_id}/review-blocks/segment-1/merge")
+    assert merged.status_code == 200
+    assert merged.json()["snapshot_id"]
+    assert merged.json()["block"]["text"] == "Bonjour à tous maintenant"
+
+
 def test_annotations_sont_persistantes_et_validees(client, tmp_path):
     job_id = _job(tmp_path)
     annotation = client.post(

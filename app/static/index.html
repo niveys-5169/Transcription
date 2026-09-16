@@ -185,6 +185,9 @@
               <div class="menu-items" id="download-menu" hidden>
                 <a data-fmt="txt">Texte relu (.txt)</a>
                 <a data-fmt="md">Document complet (.md)</a>
+                <a data-fmt="srt">Sous-titres (.srt)</a>
+                <a data-fmt="vtt">Sous-titres web (.vtt)</a>
+                <a data-fmt="docx">Document Word (.docx)</a>
                 <a data-fmt="json">Tout, structuré (.json)</a>
                 <a data-fmt="obsidian">Fiche Obsidian (.md)</a>
               </div>
@@ -252,8 +255,12 @@
             <div class="editor-search">
               <input type="search" id="editor-search-input" class="editor-search-input"
                      placeholder="Rechercher dans la transcription" aria-label="Rechercher dans la transcription">
+              <input type="text" id="editor-replace-input" class="editor-search-input"
+                     placeholder="Remplacer par" aria-label="Remplacer par">
               <button type="button" class="btn btn-mini btn-ghost" id="editor-search-prev" aria-label="Occurrence précédente">↑</button>
               <button type="button" class="btn btn-mini btn-ghost" id="editor-search-next" aria-label="Occurrence suivante">↓</button>
+              <button type="button" class="btn btn-mini btn-ghost" id="editor-replace-btn">Remplacer</button>
+              <button type="button" class="btn btn-mini btn-ghost" id="editor-replace-all-btn">Tout</button>
               <span id="editor-search-count" class="editor-search-count" aria-live="polite"></span>
             </div>
             <span class="blocks-edited-flag" id="blocks-edited-flag" hidden>
@@ -303,6 +310,17 @@
         <button type="button" class="btn btn-mini btn-ghost" id="knowledge-btn">Proposer des concepts</button>
         <button type="button" class="btn btn-mini btn-ghost" id="knowledge-validate-btn" hidden>Valider la sélection</button>
         <div id="panel-knowledge"></div>
+      </section>
+
+      <section class="analysis-section" id="lexicon-zone">
+        <h3>Lexique</h3>
+        <form id="lexicon-form" class="lexicon-form">
+          <input id="lexicon-term-input" placeholder="Nouveau terme" aria-label="Nouveau terme du lexique">
+          <input id="lexicon-definition-input" placeholder="Définition (facultative)" aria-label="Définition du terme">
+          <label class="check lexicon-verified"><input type="checkbox" id="lexicon-verified-input"><span>Vérifié</span></label>
+          <button type="submit" class="btn btn-mini btn-ghost">Ajouter</button>
+        </form>
+        <div id="panel-lexicon"></div>
       </section>
 
       <!-- Zone stable : notes et surlignages (phase 4). Les actions de -->

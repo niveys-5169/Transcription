@@ -10,7 +10,7 @@ from __future__ import annotations
 from .. import config as config_module
 from .entities import ensure_entity_notes, update_index, write_glossary
 from .index import resolve_entities
-from .notes import filename_for, render_note, render_verbatim
+from .notes import filename_for, render_note, render_revision_note, render_verbatim
 from .vault import ObsidianError, resolve, write_atomic
 
 __all__ = ["ObsidianError", "publish"]
@@ -51,6 +51,13 @@ def publish(job: dict, *, settings=None) -> str:
             job, settings=settings, fiche_name=filename_for(job, settings.obsidian_filename_template)
         ))
         job["_obsidian_verbatim_path"] = verbatim_relative
+
+    if job.get("revision"):
+        revision_relative = f"{settings.obsidian_revision_folder}/{filename_for(job, settings.obsidian_filename_template)} — Révision.md"
+        write_atomic(resolve(settings.obsidian_vault_path, revision_relative), render_revision_note(
+            job, fiche_name=filename_for(job, settings.obsidian_filename_template)
+        ))
+        job["_obsidian_revision_path"] = revision_relative
 
     ensure_entity_notes(settings, entities)
 

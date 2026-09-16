@@ -1,4 +1,4 @@
-from app.proofread.structure import insert_headings, parse_json_object
+from app.proofread.structure import insert_headings, insert_wikilinks, parse_json_object
 
 
 TEXTE = (
@@ -84,3 +84,15 @@ def test_insert_headings_ne_titre_pas_le_tout_debut():
 def test_insert_headings_sans_sections():
     assert insert_headings(TEXTE, []) == TEXTE
     assert insert_headings("", [{"heading": "x", "quote": "y" * 20}]) == ""
+
+
+def test_wikilinks_sont_inseres_une_fois_vers_une_note_indexee():
+    text = "La curatelle renforcée protège la personne. La curatelle renforcée est encadrée."
+    result = insert_wikilinks(text, [{"quote": "protège la personne", "title": "Curatelle renforcée"}], {"Curatelle renforcée"})
+    assert "[[Curatelle renforcée|protège la personne]]" in result
+
+
+def test_wikilinks_refusent_une_cible_inconnue_ou_une_citation_ambigue():
+    text = "Le même terme. Le même terme."
+    assert insert_wikilinks(text, [{"quote": "Le même terme", "title": "Inconnue"}], {"Connue"}) == text
+    assert insert_wikilinks(text, [{"quote": "Le même terme", "title": "Connue"}], {"Connue"}) == text

@@ -22,6 +22,7 @@ hiddenimports = (
     collect_submodules("ctranslate2")
     + collect_submodules("tokenizers")
     + collect_submodules("huggingface_hub")
+    + collect_submodules("docx")
     + ["anthropic", "googleapiclient"]
 )
 
@@ -29,7 +30,7 @@ binaries = collect_dynamic_libs("ctranslate2")
 
 datas = [
     (str(ROOT / "app" / "static"), "app/static"),
-] + collect_data_files("imageio_ffmpeg")
+] + collect_data_files("imageio_ffmpeg") + collect_data_files("docx")
 
 a = Analysis(
     [str(ROOT / "desktop.py")],

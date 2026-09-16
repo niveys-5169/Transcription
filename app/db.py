@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import difflib
+import math
 import re
 import sqlite3
 import uuid
@@ -151,7 +152,7 @@ STATUSES = (
 # un lien « Ouvrir dans Obsidian ».
 LIST_COLUMNS = (
     "id, filename, media_path, wav_path, size_bytes, duration, engine, model, "
-    "language, proofread, structure, verify, chain, factcheck, publish, manual_review_status, task, "
+    "language, proofread, structure, verify, chain, factcheck, publish, manual_review_status, review_version, task, "
     "status, stage, progress, title, summary, error, obsidian_path, obsidian_verbatim_path, obsidian_published_at, "
     "notebooklm_status, notebooklm_synced_at, notebooklm_error, notebooklm_doc_id, "
     "created_at, updated_at, finished_at"
@@ -519,6 +520,8 @@ def update_review_block(
     text: str | None = None,
     speaker: str | None | object = _UNSET,
     role: str | None | object = _UNSET,
+    start: float | object = _UNSET,
+    end: float | object = _UNSET,
 ) -> dict | None:
     """Met à jour un bloc de révision sans jamais retoucher les segments bruts.
 
@@ -529,9 +532,27 @@ def update_review_block(
     repère, pas seulement au bloc édité.
     """
     blocks = ensure_review_blocks(job_id)
-    target = next((block for block in blocks if block.get("id") == block_id), None)
-    if target is None:
+    index = next((position for position, block in enumerate(blocks) if block.get("id") == block_id), -1)
+    if index < 0:
         return None
+    target = blocks[index]
+
+    if start is not _UNSET or end is not _UNSET:
+        new_start = float(target.get("start") or 0) if start is _UNSET else float(start)
+        new_end = float(target.get("end") or 0) if end is _UNSET else float(end)
+        if not math.isfinite(new_start) or not math.isfinite(new_end) or new_start < 0 or new_end <= new_start:
+            raise ValueError("Les horodatages doivent être positifs et la fin postérieure au début.")
+        previous = blocks[index - 1] if index else None
+        following = blocks[index + 1] if index + 1 < len(blocks) else None
+        if previous and new_start < float(previous.get("end") or 0):
+            raise ValueError("Le début ne peut pas chevaucher le bloc précédent.")
+        if following and new_end > float(following.get("start") or float("inf")):
+            raise ValueError("La fin ne peut pas chevaucher le bloc suivant.")
+        target["start"], target["end"] = round(new_start, 3), round(new_end, 3)
+        words = target.get("words")
+        if isinstance(words, list) and words:
+            step = (new_end - new_start) / len(words)
+            target["words"] = [{**word, "start": round(new_start + pos * step, 3), "end": round(new_start + (pos + 1) * step, 3)} for pos, word in enumerate(words)]
 
     if text is not None:
         target["text"] = text
@@ -570,6 +591,75 @@ def replace_in_review_block(job_id: str, block_id: str, citation: str, replaceme
     matches[0]["text"] = str(matches[0]["text"]).replace(citation, replacement, 1)
     update_job(job_id, review_blocks=blocks, clean_text=clean_text_from_blocks(blocks))
     return True
+
+
+def split_review_block(job_id: str, block_id: str, word_index: int) -> tuple[list[dict], str | None] | None:
+    """Scinde un bloc entre deux mots, après archivage de l'état courant."""
+    blocks = ensure_review_blocks(job_id)
+    index = next((i for i, block in enumerate(blocks) if block.get("id") == block_id), -1)
+    if index < 0:
+        return None
+    block = blocks[index]
+    words = list(block.get("words") or [])
+    if not 0 < word_index < len(words):
+        return None
+    snapshot_id = archive_review_version(job_id, reason="Avant scission de bloc")
+    left_words, right_words = words[:word_index], words[word_index:]
+    right_id = f"{block_id}-split-{uuid.uuid4().hex[:8]}"
+    left = {**block, "words": left_words, "text": " ".join(str(w.get("text") or "") for w in left_words).strip(),
+            "end": float(left_words[-1].get("end") or block.get("end") or 0)}
+    right = {**block, "id": right_id, "words": right_words, "text": " ".join(str(w.get("text") or "") for w in right_words).strip(),
+             "start": float(right_words[0].get("start") or block.get("start") or 0), "raw_text": " ".join(str(w.get("text") or "") for w in right_words).strip()}
+    blocks[index:index + 1] = [left, right]
+    version = int((get_job(job_id) or {}).get("review_version") or 0) + 1
+    _move_split_annotations(job_id, block_id, right_id, len(left["text"]), version)
+    update_job(job_id, review_blocks=blocks, clean_text=clean_text_from_blocks(blocks), review_version=version)
+    return [left, right], snapshot_id
+
+
+def merge_review_block(job_id: str, block_id: str) -> tuple[dict, str | None] | None:
+    """Fusionne un bloc avec son suivant, après archivage de l'état courant."""
+    blocks = ensure_review_blocks(job_id)
+    index = next((i for i, block in enumerate(blocks) if block.get("id") == block_id), -1)
+    if index < 0 or index + 1 >= len(blocks):
+        return None
+    snapshot_id = archive_review_version(job_id, reason="Avant fusion de blocs")
+    first, second = blocks[index], blocks[index + 1]
+    separator = " " if first.get("text") and second.get("text") else ""
+    merged = {**first, "end": float(second.get("end") or first.get("end") or 0),
+              "text": f"{first.get('text') or ''}{separator}{second.get('text') or ''}".strip(),
+              "words": list(first.get("words") or []) + list(second.get("words") or []),
+              "source_segment_ids": list(first.get("source_segment_ids") or []) + list(second.get("source_segment_ids") or [])}
+    blocks[index:index + 2] = [merged]
+    version = int((get_job(job_id) or {}).get("review_version") or 0) + 1
+    _move_merged_annotations(job_id, second.get("id"), first.get("id"), len(str(first.get("text") or "")) + len(separator), version)
+    update_job(job_id, review_blocks=blocks, clean_text=clean_text_from_blocks(blocks), review_version=version)
+    return merged, snapshot_id
+
+
+def _move_split_annotations(job_id: str, left_id: str, right_id: str, pivot: int, review_version: int) -> None:
+    with connect() as conn:
+        rows = conn.execute("SELECT id, range_start, range_end FROM annotations WHERE job_id = ? AND block_id = ?", (job_id, left_id)).fetchall()
+        for row in rows:
+            start, end = row["range_start"], row["range_end"]
+            if start is not None and start >= pivot:
+                conn.execute("UPDATE annotations SET block_id = ?, range_start = ?, range_end = ?, review_version = ?, updated_at = ? WHERE id = ?", (right_id, start - pivot, (end - pivot) if end is not None else None, review_version, _now(), row["id"]))
+            elif end is not None and end > pivot:
+                conn.execute("UPDATE annotations SET range_end = ?, review_version = ?, updated_at = ? WHERE id = ?", (pivot, review_version, _now(), row["id"]))
+            else:
+                conn.execute("UPDATE annotations SET review_version = ?, updated_at = ? WHERE id = ?", (review_version, _now(), row["id"]))
+
+
+def _move_merged_annotations(job_id: str, from_id: str | None, to_id: str | None, offset: int, review_version: int) -> None:
+    if not from_id or not to_id:
+        return
+    with connect() as conn:
+        rows = conn.execute("SELECT id, range_start, range_end FROM annotations WHERE job_id = ? AND block_id = ?", (job_id, from_id)).fetchall()
+        for row in rows:
+            start = row["range_start"] + offset if row["range_start"] is not None else None
+            end = row["range_end"] + offset if row["range_end"] is not None else None
+            conn.execute("UPDATE annotations SET block_id = ?, range_start = ?, range_end = ?, review_version = ?, updated_at = ? WHERE id = ?", (to_id, start, end, review_version, _now(), row["id"]))
+        conn.execute("UPDATE annotations SET review_version = ?, updated_at = ? WHERE job_id = ? AND block_id = ?", (review_version, _now(), job_id, to_id))
 
 
 def list_annotations(job_id: str, *, review_version: int | None = None) -> list[dict]:

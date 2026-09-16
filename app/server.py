@@ -184,7 +184,8 @@ async def sync_notebooklm_now() -> dict:
 @app.get("/api/lexicon")
 async def get_lexicon() -> dict:
     """Le lexique MJPM courant — livré, plus les ajouts de l'utilisateur."""
-    return {"terms": [term.to_dict() for term in lexicon.load_lexicon()]}
+    user_terms = lexicon.user_term_names()
+    return {"terms": [{**term.to_dict(), "user_editable": term.terme in user_terms} for term in lexicon.load_lexicon()]}
 
 
 @app.post("/api/lexicon")
@@ -211,7 +212,16 @@ async def post_lexicon(payload: dict = Body(...)) -> dict:
         verifie_le=payload.get("verifie_le"),
     )
     lexicon.save_user_term(term)
-    return {"terms": [t.to_dict() for t in lexicon.load_lexicon()]}
+    user_terms = lexicon.user_term_names()
+    return {"terms": [{**item.to_dict(), "user_editable": item.terme in user_terms} for item in lexicon.load_lexicon()]}
+
+
+@app.delete("/api/lexicon/{terme}")
+async def delete_lexicon_term(terme: str) -> dict:
+    if not lexicon.delete_user_term(terme):
+        raise HTTPException(404, "Cette entrée utilisateur est introuvable.")
+    user_terms = lexicon.user_term_names()
+    return {"terms": [{**item.to_dict(), "user_editable": item.terme in user_terms} for item in lexicon.load_lexicon()]}
 
 
 # -------------------------------------------------------------- index coffre
@@ -442,8 +452,8 @@ async def get_review_blocks(job_id: str) -> dict:
 
 @app.put("/api/jobs/{job_id}/review-blocks/{block_id}")
 async def put_review_block(job_id: str, block_id: str, payload: dict = Body(...)) -> dict:
-    if "text" not in payload and "speaker" not in payload and "role" not in payload:
-        raise HTTPException(400, "Indiquez le texte, l'intervenant ou le rôle à modifier.")
+    if "text" not in payload and "speaker" not in payload and "role" not in payload and "start" not in payload and "end" not in payload:
+        raise HTTPException(400, "Indiquez le texte, l'intervenant, le rôle ou les horodatages à modifier.")
     fields: dict = {}
     if "text" in payload:
         text = payload["text"]
@@ -456,10 +466,40 @@ async def put_review_block(job_id: str, block_id: str, payload: dict = Body(...)
             if value is not None and not isinstance(value, str):
                 raise HTTPException(400, f"Le champ « {key} » doit être du texte.")
             fields[key] = value.strip() if isinstance(value, str) else None
-    block = db.update_review_block(job_id, block_id, **fields)
+    for key in ("start", "end"):
+        if key in payload:
+            value = payload[key]
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise HTTPException(400, f"L’horodatage « {key} » doit être un nombre.")
+            fields[key] = float(value)
+    try:
+        block = db.update_review_block(job_id, block_id, **fields)
+    except ValueError as error:
+        raise HTTPException(409, str(error)) from error
     if block is None:
         raise HTTPException(404, "Bloc de révision introuvable.")
     return block
+
+
+@app.post("/api/jobs/{job_id}/review-blocks/{block_id}/split")
+async def split_review_block(job_id: str, block_id: str, payload: dict = Body(...)) -> dict:
+    word_index = payload.get("word_index")
+    if not isinstance(word_index, int):
+        raise HTTPException(400, "La position de scission doit être un index de mot.")
+    result = db.split_review_block(job_id, block_id, word_index)
+    if result is None:
+        raise HTTPException(409, "Scission impossible à cette position.")
+    blocks, snapshot_id = result
+    return {"blocks": blocks, "snapshot_id": snapshot_id}
+
+
+@app.post("/api/jobs/{job_id}/review-blocks/{block_id}/merge")
+async def merge_review_block(job_id: str, block_id: str) -> dict:
+    result = db.merge_review_block(job_id, block_id)
+    if result is None:
+        raise HTTPException(409, "Aucun bloc suivant à fusionner.")
+    block, snapshot_id = result
+    return {"block": block, "snapshot_id": snapshot_id}
 
 
 @app.get("/api/jobs/{job_id}/review-versions")

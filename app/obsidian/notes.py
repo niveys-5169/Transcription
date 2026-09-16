@@ -85,6 +85,28 @@ def render_verbatim(job: dict, *, settings=None, fiche_name: str = "") -> str:
     return "\n".join(line for line in lines if line is not None).rstrip() + "\n"
 
 
+def render_revision_note(job: dict, *, fiche_name: str = "") -> str:
+    """Fiche de révision Obsidian, avec cartes au format Spaced Repetition."""
+    revision = job.get("revision") or {}
+    if not isinstance(revision, dict):
+        return ""
+    title = job.get("title") or job.get("filename") or "Transcription"
+    lines = ["---", "type: revision", f"titre: {_yaml_str(title)}", f"date: {_date(job)}",
+             f"fiche: \"[[{fiche_name}]]\"" if fiche_name else "", "---", "", f"# {title} — Révision", ""]
+    points = revision.get("points_cles") or []
+    if points:
+        lines.extend(["## Points clés", "", *(f"- {point}" for point in points if point), ""])
+    flashcards = revision.get("flashcards") or []
+    if flashcards:
+        lines.extend(["## Flashcards", ""])
+        for card in flashcards:
+            recto, verso = str(card.get("recto") or "").strip(), str(card.get("verso") or "").strip()
+            if recto and verso:
+                lines.append(f"{recto}::{verso}")
+        lines.append("")
+    return "\n".join(line for line in lines if line is not None).rstrip() + "\n"
+
+
 # ------------------------------------------------------------------ détail
 
 

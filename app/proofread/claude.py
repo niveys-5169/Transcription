@@ -5,12 +5,13 @@ import logging
 
 from ..config import Settings, load_settings
 from ..lexicon import glossary_block
+from ..obsidian import index as vault_index
 from . import prompts
 from .backends import get_backend
 from .base import ProofreadError, ProofreadResult, TextPair
 from .basic import clean_line, split_paragraph_spans
 from .chunking import TextChunk, tail
-from .structure import insert_headings, parse_json_object
+from .structure import insert_headings, insert_wikilinks, parse_json_object
 
 logger = logging.getLogger(__name__)
 
@@ -138,9 +139,14 @@ class ClaudeProofreader:
             half = STRUCTURE_INPUT_LIMIT // 2
             body = f"{body[:half]}\n\n[…]\n\n{body[-half:]}"
 
+        notes = vault_index.search(self.settings, limit=80) if self.settings.obsidian_vault_path else []
+        titles = {str(note.get("title") or "").strip() for note in notes}
         raw = self.backend.complete(
             system=prompts.STRUCTURE_SYSTEM,
-            user=prompts.STRUCTURE_USER.format(body=body),
+            user=prompts.STRUCTURE_USER.format(
+                body=body,
+                vault_notes="\n".join(f"- {title}" for title in sorted(titles)) or "(aucune note)",
+            ),
             max_tokens=MAX_TOKENS_STRUCTURE,
         ).text
         data = parse_json_object(raw)
@@ -162,3 +168,5 @@ class ClaudeProofreader:
             result.text = insert_headings(
                 result.text, [s for s in sections if isinstance(s, dict)]
             )
+        if isinstance(data.get("wikilinks"), list):
+            result.text = insert_wikilinks(result.text, data["wikilinks"], titles)

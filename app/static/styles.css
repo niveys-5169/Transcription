@@ -639,6 +639,7 @@ audio#audio-player { display: block; }
 .block-raw { margin-top: 9px; color: var(--text-soft); font-size: 13px; }
 .block-raw summary { cursor: pointer; color: var(--accent); }
 .block-raw p { white-space: pre-wrap; margin: 7px 0; }
+.block-tools { display: flex; gap: 5px; margin-top: 7px; }
 .block-flash { animation: block-flash 1.5s ease-out; }
 @keyframes block-flash { 0%, 45% { outline: 2px solid var(--accent); outline-offset: 2px; } 100% { outline-color: transparent; } }
 
@@ -720,6 +721,12 @@ audio#audio-player { display: block; }
 .color-yellow { background: #e7c74d; }.color-blue { background: #72a8e8; }.color-green { background: #76bc8d; }
 .annotation-list-head { justify-content: space-between; margin-top: 13px; font-size: 12px; font-weight: 600; }.annotation-list-head select { width: auto; font-size: 12px; padding: 5px; }
 .annotation-list { display: grid; gap: 7px; margin-top: 8px; }
+.lexicon-form { display: grid; grid-template-columns: 1fr auto; gap: 7px; margin-top: 8px; }
+.lexicon-form input { min-width: 0; }
+.lexicon-form .lexicon-verified { grid-column: 1 / -1; font-size: 12px; }
+.lexicon-list { display: grid; gap: 6px; margin-top: 10px; }
+.lexicon-entry { display: flex; align-items: start; justify-content: space-between; gap: 8px; font-size: 12px; }
+.lexicon-entry p { margin: 2px 0 0; color: var(--text-soft); }
 .annotation { border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 7px; padding: 8px; font-size: 12.5px; }.annotation-highlight-yellow { border-left-color: #d0ac16; }.annotation-highlight-blue { border-left-color: #4b8edc; }.annotation-highlight-green { border-left-color: #4ca269; }
 .annotation p { margin: 7px 0; white-space: pre-wrap; }.annotation-head { display: flex; align-items: center; gap: 6px; }.annotation-jump { border: 0; padding: 0; background: none; color: var(--accent); cursor: pointer; font: 12px var(--mono); }.annotation-actions { justify-content: space-between; }.annotation-actions select { width: auto; padding: 4px; font-size: 11px; }
 .tag-editor input { min-width: 0; flex: 1; }

@@ -115,6 +115,17 @@ def test_lexique_utilisateur_remplace_une_entree_livree(tmp_path, monkeypatch):
     assert matches[0].definition == "Redéfini par l'utilisateur"
 
 
+def test_suppression_utilisateur_retablit_le_lexique_livre(tmp_path, monkeypatch):
+    monkeypatch.setattr(lex, "_user_lexicon_path", lambda: tmp_path / "lexique_utilisateur.json")
+    terme_livre = "Sauvegarde de justice"
+    lex.save_user_term(lex.Term(terme=terme_livre, definition="Remplacement local"))
+
+    assert lex.delete_user_term(terme_livre) is True
+    assert lex.delete_user_term(terme_livre) is False
+    restored = next(term for term in lex.load_lexicon(refresh=True) if term.terme == terme_livre)
+    assert restored.definition != "Remplacement local"
+
+
 # ------------------------------------------------------------------- verify CLI
 
 

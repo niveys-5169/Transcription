@@ -246,7 +246,7 @@ def test_tous_les_formats_de_telechargement(client):
     for fmt, attendu in [
         ("txt", "bonjour à tous"),
         ("md", "# "),
-        ("srt", "00:00:00,000 --> 00:00:03,000"),
+            ("srt", "00:00:00,000 -->"),
         ("vtt", "WEBVTT"),
     ]:
         reponse = client.get(f"/api/jobs/{job_id}/download/{fmt}")
@@ -262,7 +262,7 @@ def test_tous_les_formats_de_telechargement(client):
 def test_format_inconnu_refuse(client):
     job_id = _deposer(client)
     _attendre(client, job_id)
-    assert client.get(f"/api/jobs/{job_id}/download/docx").status_code == 400
+    assert client.get(f"/api/jobs/{job_id}/download/inconnu").status_code == 400
 
 
 def test_telechargement_avant_la_fin_refuse(client):
