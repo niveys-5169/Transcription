@@ -8,7 +8,13 @@ COPY requirements.txt /requirements.txt
 # vérification fait échouer le build tout de suite si ce n'est pas le cas,
 # plutôt que de livrer une image qui ne le découvre qu'à l'exécution — un
 # pod a échoué en production avec une dépendance de transcription absente.
-RUN python3 -m pip install --no-cache-dir -r /requirements.txt \
+# Les roues PyPI récentes de Torch embarquent une pile CUDA différente de
+# l'image CUDA 12.1. Installer d'abord le couple officiel CUDA 12.1 garantit
+# la présence de torchaudio.AudioMetaData, attendu par pyannote.audio 3.3.2.
+RUN python3 -m pip install --no-cache-dir \
+      --index-url https://download.pytorch.org/whl/cu121 \
+      torch==2.3.1+cu121 torchaudio==2.3.1+cu121 \
+    && python3 -m pip install --no-cache-dir -r /requirements.txt \
     && python3 -c "import whisperx; import pyannote.audio"
 
 # Le modele large-v3 n'est plus precharge ici (comme avant) : ca gonflait
