@@ -8,8 +8,8 @@ from ..lexicon import glossary_block
 from . import prompts
 from .backends import get_backend
 from .base import ProofreadError, ProofreadResult, TextPair
-from .basic import clean_line
-from .chunking import build_chunks, tail
+from .basic import clean_line, split_paragraph_spans
+from .chunking import TextChunk, tail
 from .structure import insert_headings, parse_json_object
 
 logger = logging.getLogger(__name__)
@@ -52,7 +52,10 @@ class ClaudeProofreader:
         if not available:
             raise ProofreadError(detail)
 
-        chunks = build_chunks(segments, self.settings.proofread_chunk_chars)
+        # Les appels restent groupés par contexte, mais l'unité éditable est
+        # un paragraphe stable dérivé des segments, jamais un gros chunk IA.
+        paragraphs = split_paragraph_spans(segments, max_chars=self.settings.proofread_chunk_chars)
+        chunks = [TextChunk(i, p.start, p.end, p.text) for i, p in enumerate(paragraphs)]
         if not chunks:
             return ProofreadResult(text="", mode="claude")
 
@@ -73,7 +76,9 @@ class ClaudeProofreader:
             cleaned.append(text)
             pairs.append(
                 TextPair(
-                    start=chunk.start, end=chunk.end, raw=chunk.text, clean=text
+                    start=chunk.start, end=chunk.end, raw=chunk.text, clean=text,
+                    block_id=f"block-{paragraphs[chunk.index].first_segment_index}-{paragraphs[chunk.index].last_segment_index}",
+                    source_segment_ids=[f"segment-{i}" for i in range(paragraphs[chunk.index].first_segment_index, paragraphs[chunk.index].last_segment_index + 1)],
                 )
             )
 

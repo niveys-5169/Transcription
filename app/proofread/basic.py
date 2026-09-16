@@ -93,17 +93,21 @@ class Paragraph:
     text: str
     start: float
     end: float
+    first_segment_index: int = 0
+    last_segment_index: int = 0
 
 
-def split_paragraph_spans(segments) -> list[Paragraph]:
+def split_paragraph_spans(segments, *, max_chars: int = MAX_PARAGRAPH_CHARS) -> list[Paragraph]:
     """Regroupe les segments en paragraphes, en s'appuyant sur les pauses."""
     paragraphs: list[Paragraph] = []
     current: list[str] = []
     length = 0
     start_at: float | None = None
     previous_end: float | None = None
+    first_index = 0
+    previous_index = 0
 
-    for segment in segments:
+    for index, segment in enumerate(segments, start=1):
         text = _text_of(segment).strip()
         if not text:
             continue
@@ -112,23 +116,27 @@ def split_paragraph_spans(segments) -> list[Paragraph]:
         pause = start - previous_end if previous_end is not None else 0.0
         should_break = current and (
             (pause >= PARAGRAPH_PAUSE and length >= MIN_PARAGRAPH_CHARS)
-            or length >= MAX_PARAGRAPH_CHARS
+            or length >= max(1, max_chars)
         )
         if should_break:
             paragraphs.append(
-                Paragraph(" ".join(current), start_at or 0.0, previous_end or 0.0)
+                Paragraph(" ".join(current), start_at or 0.0, previous_end or 0.0,
+                          first_index, previous_index)
             )
-            current, length, start_at = [], 0, None
+            current, length, start_at, first_index = [], 0, None, 0
 
         if start_at is None:
             start_at = start
+            first_index = index
         current.append(text)
         length += len(text) + 1
         previous_end = end
+        previous_index = index
 
     if current:
         paragraphs.append(
-            Paragraph(" ".join(current), start_at or 0.0, previous_end or 0.0)
+            Paragraph(" ".join(current), start_at or 0.0, previous_end or 0.0,
+                      first_index, previous_index)
         )
     return paragraphs
 
@@ -150,6 +158,8 @@ def basic_proofread(segments) -> ProofreadResult:
                     end=paragraph.end,
                     raw=paragraph.text,
                     clean=nettoye,
+                    block_id=f"block-{paragraph.first_segment_index}-{paragraph.last_segment_index}",
+                    source_segment_ids=[f"segment-{index}" for index in range(paragraph.first_segment_index, paragraph.last_segment_index + 1)],
                 )
             )
 

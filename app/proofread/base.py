@@ -21,6 +21,8 @@ class TextPair:
     end: float
     raw: str
     clean: str
+    block_id: str | None = None
+    source_segment_ids: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return asdict(self)

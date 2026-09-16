@@ -242,6 +242,7 @@
         <div class="blocks-zone" id="blocks-zone" hidden>
           <div class="blocks-header">
             <h3>Transcription</h3>
+            <button type="button" class="btn btn-mini btn-ghost" id="review-history-btn">Historique</button>
             <button type="button" class="btn btn-mini btn-ghost" id="manual-review-btn">
               Relecture manuelle
             </button>
@@ -604,6 +605,12 @@
       <button type="button" class="btn btn-primary" id="settings-save">Enregistrer</button>
     </div>
   </form>
+</dialog>
+
+<dialog id="review-history-dialog">
+  <h2>Historique des versions</h2>
+  <div id="review-history-list" class="annotation-list"></div>
+  <div class="dialog-actions"><button type="button" class="btn btn-ghost" id="review-history-close">Fermer</button></div>
 </dialog>
 
 <!-- ------------------------------------------------- passage élargi -->

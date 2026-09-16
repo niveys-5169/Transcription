@@ -101,6 +101,8 @@ class Claim:
     # Fraction (0..1) de la position dans le texte relu — convertie en
     # secondes par apply_verdicts, qui seul connaît la durée du média.
     start: float = 0.0
+    block_id: str | None = None
+    block_start: float | None = None
 
 
 @dataclass
@@ -142,6 +144,7 @@ class PendingCorrection:
     sources: list[Source] = field(default_factory=list)
     confiance: str = "basse"
     start: float = 0.0
+    block_id: str | None = None
     status: str = "attente"  # attente | validee | rejetee
 
     def to_dict(self) -> dict:
@@ -219,6 +222,7 @@ def _text_blocks(text: str, max_chars: int) -> list[tuple[str, int]]:
 def extract_claims(
     text: str,
     *,
+    review_blocks: list[dict] | None = None,
     settings=None,
     on_progress=None,
     should_cancel=None,
@@ -258,12 +262,16 @@ def extract_claims(
             claim_type = str(raw.get("type") or "").strip()
             local_pos = block_text.find(citation)
             approx_pos = offset + local_pos if local_pos != -1 else offset
+            matching = [block for block in (review_blocks or []) if citation and str(block.get("text") or "").find(citation) != -1]
+            anchor = matching[0] if len(matching) == 1 else None
             claims.append(
                 Claim(
                     type=claim_type if claim_type in CLAIM_TYPES else "autre",
                     citation=citation,
                     question=str(raw.get("question") or "").strip(),
                     start=approx_pos / total_len,
+                    block_id=anchor.get("id") if anchor else None,
+                    block_start=float(anchor.get("start") or 0) if anchor else None,
                 )
             )
 
@@ -477,7 +485,8 @@ def apply_verdicts(
                     explication=verdict.explication,
                     sources=list(verdict.sources),
                     confiance=verdict.confiance,
-                    start=verdict.claim.start * duration,
+                    start=verdict.claim.block_start if verdict.claim.block_start is not None else verdict.claim.start * duration,
+                    block_id=verdict.claim.block_id,
                 )
             )
 
@@ -491,7 +500,8 @@ def apply_verdicts(
                     kind="fait",
                     severity=severity,
                     message=message,
-                    start=verdict.claim.start * duration,
+                    start=verdict.claim.block_start if verdict.claim.block_start is not None else verdict.claim.start * duration,
+                    block_id=verdict.claim.block_id,
                     raw_excerpt=citation,
                     clean_excerpt=verdict.forme_correcte or citation,
                     source="web",
@@ -542,6 +552,7 @@ def reject_pending(clean_text: str, pending: PendingCorrection) -> str:
 def factcheck(
     clean_text: str,
     *,
+    review_blocks: list[dict] | None = None,
     duration: float = 0.0,
     settings=None,
     on_progress=None,
@@ -552,6 +563,7 @@ def factcheck(
 
     claims = extract_claims(
         clean_text,
+        review_blocks=review_blocks,
         settings=settings,
         on_progress=_scaled(on_progress, 0.0, 0.3, "Repérage des affirmations…"),
         should_cancel=should_cancel,

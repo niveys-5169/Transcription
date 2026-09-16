@@ -401,6 +401,16 @@ def run_proofread(job_id: str) -> None:
             should_cancel=lambda: is_cancelled(job_id),
         )
 
+        # Une relance ne détruit jamais une édition : la version courante est
+        # figée avant de devenir la nouvelle transcription IA active.
+        current = db.get_job(job_id)
+        previous_version = int((current or {}).get("review_version") or 0)
+        had_review = bool((current or {}).get("clean_text"))
+        if had_review:
+            db.archive_review_version(job_id, reason="Avant nouvelle relecture IA")
+        blocks = db.review_blocks_from_pairs(result.pairs, segments)
+        clean_text = db.clean_text_from_blocks(blocks)
+
         report = verify(
             result.pairs,
             use_claude=bool(job.get("verify", True)) and result.mode == "claude",
@@ -416,7 +426,9 @@ def run_proofread(job_id: str) -> None:
             stage="Terminé",
             progress=1.0,
             task=None,
-            clean_text=result.text,
+            clean_text=clean_text,
+            review_blocks=blocks,
+            review_version=previous_version + 1 if had_review else previous_version,
             title=result.title,
             summary=json.dumps(result.summary, ensure_ascii=False),
             proofread=result.mode,
@@ -481,7 +493,9 @@ def _proofread(job: dict, segments: list[dict], *, on_progress, should_cancel):
             text="\n\n".join(p.text for p in paragraphs),
             mode="none",
             pairs=[
-                TextPair(start=p.start, end=p.end, raw=p.text, clean=p.text)
+                TextPair(start=p.start, end=p.end, raw=p.text, clean=p.text,
+                         block_id=f"block-{p.first_segment_index}-{p.last_segment_index}",
+                         source_segment_ids=[f"segment-{i}" for i in range(p.first_segment_index, p.last_segment_index + 1)])
                 for p in paragraphs
             ],
         )
@@ -585,6 +599,7 @@ def run_factcheck(job_id: str) -> None:
         settings = config.load_settings()
         new_text, report, entities = factcheck_module.factcheck(
             clean_text,
+            review_blocks=job.get("review_blocks") or [],
             duration=float(job.get("duration") or 0.0),
             settings=settings,
             on_progress=progress.scaled(0.0, 1.0, "Vérification externe…"),

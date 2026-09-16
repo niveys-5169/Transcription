@@ -635,6 +635,11 @@ audio#audio-player { display: block; }
 }
 .block-time.needs-review { color: var(--danger); font-weight: 750; }
 .block-time.needs-review::after { content: " !"; }
+.block-raw { margin-top: 9px; color: var(--text-soft); font-size: 13px; }
+.block-raw summary { cursor: pointer; color: var(--accent); }
+.block-raw p { white-space: pre-wrap; margin: 7px 0; }
+.block-flash { animation: block-flash 1.5s ease-out; }
+@keyframes block-flash { 0%, 45% { outline: 2px solid var(--accent); outline-offset: 2px; } 100% { outline-color: transparent; } }
 
 @media (min-width: 1800px) {
   .app-shell { grid-template-columns: minmax(330px, .9fr) minmax(700px, 2.7fr) minmax(350px, 1fr); }

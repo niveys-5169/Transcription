@@ -69,8 +69,8 @@ def test_blocs_de_revision_sont_crees_a_la_demande_et_editables(client, tmp_path
 
     body = client.get(f"/api/jobs/{job_id}/review-blocks").json()
     assert body["blocks"] == [
-        {"id": "segment-1", "start": 1.0, "end": 3.5, "text": "Bonjour à tous.", "confidence": None, "speaker": None, "role": None},
-        {"id": "segment-2", "start": 4.0, "end": 7.0, "text": "Le second passage.", "confidence": None, "speaker": None, "role": None},
+        {"id": "segment-1", "start": 1.0, "end": 3.5, "text": "Bonjour à tous.", "raw_text": "Bonjour à tous.", "source_segment_ids": ["segment-1"], "confidence": None, "speaker": None, "role": None},
+        {"id": "segment-2", "start": 4.0, "end": 7.0, "text": "Le second passage.", "raw_text": "Le second passage.", "source_segment_ids": ["segment-2"], "confidence": None, "speaker": None, "role": None},
     ]
 
     response = client.put(
@@ -116,6 +116,25 @@ def test_annotations_sont_persistantes_et_validees(client, tmp_path):
     assert client.delete(f"/api/jobs/{job_id}/annotations/{annotation_id}").json() == {
         "deleted": annotation_id
     }
+
+
+def test_surlignage_cible_et_historique_restaurable(client, tmp_path):
+    job_id = _job(tmp_path)
+    client.get(f"/api/jobs/{job_id}/review-blocks")
+    annotation = client.post(f"/api/jobs/{job_id}/annotations", json={
+        "block_id": "segment-1", "type": "highlight", "color": "yellow",
+        "range_start": 0, "range_end": 7,
+    })
+    assert annotation.status_code == 200
+    db.update_job(job_id, clean_text="Bonjour à tous.")
+    snapshot = db.archive_review_version(job_id, reason="Test")
+    assert snapshot
+    assert client.get(f"/api/jobs/{job_id}/review-versions").json()["versions"][0]["id"] == snapshot
+    client.put(f"/api/jobs/{job_id}/review-blocks/segment-1", json={"text": "Modifié."})
+    restored = client.post(f"/api/jobs/{job_id}/review-versions/{snapshot}/restore")
+    assert restored.status_code == 200
+    assert db.ensure_review_blocks(job_id)[0]["text"] == "Bonjour à tous."
+    assert client.get(f"/api/jobs/{job_id}/annotations").json()["annotations"][0]["range_end"] == 7
 
 
 def test_recherche_globale_retourne_un_horodatage_de_bloc(client, tmp_path):

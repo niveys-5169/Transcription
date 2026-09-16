@@ -143,6 +143,9 @@ priorité à l'éditeur.
 - Cliquer un horodatage positionne le lecteur ; le bloc en cours est suivi
   visuellement. Un bloc se modifie en ligne : `Échap` annule et
   `Ctrl/Cmd+Entrée` enregistre.
+- Après relecture, l'éditeur affiche la version IA. Le bouton **Brut** de
+  chaque passage révèle la source Whisper et permet de réécouter exactement
+  son intervalle horodaté.
 - Les segments peu fiables peuvent être teintés discrètement lorsque le
   moteur fournit une confiance. La teinte disparaît après une correction
   humaine et ne change jamais le texte ni ses exports.
@@ -150,7 +153,9 @@ priorité à l'éditeur.
   bibliothèque ouvre directement le travail et son horodatage. Les listes
   très longues sont rendues par lots de 250 blocs.
 - Notes, surlignages et états « à vérifier / validé / ignoré » sont liés à un
-  bloc et persistent dans SQLite. Les tags de bibliothèque restent locaux au
+  bloc ; les surlignages peuvent viser une expression précise. Une nouvelle
+  relecture archive la version et ses annotations, restaurables depuis
+  **Historique**. Les tags de bibliothèque restent locaux au
   navigateur.
 - Un travail peut être annulé, puis repris depuis le fichier d'origine ; les
   actions impossibles ou déjà en cours restent explicitement désactivées.

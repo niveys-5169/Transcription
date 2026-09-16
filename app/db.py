@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     clean_text    TEXT,
     segments      TEXT,
     review_blocks TEXT,
+    review_version INTEGER DEFAULT 0,
     manual_review_status TEXT DEFAULT 'not_started',
     verification  TEXT,
     error         TEXT,
@@ -56,12 +57,27 @@ CREATE TABLE IF NOT EXISTS annotations (
     color      TEXT,
     content    TEXT,
     status     TEXT,
+    range_start INTEGER,
+    range_end   INTEGER,
+    review_version INTEGER DEFAULT 0,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_annotations_job ON annotations (job_id, block_id);
 CREATE INDEX IF NOT EXISTS idx_annotations_status ON annotations (job_id, status);
+CREATE TABLE IF NOT EXISTS review_versions (
+    id TEXT PRIMARY KEY,
+    job_id TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    reason TEXT NOT NULL,
+    blocks TEXT NOT NULL,
+    clean_text TEXT NOT NULL,
+    annotations TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_review_versions_job ON review_versions (job_id, version DESC);
 """
 
 # Colonnes ajoutées après coup : appliquées à une base existante au démarrage.
@@ -77,12 +93,19 @@ MIGRATIONS = {
     "entities": "TEXT",
     "obsidian_path": "TEXT",
     "review_blocks": "TEXT",
+    "review_version": "INTEGER DEFAULT 0",
     # Relecture humaine optionnelle, indépendante de la relecture IA.
     "manual_review_status": "TEXT DEFAULT 'not_started'",
     "obsidian_published_at": "TEXT",
     "notebooklm_status": "TEXT DEFAULT 'non_configure'",
     "notebooklm_synced_at": "TEXT",
     "notebooklm_error": "TEXT",
+}
+
+ANNOTATION_MIGRATIONS = {
+    "range_start": "INTEGER",
+    "range_end": "INTEGER",
+    "review_version": "INTEGER DEFAULT 0",
 }
 
 # Colonnes lourdes, exclues des listes (une transcription d'une heure fait
@@ -155,6 +178,12 @@ def init_db(db_path: Path | None = None) -> None:
         for colonne, definition in MIGRATIONS.items():
             if colonne not in existantes:
                 conn.execute(f"ALTER TABLE jobs ADD COLUMN {colonne} {definition}")
+        annotations = {
+            row["name"] for row in conn.execute("PRAGMA table_info(annotations)").fetchall()
+        }
+        for colonne, definition in ANNOTATION_MIGRATIONS.items():
+            if colonne not in annotations:
+                conn.execute(f"ALTER TABLE annotations ADD COLUMN {colonne} {definition}")
 
 
 def _row_to_dict(row: sqlite3.Row) -> dict:
@@ -347,7 +376,7 @@ def ensure_review_blocks(job_id: str) -> list[dict]:
     if not segments:
         return []
     blocks = review_blocks_from_segments(segments)
-    update_job(job_id, review_blocks=blocks)
+    update_job(job_id, review_blocks=blocks, clean_text=clean_text_from_blocks(blocks))
     return blocks
 
 
@@ -359,6 +388,8 @@ def review_blocks_from_segments(segments: list[dict]) -> list[dict]:
             "start": float(segment.get("start") or 0),
             "end": float(segment.get("end") or 0),
             "text": str(segment.get("text") or "").strip(),
+            "raw_text": str(segment.get("text") or "").strip(),
+            "source_segment_ids": [f"segment-{index}"],
             "confidence": segment.get("confidence"),
             # La diarisation n'est pas devinée : Whisper ne fournit pas une
             # identité fiable. Ces champs permettent à la personne qui écoute
@@ -368,6 +399,76 @@ def review_blocks_from_segments(segments: list[dict]) -> list[dict]:
         }
         for index, segment in enumerate(segments, start=1)
     ]
+
+
+def review_blocks_from_pairs(pairs, segments: list[dict]) -> list[dict]:
+    """Matérialise les paragraphes relus en gardant leur preuve Whisper."""
+    blocks = []
+    for number, pair in enumerate(pairs, start=1):
+        source_ids = list(getattr(pair, "source_segment_ids", None) or [])
+        if not source_ids:
+            # Compatibilité des anciennes paires : intervalle semi-ouvert.
+            source_ids = [
+                f"segment-{index}" for index, segment in enumerate(segments, start=1)
+                if float(segment.get("end") or 0) > pair.start
+                and float(segment.get("start") or 0) < pair.end
+            ]
+            if not source_ids and segments:
+                nearest = min(range(len(segments)), key=lambda i: abs(float(segments[i].get("start") or 0) - pair.start))
+                source_ids = [f"segment-{nearest + 1}"]
+        block_id = getattr(pair, "block_id", None) or f"block-{number}"
+        blocks.append({
+            "id": block_id, "start": pair.start, "end": pair.end,
+            "text": pair.clean, "raw_text": pair.raw,
+            "source_segment_ids": source_ids, "confidence": None,
+            "speaker": None, "role": None,
+        })
+    return blocks
+
+
+def clean_text_from_blocks(blocks: list[dict]) -> str:
+    return "\n\n".join(str(block.get("text") or "").strip() for block in blocks if str(block.get("text") or "").strip())
+
+
+def archive_review_version(job_id: str, *, reason: str) -> str | None:
+    job = get_job(job_id)
+    if not job or not job.get("review_blocks"):
+        return None
+    version = int(job.get("review_version") or 0)
+    snapshot_id = uuid.uuid4().hex
+    annotations = list_annotations(job_id, review_version=version)
+    with connect() as conn:
+        conn.execute("INSERT INTO review_versions (id, job_id, version, reason, blocks, clean_text, annotations, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                     (snapshot_id, job_id, version, reason, json.dumps(job["review_blocks"], ensure_ascii=False),
+                      job.get("clean_text") or clean_text_from_blocks(job["review_blocks"]),
+                      json.dumps(annotations, ensure_ascii=False), _now()))
+    return snapshot_id
+
+
+def list_review_versions(job_id: str) -> list[dict]:
+    with connect() as conn:
+        rows = conn.execute("SELECT id, version, reason, created_at FROM review_versions WHERE job_id = ? ORDER BY created_at DESC", (job_id,)).fetchall()
+    return [dict(row) for row in rows]
+
+
+def restore_review_version(job_id: str, snapshot_id: str) -> bool:
+    job = get_job(job_id)
+    if not job:
+        return False
+    with connect() as conn:
+        row = conn.execute("SELECT * FROM review_versions WHERE id = ? AND job_id = ?", (snapshot_id, job_id)).fetchone()
+    if not row:
+        return False
+    archive_review_version(job_id, reason="Avant restauration")
+    blocks = json.loads(row["blocks"])
+    annotations = json.loads(row["annotations"])
+    version = int(job.get("review_version") or 0) + 1
+    update_job(job_id, review_blocks=blocks, clean_text=clean_text_from_blocks(blocks), review_version=version)
+    for annotation in annotations:
+        create_annotation(job_id, block_id=annotation["block_id"], kind=annotation["type"], color=annotation.get("color"),
+                          content=annotation.get("content"), status=annotation.get("status"), range_start=annotation.get("range_start"),
+                          range_end=annotation.get("range_end"), review_version=version)
+    return True
 
 
 _UNSET = object()
@@ -414,14 +515,28 @@ def update_review_block(
                 if block is not target and block.get("speaker") == current_speaker:
                     block["role"] = role
 
-    update_job(job_id, review_blocks=blocks)
+    update_job(job_id, review_blocks=blocks, clean_text=clean_text_from_blocks(blocks))
     return target
 
 
-def list_annotations(job_id: str) -> list[dict]:
+def replace_in_review_block(job_id: str, block_id: str, citation: str, replacement: str) -> bool:
+    """Substitution exacte, limitée à un seul bloc canonique."""
+    blocks = ensure_review_blocks(job_id)
+    matches = [block for block in blocks if block.get("id") == block_id and str(block.get("text") or "").count(citation) == 1]
+    if len(matches) != 1:
+        return False
+    matches[0]["text"] = str(matches[0]["text"]).replace(citation, replacement, 1)
+    update_job(job_id, review_blocks=blocks, clean_text=clean_text_from_blocks(blocks))
+    return True
+
+
+def list_annotations(job_id: str, *, review_version: int | None = None) -> list[dict]:
+    if review_version is None:
+        job = get_job(job_id, with_content=False)
+        review_version = int((job or {}).get("review_version") or 0)
     with connect() as conn:
         rows = conn.execute(
-            "SELECT * FROM annotations WHERE job_id = ? ORDER BY created_at ASC", (job_id,)
+            "SELECT * FROM annotations WHERE job_id = ? AND review_version = ? ORDER BY created_at ASC", (job_id, review_version)
         ).fetchall()
     return [dict(row) for row in rows]
 
@@ -434,27 +549,34 @@ def create_annotation(
     color: str | None = None,
     content: str | None = None,
     status: str | None = None,
+    range_start: int | None = None,
+    range_end: int | None = None,
+    review_version: int | None = None,
 ) -> dict:
     annotation_id = uuid.uuid4().hex
     now = _now()
+    if review_version is None:
+        job = get_job(job_id, with_content=False)
+        review_version = int((job or {}).get("review_version") or 0)
     with connect() as conn:
         conn.execute(
             """
             INSERT INTO annotations
-                (id, job_id, block_id, type, color, content, status, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (id, job_id, block_id, type, color, content, status, range_start, range_end, review_version, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (annotation_id, job_id, block_id, kind, color, content, status, now, now),
+            (annotation_id, job_id, block_id, kind, color, content, status, range_start, range_end, review_version, now, now),
         )
     return {
         "id": annotation_id, "job_id": job_id, "block_id": block_id,
         "type": kind, "color": color, "content": content, "status": status,
+        "range_start": range_start, "range_end": range_end, "review_version": review_version,
         "created_at": now, "updated_at": now,
     }
 
 
 def update_annotation(annotation_id: str, **fields: Any) -> dict | None:
-    allowed = {"type", "color", "content", "status"}
+    allowed = {"type", "color", "content", "status", "range_start", "range_end"}
     fields = {key: value for key, value in fields.items() if key in allowed}
     if not fields:
         return get_annotation(annotation_id)

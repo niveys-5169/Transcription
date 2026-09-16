@@ -10,8 +10,8 @@ from ..config import Settings, load_settings
 from ..lexicon import glossary_block
 from . import prompts
 from .base import ProofreadError, ProofreadResult, TextPair
-from .basic import clean_line
-from .chunking import build_chunks, tail
+from .basic import clean_line, split_paragraph_spans
+from .chunking import TextChunk, tail
 from .claude import CONTEXT_CHARS, MIN_LENGTH_RATIO, MAX_TOKENS_RELECTURE, MAX_TOKENS_STRUCTURE, STRUCTURE_INPUT_LIMIT
 from .structure import insert_headings, parse_json_object
 
@@ -71,7 +71,8 @@ class NimProofreader:
         available, detail = self.is_available()
         if not available:
             raise ProofreadError(detail)
-        chunks = build_chunks(segments, self.settings.proofread_chunk_chars)
+        paragraphs = split_paragraph_spans(segments, max_chars=self.settings.proofread_chunk_chars)
+        chunks = [TextChunk(i, p.start, p.end, p.text) for i, p in enumerate(paragraphs)]
         if not chunks:
             return ProofreadResult(text="", mode="nim")
         cleaned, pairs = [], []
@@ -91,7 +92,10 @@ class NimProofreader:
                 logger.warning("NIM a trop raccourci le bloc %s ; repli mécanique.", chunk.index + 1)
                 text = clean_line(chunk.text)
             cleaned.append(text)
-            pairs.append(TextPair(start=chunk.start, end=chunk.end, raw=chunk.text, clean=text))
+            paragraph = paragraphs[chunk.index]
+            pairs.append(TextPair(start=chunk.start, end=chunk.end, raw=chunk.text, clean=text,
+                                  block_id=f"block-{paragraph.first_segment_index}-{paragraph.last_segment_index}",
+                                  source_segment_ids=[f"segment-{i}" for i in range(paragraph.first_segment_index, paragraph.last_segment_index + 1)]))
         result = ProofreadResult(text="\n\n".join(part for part in cleaned if part).strip(), mode="nim", pairs=pairs)
         if structure and result.text:
             try:

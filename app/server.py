@@ -407,6 +407,20 @@ async def put_review_block(job_id: str, block_id: str, payload: dict = Body(...)
     return block
 
 
+@app.get("/api/jobs/{job_id}/review-versions")
+async def get_review_versions(job_id: str) -> dict:
+    if db.get_job(job_id, with_content=False) is None:
+        raise HTTPException(404, "Travail introuvable.")
+    return {"versions": db.list_review_versions(job_id)}
+
+
+@app.post("/api/jobs/{job_id}/review-versions/{version_id}/restore")
+async def restore_review_version(job_id: str, version_id: str) -> dict:
+    if not db.restore_review_version(job_id, version_id):
+        raise HTTPException(404, "Version introuvable.")
+    return _decorate(db.get_job(job_id))
+
+
 @app.post("/api/jobs/{job_id}/manual-review")
 async def set_manual_review(job_id: str, payload: dict = Body(default={})) -> dict:
     """Démarre ou clôt une repasse humaine, sans modifier le texte IA.
@@ -449,6 +463,14 @@ def _annotation_payload(payload: dict, *, partial: bool = False) -> dict:
             if value is not None and not isinstance(value, str):
                 raise HTTPException(400, f"Le champ « {key} » doit être du texte.")
             fields[key] = value
+    has_start, has_end = "range_start" in payload, "range_end" in payload
+    if has_start != has_end:
+        raise HTTPException(400, "Les bornes de surlignage doivent être fournies ensemble.")
+    if has_start:
+        start, end = payload["range_start"], payload["range_end"]
+        if not isinstance(start, int) or not isinstance(end, int) or start < 0 or start >= end:
+            raise HTTPException(400, "Plage de surlignage invalide.")
+        fields["range_start"], fields["range_end"] = start, end
     if not partial and "type" not in fields:
         raise HTTPException(400, "Le type d'annotation est obligatoire.")
     return fields
@@ -473,7 +495,8 @@ async def post_annotation(job_id: str, payload: dict = Body(...)) -> dict:
     fields = _annotation_payload(payload)
     return db.create_annotation(job_id, block_id=block_id, kind=fields["type"],
                                 color=fields.get("color"), content=fields.get("content"),
-                                status=fields.get("status"))
+                                status=fields.get("status"), range_start=fields.get("range_start"),
+                                range_end=fields.get("range_end"))
 
 
 @app.patch("/api/jobs/{job_id}/annotations/{annotation_id}")
@@ -614,17 +637,19 @@ async def valider_correction(job_id: str, correction_id: str) -> dict:
         raise HTTPException(409, "Cette correction a déjà été traitée.")
 
     correction = factcheck_module.PendingCorrection(**item)
-    nouveau_texte = factcheck_module.accept_pending(job.get("clean_text") or "", correction)
-    if nouveau_texte is None:
-        raise HTTPException(
-            409,
-            "Cette citation ne se retrouve plus dans le texte relu actuel : "
-            "corrigez-la manuellement si nécessaire.",
-        )
+    if correction.block_id:
+        applied = db.replace_in_review_block(job_id, correction.block_id, correction.citation, correction.proposition)
+    else:  # Compatibilité des rapports existants, sans ancrage de bloc.
+        nouveau_texte = factcheck_module.accept_pending(job.get("clean_text") or "", correction)
+        applied = nouveau_texte is not None
+        if applied:
+            db.update_job(job_id, clean_text=nouveau_texte)
+    if not applied:
+        raise HTTPException(409, "Cette citation ne se retrouve pas une seule fois dans son bloc relu : corrigez-la manuellement si nécessaire.")
 
     item["status"] = "validee"
     report["corrections"] = int(report.get("corrections") or 0) + 1
-    db.update_job(job_id, clean_text=nouveau_texte, factcheck_report=report)
+    db.update_job(job_id, factcheck_report=report)
     return _decorate(db.get_job(job_id))
 
 

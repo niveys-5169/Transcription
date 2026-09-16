@@ -21,6 +21,7 @@ const state = {
   annotationsJobId: null,
   editingAnnotationId: null,
   contextMenuBlockId: null,
+  contextMenuSelection: null,
   editorMatches: [],
   editorMatchIndex: -1,
   globalResults: [],
@@ -623,7 +624,7 @@ function renderFindingCard(point) {
   return `
     <div class="finding ${escapeHtml(point.severity)}">
       <div class="finding-head">
-        <time>${clock(point.start)}</time>
+        <time${point.block_id ? ` class="block-time" data-action="focus-finding" data-block-id="${escapeHtml(point.block_id)}"` : ""}>${clock(point.start)}</time>
         <span class="finding-kind">${escapeHtml(KIND_LABELS[point.kind] || point.kind)}</span>
         <span class="finding-kind">${escapeHtml(sourceLabel(point))}</span>
         ${hasExcerpt ? `<button type="button" class="finding-expand" data-idx="${idx}">✉ Voir le passage</button>` : ""}
@@ -978,7 +979,7 @@ function moveEditorMatch(direction) {
 // purement textuelle avec le segment brut de même index, sans flag serveur
 // dédié : review_blocks_from_segments() garantit la correspondance 1:1.
 function isBlockEdited(block, index, segments) {
-  const original = segments && segments[index] ? segments[index].text || "" : "";
+  const original = block.raw_text || (segments && segments[index] ? segments[index].text || "" : "");
   return (block.text || "").trim() !== original.trim();
 }
 
@@ -990,9 +991,7 @@ function anyBlockEdited() {
 function currentText() {
   const job = state.detail;
   if (!job) return "";
-  if (state.blocks.length && anyBlockEdited()) {
-    return state.blocks.map((block) => block.text).join("\n\n");
-  }
+  if (state.blocks.length) return state.blocks.map((block) => block.text).join("\n\n");
   return job.clean_text || job.raw_text || "";
 }
 
@@ -1252,7 +1251,25 @@ function confidenceClass(score) {
 function renderBlockText(block, index, segments) {
   const edited = isBlockEdited(block, index, segments);
   const cls = edited ? "" : confidenceClass(block.confidence);
-  return `<p class="block-text ${cls}" data-action="edit">${highlightEditorText(block.text)}${
+  const highlights = state.annotations.filter((item) => item.type === "highlight" && item.block_id === block.id && Number.isInteger(item.range_start) && Number.isInteger(item.range_end))
+    .sort((a, b) => a.range_start - b.range_start);
+  let cursor = 0;
+  const rendered = highlights.reduce((html, item) => {
+    if (item.range_start < cursor || item.range_end > block.text.length) return html;
+    cursor = item.range_end;
+    return html + escapeHtml(block.text.slice(cursor === item.range_end ? 0 : 0, 0));
+  }, "");
+  // Une seule plage active est rendue par annotation ; les plages qui se
+  // chevauchent restent listées mais ne cassent jamais le texte éditable.
+  let html = "", position = 0;
+  for (const item of highlights) {
+    if (item.range_start < position || item.range_end > block.text.length) continue;
+    html += escapeHtml(block.text.slice(position, item.range_start));
+    html += `<mark class="annotation-highlight-${escapeHtml(item.color || "yellow")}">${escapeHtml(block.text.slice(item.range_start, item.range_end))}</mark>`;
+    position = item.range_end;
+  }
+  html += highlights.length ? escapeHtml(block.text.slice(position)) : highlightEditorText(block.text);
+  return `<p class="block-text ${cls}" data-action="edit">${html}${
     edited ? '<span class="block-edited-badge">modifié</span>' : ""
   }</p>`;
 }
@@ -1298,9 +1315,14 @@ function renderBlocks() {
       const needsReview = reviewBlockIds.has(block.id);
       const speakerControls = renderSpeakerControls(block);
       const confidenceLabel = block.confidence == null ? "" : `<span class="confidence-badge ${confidence}">${Math.round(block.confidence * 100)} % ${block.confidence < .6 ? "— confiance faible" : block.confidence < .8 ? "— à confirmer" : "— confiance élevée"}</span>`;
+      const raw = block.raw_text || (block.source_segment_ids || []).map((id) => {
+        const at = Number(id.replace("segment-", "")) - 1; return (segments[at] || {}).text || "";
+      }).join(" ");
+      const hasReviewed = job && ["done", "checked", "published"].includes(job.status);
+      const rawControl = hasReviewed ? `<details class="block-raw"><summary>Brut</summary><p>${escapeHtml(raw)}</p><button type="button" class="btn btn-mini btn-ghost" data-action="seek" data-id="${block.id}">Écouter ce passage</button></details>` : "";
       return `<div class="block ${confidence}${needsReview ? " needs-review" : ""}${isActive ? " is-active-block" : ""}" data-block-id="${block.id}">
         <time class="block-time${needsReview ? " needs-review" : ""}" data-action="seek" data-id="${block.id}" title="${needsReview ? "Passage à vérifier" : "Aller à cet horodatage"}">${clock(block.start)}</time>
-        <div class="block-body">${speakerControls}${body}${confidenceLabel}</div>
+        <div class="block-body">${speakerControls}${body}${confidenceLabel}${rawControl}</div>
       </div>`;
     }).join("");
   }
@@ -1310,6 +1332,8 @@ function renderBlocks() {
   more.hidden = remaining <= 0;
   if (remaining > 0) more.textContent = `Afficher les ${Math.min(250, remaining)} blocs suivants (${remaining} restants)`;
 
+  const title = document.querySelector(".blocks-header h3");
+  if (title) title.textContent = job && ["done", "checked", "published"].includes(job.status) ? "Transcription relue" : "Transcription brute";
   $("blocks-edited-flag").hidden = !anyBlockEdited();
   renderManualReviewStatus();
 }
@@ -1356,6 +1380,20 @@ async function saveSpeakerField(blockId, fields) {
 function seekToBlock(blockId) {
   const block = state.blocks.find((b) => b.id === blockId);
   if (block) seekTo(block.start);
+}
+
+function focusBlock(blockId) {
+  const index = state.blocks.findIndex((block) => block.id === blockId);
+  if (index < 0) return;
+  if (index >= state.blocksRenderLimit) state.blocksRenderLimit = Math.ceil((index + 1) / 250) * 250;
+  state.activeBlockId = blockId;
+  renderBlocks(); renderAnnotations(); seekToBlock(blockId);
+  const node = document.querySelector(`.block[data-block-id="${blockId}"]`);
+  if (node) {
+    node.scrollIntoView({ block: "center", behavior: "smooth" });
+    node.classList.add("block-flash");
+    setTimeout(() => node.classList.remove("block-flash"), 1500);
+  }
 }
 
 function updateActiveBlockFromTime() {
@@ -1457,6 +1495,7 @@ function initBlocksList() {
 
     const editTarget = event.target.closest('[data-action="edit"]');
     if (editTarget) {
+      if (window.getSelection().toString()) return;
       const blockEl = editTarget.closest(".block");
       if (blockEl) startBlockEdit(blockEl.dataset.blockId);
       return;
@@ -1481,6 +1520,14 @@ function initBlocksList() {
     const blockEl = event.target.closest(".block");
     if (!blockEl) return;
     event.preventDefault();
+    const selection = window.getSelection();
+    state.contextMenuSelection = null;
+    if (selection && selection.toString() && selection.rangeCount && selection.anchorNode && blockEl.querySelector(".block-text")?.contains(selection.anchorNode)) {
+      const textEl = blockEl.querySelector(".block-text");
+      const range = selection.getRangeAt(0);
+      const before = range.cloneRange(); before.selectNodeContents(textEl); before.setEnd(range.startContainer, range.startOffset);
+      state.contextMenuSelection = { blockId: blockEl.dataset.blockId, start: before.toString().length, end: before.toString().length + selection.toString().length };
+    }
     openBlockContextMenu(event.clientX, event.clientY, blockEl.dataset.blockId);
   });
 }
@@ -1533,7 +1580,10 @@ function initBlockContextMenu() {
       return;
     }
     if (highlight) {
-      createAnnotation(blockId, "highlight", { color: highlight, status: "a_verifier" });
+      const selected = state.contextMenuSelection;
+      const extra = { color: highlight, status: "a_verifier" };
+      if (selected && selected.blockId === blockId) { extra.range_start = selected.start; extra.range_end = selected.end; }
+      createAnnotation(blockId, "highlight", extra);
       closeBlockContextMenu();
       return;
     }
@@ -1592,9 +1642,9 @@ async function refreshGlobalSearch() {
 
 function renderComparisonPanel(job) {
   const zone = $("comparison-zone");
-  if (!job.clean_text) { zone.hidden = true; return; }
-  zone.hidden = false;
-  $("comparison-body").innerHTML = renderTranscript(job.clean_text);
+  // Le relu est désormais l'éditeur central ; le brut est disponible par
+  // passage via « Brut », il n'y a plus de seconde version concurrente.
+  zone.hidden = true;
 }
 
 /* --------------------------------------------------------- raccourcis clavier */
@@ -2157,8 +2207,7 @@ function initActions() {
     if (!action || !card) return;
     const annotationId = card.dataset.annotationId;
     if (action === "jump") {
-      state.activeBlockId = event.target.dataset.blockId;
-      renderBlocks(); renderAnnotations(); seekToBlock(state.activeBlockId);
+      focusBlock(event.target.dataset.blockId);
     } else if (action === "delete") {
       removeAnnotation(annotationId);
     } else if (action === "valider") {
@@ -2177,6 +2226,29 @@ function initActions() {
       state.editingAnnotationId = null;
       updateAnnotation(annotationId, { content });
     }
+  });
+
+  $("review-history-btn").addEventListener("click", async () => {
+    const job = state.detail;
+    if (!job) return;
+    try {
+      const data = await api(`/api/jobs/${job.id}/review-versions`);
+      $("review-history-list").innerHTML = data.versions.length ? data.versions.map((version) =>
+        `<article class="annotation-item"><p><b>Version ${version.version}</b> — ${escapeHtml(version.reason)}</p><small>${escapeHtml(formatDate(version.created_at))}</small><button class="btn btn-mini btn-ghost" data-restore-version="${version.id}">Restaurer</button></article>`
+      ).join("") : `<p class="empty">Aucune version archivée.</p>`;
+      $("review-history-dialog").showModal();
+    } catch (error) { toast(error.message, true); }
+  });
+  $("review-history-close").addEventListener("click", () => $("review-history-dialog").close());
+  $("review-history-list").addEventListener("click", async (event) => {
+    const button = event.target.closest("[data-restore-version]");
+    const job = state.detail;
+    if (!button || !job || !window.confirm("Restaurer cette version ? La version actuelle sera archivée.")) return;
+    try {
+      const updated = await api(`/api/jobs/${job.id}/review-versions/${button.dataset.restoreVersion}/restore`, { method: "POST" });
+      state.detail = updated; state.blocks = []; state.blocksJobId = null; state.annotationsJobId = null;
+      $("review-history-dialog").close(); renderDetail(); toast("Version restaurée.");
+    } catch (error) { toast(error.message, true); }
   });
   $("annotation-list").addEventListener("change", (event) => {
     if (event.target.dataset.annotationAction !== "status") return;
@@ -2246,10 +2318,12 @@ function initActions() {
   $("folder-browser-cancel").addEventListener("click", () => { $("folder-browser").hidden = true; });
 
   document.addEventListener("click", (event) => {
+    const findingTime = event.target.closest('[data-action="focus-finding"]');
+    if (findingTime) { focusBlock(findingTime.dataset.blockId); return; }
     const button = event.target.closest(".finding-expand");
     if (!button) return;
     const point = findingRegistry[Number(button.dataset.idx)];
-    if (point) openPassage(point);
+    if (point) { if (point.block_id) focusBlock(point.block_id); openPassage(point); }
   });
   $("passage-close").addEventListener("click", () => $("passage-dialog").close());
 

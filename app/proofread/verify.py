@@ -75,6 +75,7 @@ class Finding:
     severity: str
     message: str
     start: float = 0.0
+    block_id: str | None = None
     raw_excerpt: str = ""
     clean_excerpt: str = ""
     source: str = "regles"
@@ -232,7 +233,7 @@ def rule_findings(pairs: list[TextPair], *, lexicon_enabled: bool = True) -> lis
                     kind="chiffre",
                     severity="haute",
                     message=f"Le nombre « {nombre} » est prononcé mais absent du texte relu.",
-                    start=pair.start,
+                    start=pair.start, block_id=pair.block_id,
                     raw_excerpt=_excerpt(pair.raw, nombre),
                     clean_excerpt=_missing_context_excerpt(pair.raw, pair.clean, nombre),
                 )
@@ -251,7 +252,7 @@ def rule_findings(pairs: list[TextPair], *, lexicon_enabled: bool = True) -> lis
                     kind="terme",
                     severity="haute" if connu else "moyenne",
                     message=f"Le sigle « {sigle} » est prononcé mais absent du texte relu.",
-                    start=pair.start,
+                    start=pair.start, block_id=pair.block_id,
                     raw_excerpt=_excerpt(pair.raw, sigle),
                     clean_excerpt=_missing_context_excerpt(pair.raw, pair.clean, sigle),
                 )
@@ -269,7 +270,7 @@ def rule_findings(pairs: list[TextPair], *, lexicon_enabled: bool = True) -> lis
                         f"Ce passage a perdu {perte} % de sa longueur à la "
                         "relecture : à comparer avec le texte brut."
                     ),
-                    start=pair.start,
+                    start=pair.start, block_id=pair.block_id,
                     raw_excerpt=_excerpt_from_span(pair.raw, raw_span) if raw_span else _excerpt(pair.raw),
                     clean_excerpt=_excerpt_from_span(pair.clean, clean_span) if clean_span else "",
                 )
@@ -290,7 +291,7 @@ def rule_findings(pairs: list[TextPair], *, lexicon_enabled: bool = True) -> lis
                             + (f" ({'/'.join(terme.sigles)})" if terme.sigles else "")
                             + " sans lui être identique : graphie à vérifier."
                         ),
-                        start=pair.start,
+                        start=pair.start, block_id=pair.block_id,
                         raw_excerpt=_excerpt(pair.raw, mot),
                         clean_excerpt=_excerpt(pair.clean, mot),
                         source="lexique",
@@ -385,7 +386,7 @@ class ClaudeVerifier:
                     kind=kind if kind in KINDS else "sens",
                     severity=severity if severity in SEVERITIES else "moyenne",
                     message=message,
-                    start=pair.start,
+                    start=pair.start, block_id=pair.block_id,
                     raw_excerpt=str(brut.get("brut") or "")[:EXCERPT_CHARS],
                     clean_excerpt=str(brut.get("relu") or "")[:EXCERPT_CHARS],
                     source="claude",
