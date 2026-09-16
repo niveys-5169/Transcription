@@ -38,6 +38,83 @@ def check() -> dict:
         return {"supported": True, "available": False}
 
 
+def _powershell_literal(value: Path | str) -> str:
+    """Encode une valeur dans une chaîne PowerShell entre apostrophes."""
+    return "'" + str(value).replace("'", "''") + "'"
+
+
+def _write_update_script(work_dir: Path, source_dir: Path, install_dir: Path) -> Path:
+    """Crée le panneau autonome qui applique et journalise la mise à jour.
+
+    L'application FastAPI doit s'arrêter avant de pouvoir remplacer son propre
+    exécutable. Le script est donc volontairement indépendant : sa fenêtre
+    reste affichée pendant cet intervalle, y compris si la copie échoue.
+    """
+    script = work_dir / "apply-update.ps1"
+    log_dir = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local")) / "Transcription"
+    script.write_text(
+        "Add-Type -AssemblyName System.Windows.Forms\n"
+        "Add-Type -AssemblyName System.Drawing\n"
+        f"$processIdToWait = {os.getpid()}\n"
+        f"$source = {_powershell_literal(source_dir)}\n"
+        f"$target = {_powershell_literal(install_dir)}\n"
+        f"$logDirectory = {_powershell_literal(log_dir)}\n"
+        "$logFile = Join-Path $logDirectory 'update.log'\n"
+        "New-Item -ItemType Directory -Force -Path $logDirectory | Out-Null\n"
+        "$form = New-Object System.Windows.Forms.Form\n"
+        "$form.Text = 'Verbatim - Installation de la mise a jour'\n"
+        "$form.Size = New-Object System.Drawing.Size(720, 430)\n"
+        "$form.StartPosition = 'CenterScreen'\n"
+        "$form.TopMost = $true\n"
+        "$status = New-Object System.Windows.Forms.Label\n"
+        "$status.Location = New-Object System.Drawing.Point(18, 16)\n"
+        "$status.Size = New-Object System.Drawing.Size(670, 28)\n"
+        "$status.Text = 'Preparation de l installation...'\n"
+        "$logs = New-Object System.Windows.Forms.TextBox\n"
+        "$logs.Location = New-Object System.Drawing.Point(18, 52)\n"
+        "$logs.Size = New-Object System.Drawing.Size(670, 285)\n"
+        "$logs.Multiline = $true\n"
+        "$logs.ReadOnly = $true\n"
+        "$logs.ScrollBars = 'Vertical'\n"
+        "$logs.Font = New-Object System.Drawing.Font('Consolas', 9)\n"
+        "$close = New-Object System.Windows.Forms.Button\n"
+        "$close.Text = 'Fermer'\n"
+        "$close.Location = New-Object System.Drawing.Point(598, 350)\n"
+        "$close.Add_Click({ $form.Close() })\n"
+        "$form.Controls.AddRange(@($status, $logs, $close))\n"
+        "$writeLog = { param([string]$message)\n"
+        "  $line = ('{0:HH:mm:ss}  {1}' -f (Get-Date), $message)\n"
+        "  Add-Content -LiteralPath $logFile -Value $line -Encoding UTF8\n"
+        "  $logs.AppendText($line + [Environment]::NewLine)\n"
+        "  [System.Windows.Forms.Application]::DoEvents()\n"
+        "}\n"
+        "$form.Show()\n"
+        "& $writeLog 'Mise a jour lancee.'\n"
+        "try {\n"
+        "  & $writeLog 'Attente de la fermeture de Verbatim...'\n"
+        "  while (Get-Process -Id $processIdToWait -ErrorAction SilentlyContinue) { Start-Sleep -Milliseconds 500; [System.Windows.Forms.Application]::DoEvents() }\n"
+        "  & $writeLog 'Copie des nouveaux fichiers...'\n"
+        "  & robocopy $source $target /MIR /R:2 /W:1 /NFL /NDL /NJH /NJS /NP\n"
+        "  if ($LASTEXITCODE -gt 7) { throw ('robocopy a echoue (code {0})' -f $LASTEXITCODE) }\n"
+        "  & $writeLog 'Copie terminee.'\n"
+        "  $status.Text = 'Mise a jour terminee. Redemarrage de Verbatim...'\n"
+        "  & $writeLog 'Redemarrage de Verbatim.'\n"
+        "  Start-Process -FilePath (Join-Path $target 'Transcription.exe')\n"
+        "  Start-Sleep -Seconds 2\n"
+        "  $form.Close()\n"
+        "} catch {\n"
+        "  $status.Text = 'Echec de la mise a jour - consultez les logs ci-dessous.'\n"
+        "  $status.ForeColor = [System.Drawing.Color]::Firebrick\n"
+        "  & $writeLog ('ERREUR: ' + $_.Exception.Message)\n"
+        "  & $writeLog ('Journal conserve dans: ' + $logFile)\n"
+        "  $form.Activate()\n"
+        "  while ($form.Visible) { Start-Sleep -Milliseconds 200; [System.Windows.Forms.Application]::DoEvents() }\n"
+        "}\n",
+        encoding="utf-8-sig",
+    )
+    return script
+
+
 def download_and_restart(download_url: str) -> None:
     """Télécharge puis prépare le remplacement après l'arrêt de l'exe actuel."""
     if not is_packaged() or not download_url.startswith(f"https://github.com/{REPOSITORY}/releases/download/latest/"):
@@ -55,22 +132,9 @@ def download_and_restart(download_url: str) -> None:
     if not (source_dir / "Transcription.exe").is_file():
         raise ValueError("Le paquet de mise à jour est incomplet.")
 
-    script = work_dir / "apply-update.cmd"
-    script.write_text(
-        "@echo off\r\n"
-        f"set \"PID={os.getpid()}\"\r\n"
-        f"set \"SOURCE={source_dir}\"\r\n"
-        f"set \"TARGET={install_dir}\"\r\n"
-        ":wait\r\n"
-        "tasklist /fi \"PID eq %PID%\" /nh | findstr /r /c:\"%PID%\" >nul\r\n"
-        "if not errorlevel 1 (timeout /t 1 /nobreak >nul & goto wait)\r\n"
-        "robocopy \"%SOURCE%\" \"%TARGET%\" /MIR /R:2 /W:1 >nul\r\n"
-        "start \"\" \"%TARGET%\\Transcription.exe\"\r\n"
-        "del \"%~f0\"\r\n",
-        encoding="utf-8",
-    )
+    script = _write_update_script(work_dir, source_dir, install_dir)
     subprocess.Popen(
-        ["cmd.exe", "/c", str(script)],
+        ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script)],
         creationflags=(
             subprocess.CREATE_NEW_PROCESS_GROUP
             | subprocess.DETACHED_PROCESS

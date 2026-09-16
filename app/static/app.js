@@ -2211,10 +2211,11 @@ function initActions() {
     const button = $("update-btn");
     if (!window.confirm(`Installer la mise à jour ${button.dataset.version || ""} ? L'application va redémarrer.`)) return;
     button.disabled = true;
+    button.textContent = "Téléchargement…";
     try {
       await api("/api/update", { method: "POST" });
-      button.textContent = "Redémarrage…";
-    } catch (error) { button.disabled = false; toast(error.message, true); }
+      button.textContent = "Installation…";
+    } catch (error) { button.disabled = false; button.textContent = "Mise à jour disponible"; toast(error.message, true); }
   });
   $("settings-save").addEventListener("click", saveSettings);
   $("settings-cancel").addEventListener("click", () => $("settings-dialog").close());
