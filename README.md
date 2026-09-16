@@ -422,7 +422,9 @@ permet de consulter cet index et `POST /api/vault/reindex` de le reconstruire.
 
 Le panneau **Mémoire** peut demander à Claude des propositions de concepts et
 de thèmes transversaux. Elles restent à l'état `proposed` et sont affichées
-pour contrôle : cette étape n'écrit encore aucune note dans le coffre.
+pour contrôle ; les thèmes montrent l'ancienne et la nouvelle synthèse. Après
+validation, seules les régions balisées sont écrites, la synthèse précédente
+est archivée dans `data/syntheses/` et le MOC reçoit les thèmes acceptés.
 
 Les dossiers par défaut (`Formation/Transcriptions`, `Formation/MJPM/…`)
 sont des conjectures, tous modifiables dans les réglages — la première

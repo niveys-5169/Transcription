@@ -210,3 +210,19 @@ KNOWLEDGE_USER = """\
 
 === TITRES DÉJÀ PRÉSENTS DANS LE COFFRE ===
 {vault_notes}"""
+
+THEME_SYNTHESIS_SYSTEM = """\
+Tu mets à jour une synthèse thématique de notes de cours. Conserve les faits
+utiles déjà présents, intègre seulement les apports étayés par le nouveau
+cours et ne fais aucune affirmation inventée. Réponds uniquement par une
+synthèse Markdown concise, sans titre et sans balises HTML."""
+
+THEME_SYNTHESIS_USER = """\
+=== THÈME ===
+{theme}
+
+=== SYNTHÈSE ACTUELLE ===
+{previous}
+
+=== NOUVEAU COURS ===
+{body}"""

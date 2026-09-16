@@ -37,14 +37,15 @@ def test_validation_ecrit_seulement_dans_les_regions_gerees(tmp_path):
     concept_path.write_text("# Tutelle\n\nTexte humain intact.\n", encoding="utf-8")
     result = knowledge.validate_knowledge(
         {"title": "Cours A"}, settings,
-        concepts=[{"nom": "Tutelle", "definition": "Une mesure."}], themes=[{"nom": "Protection"}],
+        concepts=[{"nom": "Tutelle", "definition": "Une mesure."}], themes=[{"nom": "Protection", "synthesis": "Synthèse proposée."}],
     )
     concept = concept_path.read_text(encoding="utf-8")
     theme = (vault / settings.obsidian_themes_folder / "Protection.md").read_text(encoding="utf-8")
     assert result["status"] == "published"
     assert "Texte humain intact." in concept
     assert "<!-- sources:début -->\n- [[Cours A]]\n<!-- sources:fin -->" in concept
-    assert "<!-- synthese:début -->\n- [[Cours A]]\n<!-- synthese:fin -->" in theme
+    assert "Synthèse proposée." in theme
+    assert "## Sources\n- [[Cours A]]" in theme
 
 
 def test_validation_est_idempotente(tmp_path):
@@ -55,3 +56,16 @@ def test_validation_est_idempotente(tmp_path):
     knowledge.validate_knowledge({"title": "Cours A"}, settings, **args)
     content = (vault / settings.obsidian_concepts_folder / "Tutelle.md").read_text(encoding="utf-8")
     assert content.count("- [[Cours A]]") == 1
+
+
+def test_validation_archive_la_synthese_precedente_et_met_a_jour_le_moc(tmp_path, monkeypatch):
+    vault = tmp_path / "coffre"; vault.mkdir()
+    settings = Settings(obsidian_vault_path=str(vault))
+    monkeypatch.setattr(knowledge.config, "DATA_DIR", tmp_path / "data")
+    theme_path = vault / settings.obsidian_themes_folder / "Protection.md"
+    theme_path.parent.mkdir(parents=True)
+    theme_path.write_text("# Protection\n\n<!-- synthese:début -->\nAncienne synthèse.\n<!-- synthese:fin -->\n", encoding="utf-8")
+    knowledge.validate_knowledge({"title": "Cours A", "created_at": "2026-09-16"}, settings, concepts=[], themes=[{"nom": "Protection", "synthesis": "Nouvelle synthèse."}])
+    assert (tmp_path / "data" / "syntheses" / "Protection" / "2026-09-16.md").read_text(encoding="utf-8") == "Ancienne synthèse.\n"
+    assert "Nouvelle synthèse." in theme_path.read_text(encoding="utf-8")
+    assert "- [[Protection]]" in (vault / settings.obsidian_index_note).read_text(encoding="utf-8")

@@ -4,7 +4,8 @@ from __future__ import annotations
 import json
 import re
 
-from . import exporters
+from . import config, exporters
+from .obsidian.entities import update_themes_index
 from .obsidian import index as vault_index
 from .proofread import prompts
 from .proofread.backends import get_backend
@@ -40,6 +41,22 @@ def build_knowledge(job: dict, settings) -> dict | None:
         return None
     concepts = [item for item in data.get("concepts", []) if isinstance(item, dict) and item.get("nom")]
     themes = [item for item in data.get("themes", []) if isinstance(item, dict) and item.get("nom")]
+    # Chaque synthèse proposée tient compte de l'état déjà validé du thème.
+    # Si cet appel échoue, le thème reste tout de même proposé sans écriture.
+    for theme in themes:
+        previous = _current_theme_synthesis(settings, str(theme["nom"]))
+        theme["previous_synthesis"] = previous
+        try:
+            update = backend.complete(
+                system=prompts.THEME_SYNTHESIS_SYSTEM,
+                user=prompts.THEME_SYNTHESIS_USER.format(
+                    theme=theme["nom"], previous=previous or "(aucune synthèse existante)", body=body[:120000],
+                ),
+                max_tokens=3000,
+            )
+            theme["synthesis"] = str(update.text or "").strip()
+        except (OSError, TypeError, ValueError):
+            theme["synthesis"] = ""
     return {"status": "proposed", "concepts": concepts, "themes": themes}
 
 
@@ -67,10 +84,15 @@ def validate_knowledge(job: dict, settings, *, concepts: list[dict], themes: lis
             continue
         path = resolve(settings.obsidian_vault_path, f"{settings.obsidian_themes_folder}/{_safe(name)}.md")
         existing = read(path) or f"---\ntype: synthese\n---\n\n# {name}\n"
-        # Cette première publication reste volontairement additive ; aucune
-        # prose humaine hors région gérée ne peut être écrasée.
-        write_atomic(path, _replace_region(existing, SYNTHESIS_START, SYNTHESIS_END, source))
+        previous = _region(existing, SYNTHESIS_START, SYNTHESIS_END)
+        if previous.strip():
+            _archive_synthesis(name, previous, job)
+        synthesis = str(theme.get("synthesis") or "").strip()
+        managed = f"{synthesis}\n\n## Sources\n{source}" if synthesis else source
+        write_atomic(path, _replace_region(existing, SYNTHESIS_START, SYNTHESIS_END, managed))
         written_themes.append(name)
+    if written_themes:
+        update_themes_index(settings, written_themes)
     return {"status": "published", "concepts": concepts, "themes": themes, "written": {"concepts": written_concepts, "themes": written_themes}}
 
 
@@ -86,3 +108,23 @@ def _replace_region(content: str, start: str, end: str, line: str) -> str:
         lines.append(line)
         return f"{before}{start}\n" + "\n".join(lines) + f"\n{end}{after}".rstrip() + "\n"
     return content.rstrip() + f"\n\n{start}\n{line}\n{end}\n"
+
+
+def _region(content: str, start: str, end: str) -> str:
+    if start not in content or end not in content:
+        return ""
+    return content.split(start, 1)[1].split(end, 1)[0].strip()
+
+
+def _current_theme_synthesis(settings, name: str) -> str:
+    if not settings.obsidian_vault_path:
+        return ""
+    path = resolve(settings.obsidian_vault_path, f"{settings.obsidian_themes_folder}/{_safe(name)}.md")
+    return _region(read(path), SYNTHESIS_START, SYNTHESIS_END)
+
+
+def _archive_synthesis(name: str, content: str, job: dict) -> None:
+    date = str(job.get("created_at") or "")[:10] or "sans-date"
+    path = config.DATA_DIR / "syntheses" / _safe(name) / f"{date}.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content.rstrip() + "\n", encoding="utf-8")
