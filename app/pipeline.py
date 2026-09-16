@@ -50,6 +50,7 @@ TASK_FACTCHECK = "verification_web"
 TASK_PUBLISH = "publication"
 TASK_NOTEBOOKLM = "synchronisation_notebooklm"
 TASK_REVISION = "revision"
+TASK_KNOWLEDGE = "capitalisation"
 
 # Poids de chaque phase dans la barre de progression, par étape.
 EXTRACTION_SHARE = 0.15
@@ -842,6 +843,20 @@ def run_revision(job_id: str) -> None:
     _release(job_id)
 
 
+def run_knowledge(job_id: str) -> None:
+    """Propose des concepts et thèmes ; ne touche jamais au coffre."""
+    job = db.get_job(job_id)
+    if job is None:
+        return
+    progress = _Progress(job_id)
+    progress(0.2, "Proposition de capitalisation…")
+    from .knowledge import build_knowledge
+    knowledge = build_knowledge(job, config.load_settings())
+    stage = "Propositions de mémoire prêtes" if knowledge else "Capitalisation indisponible"
+    db.update_job(job_id, task=None, knowledge=knowledge, stage=stage, progress=1.0)
+    _release(job_id)
+
+
 _RUNNERS.update(
     {
         TASK_TRANSCRIPTION: run_transcription,
@@ -850,5 +865,6 @@ _RUNNERS.update(
         TASK_PUBLISH: run_publish,
         TASK_NOTEBOOKLM: run_notebooklm_sync,
         TASK_REVISION: run_revision,
+        TASK_KNOWLEDGE: run_knowledge,
     }
 )

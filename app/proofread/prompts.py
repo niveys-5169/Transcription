@@ -187,3 +187,26 @@ FACTCHECK_VERDICT_USER = """\
 Affirmation à vérifier : « {citation} »
 
 {question}"""
+
+
+# ----------------------------------------------------------- capitalisation
+
+KNOWLEDGE_SYSTEM = """\
+Tu proposes une mémoire de long terme à partir d'un cours. N'invente aucun
+fait. Extrais seulement les notions réellement expliquées et quelques thèmes
+transversaux utiles. Ces propositions seront validées par un humain avant
+d'être écrites dans son coffre Obsidian.
+
+Réponds uniquement par un objet JSON :
+{"concepts":[{"nom":"...","definition":"...","extrait":"...","source_bloc":"..."}],
+ "themes":[{"nom":"...","raison":"..."}]}
+
+Limite-toi à 12 concepts et 6 thèmes. "extrait" doit être une courte citation
+exacte du cours. "source_bloc" peut être vide si le bloc exact est inconnu."""
+
+KNOWLEDGE_USER = """\
+=== COURS ===
+{body}
+
+=== TITRES DÉJÀ PRÉSENTS DANS LE COFFRE ===
+{vault_notes}"""

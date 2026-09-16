@@ -38,3 +38,12 @@ def test_confiance_et_repli_nim_sont_visibles_sans_exposer_la_cle():
     assert "markerLabel" in script
     assert 'id="retry-claude-btn"' in html
     assert 'id="retry-nim-btn"' in html
+
+
+def test_zone_memoire_reste_en_proposition_avant_validation():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+    script = (STATIC / "app.js").read_text(encoding="utf-8")
+    assert 'id="knowledge-zone"' in html
+    assert 'id="knowledge-btn"' in html
+    assert "renderKnowledge(job)" in script
+    assert "/knowledge`" in script
