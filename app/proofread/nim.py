@@ -62,7 +62,7 @@ class NimProofreader:
             method="POST",
         )
         try:
-            with urlopen(request, timeout=120) as response:
+            with urlopen(request, timeout=self.settings.nim_timeout) as response:
                 data = json.loads(response.read().decode("utf-8"))
         except HTTPError as exc:
             # Ne jamais inclure le corps de réponse : certains proxys le
