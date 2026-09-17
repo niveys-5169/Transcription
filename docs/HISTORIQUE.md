@@ -21,9 +21,17 @@ déclare sans version, sort en 5.x depuis fin 2025 et exige
 
 Correctif : `transformers>=4.48,<5` et `huggingface_hub>=0.34,<1.0` dans
 `requirements.txt` (les 4.5x de transformers exigent hub `<1.0`, les deux
-bornes vont ensemble), et une vérification au build qui inspecte la
-signature de `hf_hub_download` — exactement le contrat dont pyannote 3.3.2
-a besoin.
+bornes vont ensemble), et une vérification au build qui appelle
+`hf_hub_download` avec `use_auth_token` — exactement le contrat dont
+pyannote 3.3.2 a besoin.
+
+Faux pas intermédiaire : la première version de cette vérification
+inspectait la signature de `hf_hub_download`, et a fait échouer le build de
+l'image sur la 0.36.2 pourtant correcte. En 0.x, `use_auth_token` n'est
+pas dans la signature : c'est le décorateur `validate_hf_hub_args` qui
+l'accepte et le convertit en `token`. D'où la vérification par appel réel
+(`local_files_only=True`, sans réseau) : seul un `TypeError` fait échouer
+le build.
 
 Au passage : httpx journalise l'URL complète de chaque requête en INFO, et
 la clé API RunPod voyage en paramètre `?api_key=...` de l'API GraphQL. Elle

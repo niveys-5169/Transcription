@@ -38,10 +38,18 @@ RUN python3 -m pip install --no-cache-dir \
          assert tuple(map(int, ctranslate2.__version__.split('.')[:2])) >= (4, 5), ctranslate2.__version__; \
          lib = os.path.join(os.path.dirname(nvidia.cudnn.__file__), 'lib'); \
          assert os.path.exists(os.path.join(lib, 'libcudnn_ops.so.9')), lib" \
-    && python3 -c "import inspect, huggingface_hub; \
-         params = inspect.signature(huggingface_hub.hf_hub_download).parameters; \
-         assert 'use_auth_token' in params, f'huggingface_hub {huggingface_hub.__version__} sans use_auth_token : pyannote 3.3.2 en a besoin'" \
     && ffmpeg -version | head -1
+
+# pyannote 3.3.2 appelle hf_hub_download(..., use_auth_token=...), argument
+# supprimé par huggingface_hub 1.0 (voir requirements.txt). Vérification par
+# un appel réel, pas par inspection de la signature : en 0.x, l'argument
+# n'apparaît pas dans la signature, c'est le décorateur validate_hf_hub_args
+# qui l'accepte et le convertit en `token` — une inspection de signature
+# faisait échouer le build à tort sur la 0.36.2. local_files_only=True :
+# aucun accès réseau, l'appel échoue sur LocalEntryNotFoundError (toléré) ;
+# seul un TypeError (argument refusé) fait échouer le build. Le corps est
+# passé à exec() car `python3 -c` n'admet pas de try/except sur une ligne.
+RUN python3 -W ignore -c "exec(\"import huggingface_hub\\nfrom huggingface_hub import hf_hub_download\\ntry:\\n    hf_hub_download(repo_id='pyannote/x', filename='config.yaml', use_auth_token='t', local_files_only=True)\\nexcept TypeError as exc:\\n    raise SystemExit(f'huggingface_hub {huggingface_hub.__version__} refuse use_auth_token ({exc}) : pyannote 3.3.2 en a besoin')\\nexcept Exception:\\n    pass\\nprint(f'huggingface_hub {huggingface_hub.__version__} accepte use_auth_token.')\")"
 
 # cuDNN 9 (wheel nvidia-cudnn-cu12, installé par torch) est découpé en une
 # bibliothèque principale et des sous-bibliothèques (libcudnn_cnn.so.9,
