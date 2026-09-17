@@ -19,9 +19,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 # HF_HUB_ENABLE_HF_TRANSFER est déprécié (huggingface_hub a basculé son
 # transfert accéléré sur le backend Xet) : s'il traîne dans l'environnement
-# (image de base RunPod notamment), il ne fait plus rien à part déclencher
-# un FutureWarning à chaque import. On le retire et on active son
-# remplaçant à la place, avant tout import de faster_whisper/huggingface_hub.
+# (une image de base pourrait le définir ; la nôtre ne le fait plus), il ne
+# fait plus rien à part déclencher un FutureWarning à chaque import. On le
+# retire et on active son remplaçant à la place, avant tout import de
+# faster_whisper/huggingface_hub — le `pop` reste inoffensif si la variable
+# est déjà absente.
 os.environ.pop("HF_HUB_ENABLE_HF_TRANSFER", None)
 os.environ.setdefault("HF_XET_HIGH_PERFORMANCE", "1")
 
@@ -61,6 +63,12 @@ def get_model(model_size):
     if model_size not in VALID_MODELS:
         model_size = "large-v3"
     if model_size not in _model_cache:
+        # cuDNN 9 vient du wheel torch (nvidia-cudnn-cu12) ; ctranslate2 ne
+        # le trouve que si torch a déjà été importé (il précharge la
+        # bibliothèque en RTLD_GLOBAL). Le chemin WhisperX importe déjà
+        # torch en premier ; ce chemin de secours faster-whisper direct ne
+        # le faisait pas.
+        import torch  # noqa: F401
         from faster_whisper import WhisperModel
 
         print(f"[pod_server] Chargement du modele '{model_size}' sur GPU (float16)...")

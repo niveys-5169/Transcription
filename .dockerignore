@@ -1,4 +1,5 @@
-# L'image RunPod ne contient que le worker (handler.py + requirements.txt).
+# L'image RunPod ne contient que le serveur du pod (pod_server.py +
+# requirements.txt).
 # Tout le reste est du contexte inutile à envoyer au démon Docker.
 app/
 tests/

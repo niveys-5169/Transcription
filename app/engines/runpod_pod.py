@@ -46,6 +46,30 @@ POLL_INTERVAL = 3.0
 # Le proxy peut être brièvement en avance sur le conteneur : ces réponses
 # HTML/non-JSON ne viennent pas de pod_server.py et peuvent être retentées.
 PROXY_RETRY_STATUSES = {404, 502, 503, 504}
+
+
+def _message_proxy_muet(status_code: int, *, label: str | None = None) -> str:
+    """Message après épuisement des tentatives sur un corps illisible.
+
+    Un 404 qui persiste peut simplement venir d'une route pas encore
+    propagée par le proxy juste après la création du pod. Un 502/503/504 qui
+    persiste, lui, n'a plus cette excuse après trois tentatives espacées :
+    c'est le proxy RunPod qui ne trouve plus personne derrière le port du
+    pod, très probablement parce que le serveur a planté pendant le
+    chargement du modèle (un crash cuDNN natif tue le processus sans lever
+    d'exception Python, par exemple) et que le conteneur redémarre.
+    """
+    suffixe = f" pour le {label}" if label else ""
+    if status_code in (502, 503, 504):
+        return (
+            f"Le serveur du pod ne répond plus derrière le proxy RunPod{suffixe} "
+            f"(HTTP {status_code}) — probablement un plantage pendant le "
+            f"chargement du modèle. Consultez l'onglet Logs du pod dans la "
+            f"console RunPod."
+        )
+    return f"Réponse du pod{' de secours' if label else ''} illisible{suffixe} (HTTP {status_code})."
+
+
 # Chemin de montage d'un volume reseau RunPod, cote pod comme cote
 # serverless — meme convention que handler.py/pod_server.py (VOLUME_ROOT) et
 # que la fonctionnalite "Model Caching" native de RunPod, pour qu'un seul
@@ -287,10 +311,7 @@ class PodFallbackSession:
                 if response.status_code in PROXY_RETRY_STATUSES and attempt < attempts:
                     time.sleep(POLL_INTERVAL)
                     continue
-                raise TranscriptionError(
-                    f"Réponse du pod de secours illisible pour le {label} "
-                    f"(HTTP {response.status_code})."
-                )
+                raise TranscriptionError(_message_proxy_muet(response.status_code, label=label))
             break
 
         if isinstance(output, dict) and output.get("error"):
@@ -329,9 +350,7 @@ class PodFallbackSession:
                 if response.status_code in PROXY_RETRY_STATUSES and attempt < attempts:
                     time.sleep(POLL_INTERVAL)
                     continue
-                raise TranscriptionError(
-                    f"Réponse du pod illisible (HTTP {response.status_code})."
-                ) from exc
+                raise TranscriptionError(_message_proxy_muet(response.status_code)) from exc
             break
         if response.status_code >= 400 or output.get("error"):
             raise TranscriptionError(f"Le pod a échoué : {output.get('error') or response.status_code}")

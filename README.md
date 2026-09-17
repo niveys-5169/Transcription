@@ -710,6 +710,11 @@ suivants.
   **GitHub Container Registry** à chaque modification de `Dockerfile`,
   `handler.py`, `pod_server.py` ou `requirements.txt` poussée sur `main`.
   Aucune commande à taper : l'image reste à jour toute seule.
+  - Après un changement de `Dockerfile` ou de `requirements.txt`, ce
+    workflow reconstruit l'image et la pousse sous le même tag `:latest` ;
+    il faut ensuite laisser le pool créer un **nouveau** pod pour qu'elle
+    prenne effet — un pod déjà démarré garde l'ancienne image en mémoire
+    tant qu'il n'est pas recréé.
   - Résultat : `ghcr.io/niveys-5169/transcription-pod:latest` — c'est cette
     référence qu'il faut coller dans les réglages, une seule fois.
   - **Une étape manuelle, une seule fois** : après le premier passage du

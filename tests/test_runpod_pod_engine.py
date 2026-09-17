@@ -431,6 +431,27 @@ def test_transcribe_audio_retente_apres_un_502_illisible_du_proxy(monkeypatch):
     assert dodo == [3.0]
 
 
+def test_transcribe_audio_message_apres_502_persistant(monkeypatch):
+    """Après trois 502 d'affilée, le message doit orienter vers les Logs du
+    pod (plantage probable pendant le chargement du modèle), pas répéter le
+    message générique « illisible » qui suggère un problème de propagation
+    de route."""
+    appels = []
+
+    def http(request: httpx.Request) -> httpx.Response:
+        appels.append(1)
+        return httpx.Response(502, text="Bad Gateway")
+
+    monkeypatch.setattr("app.engines.runpod_pod.time.sleep", lambda s: None)
+    session = _session(_Settings(), lambda r: httpx.Response(200), http)
+    session.pod_id = "pod123"
+
+    with pytest.raises(TranscriptionError, match="ne répond plus derrière le proxy"):
+        session.transcribe_audio(b"RIFF____WAVE", "large-v3", "fr")
+
+    assert len(appels) == 3
+
+
 def test_transcribe_chunk_leve_une_erreur_si_le_pod_en_renvoie_une():
     def http(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"error": "plus de mémoire GPU"})

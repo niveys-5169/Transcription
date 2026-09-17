@@ -9,7 +9,15 @@
 # fichier ; les versions ci-dessous empêchent pip de les remplacer ensuite.
 torch==2.5.1
 torchaudio==2.5.1
-whisperx==3.3.1
+whisperx==3.3.2
+# torch 2.5.1 installe nvidia-cudnn-cu12 9.1 (cuDNN 9). whisperx 3.3.1
+# épinglait ctranslate2<4.5.0 (donc 4.4.x), qui exige cuDNN 8 — absent de
+# l'image, d'où un crash natif « Could not load library
+# libcudnn_ops_infer.so.8 » qui tue le processus (pas une exception Python)
+# et fait redémarrer le conteneur. whisperx 3.3.2 a les mêmes dépendances
+# sauf ctranslate2>=4.5.0, qui utilise cuDNN 9 : épingler cette version ici
+# explicitement pour ne pas dépendre du minimum transitif de whisperx.
+ctranslate2==4.5.0
 pyannote.audio==3.3.2
 # pyannote 3.3.2 importe matplotlib à l'initialisation mais ne le déclare
 # pas dans ses dépendances publiées.

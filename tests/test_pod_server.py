@@ -54,6 +54,9 @@ def worker(monkeypatch):
                 _FauxInfo(),
             )
 
+    faux_torch = types.ModuleType("torch")
+    monkeypatch.setitem(sys.modules, "torch", faux_torch)
+
     faux_fw = types.ModuleType("faster_whisper")
     faux_fw.WhisperModel = FauxWhisperModel
     monkeypatch.setitem(sys.modules, "faster_whisper", faux_fw)
