@@ -7,6 +7,36 @@ Depuis le plan v2, Verbatim utilise un pod HTTP RunPod avec WhisperX,
 alignement mot à mot et diarisation pyannote ; les détails d’usage et de
 validation sont maintenus dans [PLAN.md](PLAN.md) et [RECETTE.md](RECETTE.md).
 
+## 2026-09-17 — 400 à la diarisation : huggingface_hub 1.x
+
+Troisième et dernier maillon de la même journée. Une fois cuDNN réglé
+(ci-dessous), le pod transcrivait et alignait, puis répondait 400 à
+l'étape diarisation : `hf_hub_download() got an unexpected keyword
+argument 'use_auth_token'`. pyannote.audio 3.3.2 ne déclare que
+`huggingface_hub>=0.13` mais appelle encore `hf_hub_download(...,
+use_auth_token=...)`, argument supprimé par huggingface_hub 1.0 (remplacé
+par `token`). Rien ne bornait la version : `transformers`, que whisperx
+déclare sans version, sort en 5.x depuis fin 2025 et exige
+`huggingface_hub>=1.3` ; pip suivait.
+
+Correctif : `transformers>=4.48,<5` et `huggingface_hub>=0.34,<1.0` dans
+`requirements.txt` (les 4.5x de transformers exigent hub `<1.0`, les deux
+bornes vont ensemble), et une vérification au build qui inspecte la
+signature de `hf_hub_download` — exactement le contrat dont pyannote 3.3.2
+a besoin.
+
+Au passage : httpx journalise l'URL complète de chaque requête en INFO, et
+la clé API RunPod voyage en paramètre `?api_key=...` de l'API GraphQL. Elle
+finissait donc en clair dans `app.log`, et de là dans les extraits collés
+pour diagnostic. `app/logging_setup.py` masque désormais la valeur des
+paramètres sensibles sur le logger `httpx`. La clé exposée dans un log
+avant ce correctif est à révoquer et régénérer dans la console RunPod.
+
+Règle retenue : chaque dépendance lourde du pod (torch, whisperx,
+ctranslate2, pyannote, huggingface_hub) est épinglée explicitement dans
+`requirements.txt`, avec sa raison ; le minimum transitif déclaré par une
+bibliothèque ne dit rien de son maximum réel.
+
 ## 2026-09-17 — 502 puis 404 : sous-bibliothèques cuDNN 9 introuvables
 
 Deuxième plantage du même genre, juste après le passage à cuDNN 9 ci-dessous.

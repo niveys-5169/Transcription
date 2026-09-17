@@ -7,6 +7,7 @@ création du dossier ``logs``.
 from __future__ import annotations
 
 import logging
+import re
 import sys
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -15,6 +16,29 @@ _LOG_FORMAT = "%(asctime)s  %(levelname)-7s %(name)s: %(message)s"
 _DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 _MAX_BYTES = 5 * 1024 * 1024
 _BACKUP_COUNT = 5
+
+# httpx journalise chaque requête avec son URL complète, en INFO. La clé API
+# RunPod voyage en paramètre de requête (app/engines/runpod_pod.py,
+# `?api_key=...`) : sans ce masquage, elle finit en clair dans app.log, et
+# de là dans tout extrait de log collé pour un diagnostic.
+_SECRET_PARAMS = re.compile(r"(?i)\b(api_key|token|key)=([^&\s\"']+)")
+
+
+class RedactSecretsFilter(logging.Filter):
+    """Remplace la valeur des paramètres d'URL sensibles par ``***``.
+
+    Le message est figé dès le premier handler (``getMessage`` puis
+    remplacement de ``msg``/``args``) pour que tous les handlers voient la
+    version masquée.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        message = record.getMessage()
+        masked = _SECRET_PARAMS.sub(r"\1=***", message)
+        if masked != message:
+            record.msg = masked
+            record.args = ()
+        return True
 
 
 def setup_logging(data_dir: Path, level: int = logging.INFO) -> None:
@@ -26,6 +50,13 @@ def setup_logging(data_dir: Path, level: int = logging.INFO) -> None:
     """
     root = logging.getLogger()
     root.setLevel(level)
+
+    # Filtre sur le logger httpx (pas sur les handlers) : les filtres d'un
+    # logger s'appliquent aux enregistrements qu'il émet lui-même, avant
+    # propagation à tous les handlers du root, fichier comme console.
+    httpx_logger = logging.getLogger("httpx")
+    if not any(isinstance(f, RedactSecretsFilter) for f in httpx_logger.filters):
+        httpx_logger.addFilter(RedactSecretsFilter())
 
     if not any(isinstance(h, RotatingFileHandler) for h in root.handlers):
         log_dir = data_dir / "logs"
