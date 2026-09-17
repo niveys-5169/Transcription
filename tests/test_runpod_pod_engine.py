@@ -402,6 +402,35 @@ def test_transcribe_audio_retente_apres_un_404_illisible_du_proxy(monkeypatch):
     assert dodo == [3.0]
 
 
+def test_transcribe_audio_retente_apres_un_502_illisible_du_proxy(monkeypatch):
+    reponses = iter(
+        [
+            httpx.Response(502, text="Bad Gateway"),
+            httpx.Response(
+                200,
+                json={"segments": [{"start": 0.0, "end": 1.0, "text": "bonjour"}]},
+            ),
+        ]
+    )
+    appels = []
+
+    def http(request: httpx.Request) -> httpx.Response:
+        appels.append(1)
+        assert request.url.path == "/transcribe"
+        return next(reponses)
+
+    dodo = []
+    monkeypatch.setattr("app.engines.runpod_pod.time.sleep", lambda s: dodo.append(s))
+    session = _session(_Settings(), lambda r: httpx.Response(200), http)
+    session.pod_id = "pod123"
+
+    output = session.transcribe_audio(b"RIFF____WAVE", "large-v3", "fr")
+
+    assert output["segments"][0]["text"] == "bonjour"
+    assert len(appels) == 2
+    assert dodo == [3.0]
+
+
 def test_transcribe_chunk_leve_une_erreur_si_le_pod_en_renvoie_une():
     def http(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"error": "plus de mémoire GPU"})

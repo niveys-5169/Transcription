@@ -43,6 +43,9 @@ logger = logging.getLogger(__name__)
 
 GRAPHQL_URL = "https://api.runpod.io/graphql"
 POLL_INTERVAL = 3.0
+# Le proxy peut être brièvement en avance sur le conteneur : ces réponses
+# HTML/non-JSON ne viennent pas de pod_server.py et peuvent être retentées.
+PROXY_RETRY_STATUSES = {404, 502, 503, 504}
 # Chemin de montage d'un volume reseau RunPod, cote pod comme cote
 # serverless — meme convention que handler.py/pod_server.py (VOLUME_ROOT) et
 # que la fonctionnalite "Model Caching" native de RunPod, pour qu'un seul
@@ -281,7 +284,7 @@ class PodFallbackSession:
                 # création du pod, sa route peut ne pas être encore
                 # entièrement propagée, même si /health avait déjà répondu.
                 # On retente avant d'abandonner.
-                if response.status_code == 404 and attempt < attempts:
+                if response.status_code in PROXY_RETRY_STATUSES and attempt < attempts:
                     time.sleep(POLL_INTERVAL)
                     continue
                 raise TranscriptionError(
@@ -320,10 +323,10 @@ class PodFallbackSession:
             try:
                 output = response.json()
             except ValueError as exc:
-                # Même course de propagation que pour les tronçons : le
-                # health-check peut réussir un instant avant que le proxy
-                # publie la route POST du pod.
-                if response.status_code == 404 and attempt < attempts:
+                # Le health-check peut réussir un instant avant que le proxy
+                # publie complètement la route POST du pod, ou pendant que
+                # le conteneur finit d'initialiser WhisperX.
+                if response.status_code in PROXY_RETRY_STATUSES and attempt < attempts:
                     time.sleep(POLL_INTERVAL)
                     continue
                 raise TranscriptionError(
