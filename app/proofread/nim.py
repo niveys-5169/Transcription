@@ -40,6 +40,13 @@ class NimProofreader:
             return False, "URL NVIDIA NIM invalide."
         return True, f"Repli prêt avec {self.settings.nim_model}."
 
+    @staticmethod
+    def _endpoint(base_url: str) -> str:
+        url = base_url.rstrip("/")
+        if not url.endswith("/chat/completions"):
+            url = url.rstrip("/") + "/chat/completions"
+        return url
+
     def complete(self, *, system: str, user: str, max_tokens: int) -> str:
         payload = json.dumps({
             "model": self.settings.nim_model,
@@ -49,7 +56,7 @@ class NimProofreader:
             "stream": False,
         }).encode("utf-8")
         request = Request(
-            self.settings.nim_base_url,
+            self._endpoint(self.settings.nim_base_url),
             data=payload,
             headers={"Authorization": f"Bearer {self.settings.nim_api_key}", "Content-Type": "application/json"},
             method="POST",
