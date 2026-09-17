@@ -16,6 +16,9 @@ from email.parser import BytesParser
 import json
 import os
 import tempfile
+import threading
+import time
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 # HF_HUB_ENABLE_HF_TRANSFER est déprécié (huggingface_hub a basculé son
@@ -267,8 +270,133 @@ def transcribe(
                 pass
 
 
+class _RequeteInvalide(ValueError):
+    """Corps de requête illisible (multipart ou JSON) : réponse 400."""
+
+
+def _parse_transcription_request(content_type: str, raw: bytes) -> tuple:
+    """Extrait ``(audio_b64, model, language, initial_prompt, diarize)`` du
+    corps d'une requête, en multipart (fichier entier) ou en JSON (base64).
+
+    Partagé par ``/transcribe`` (synchrone) et ``/jobs`` (asynchrone) : les
+    deux acceptent exactement les mêmes corps, seule la façon de rendre le
+    résultat diffère.
+    """
+    if content_type.startswith("multipart/form-data"):
+        try:
+            message = BytesParser(policy=policy.default).parsebytes(
+                f"Content-Type: {content_type}\r\nMIME-Version: 1.0\r\n\r\n".encode()
+                + raw
+            )
+            fields = {
+                part.get_param("name", header="content-disposition"): part
+                for part in message.iter_parts()
+            }
+            audio = fields["audio"].get_payload(decode=True) or b""
+            return (
+                base64.b64encode(audio).decode("ascii"),
+                fields.get("model").get_content() if fields.get("model") else "large-v3",
+                fields.get("language").get_content() if fields.get("language") else "auto",
+                fields.get("initial_prompt").get_content() if fields.get("initial_prompt") else None,
+                (fields.get("diarize").get_content().strip().lower() == "true") if fields.get("diarize") else False,
+            )
+        except (KeyError, ValueError, TypeError) as exc:
+            raise _RequeteInvalide(f"multipart invalide : {exc}") from exc
+    try:
+        job_input = json.loads(raw or b"{}")
+    except json.JSONDecodeError as exc:
+        raise _RequeteInvalide(f"JSON invalide : {exc}") from exc
+    if not isinstance(job_input, dict):
+        raise _RequeteInvalide("JSON invalide : un objet est attendu.")
+    return (
+        job_input.get("audio_base64"),
+        job_input.get("model", "large-v3"),
+        job_input.get("language") or None,
+        job_input.get("initial_prompt") or None,
+        bool(job_input.get("diarize")),
+    )
+
+
+# --------------------------------------------------------- travaux asynchrones
+#
+# Un gros fichier (plusieurs heures d'audio) se transcrit en bien plus que
+# les ~100 s au bout desquelles le proxy HTTP de RunPod abandonne une
+# réponse qui n'arrive pas — et bien plus que le délai de lecture que peut
+# raisonnablement tenir l'application. Un POST synchrone sur /transcribe ne
+# peut donc réussir que sur des fichiers courts. Pour les autres, /jobs
+# accepte le fichier, répond aussitôt avec un identifiant, et calcule dans un
+# thread ; l'application sonde ensuite /jobs/{id} par de petites requêtes
+# rapides, chacune bien en deçà du délai du proxy.
+#
+# Un seul travail à la fois sur le GPU (verrou) : l'application n'en envoie
+# de toute façon qu'un seul (voir app/pipeline.py). Les travaux terminés
+# restent en mémoire le temps d'être relevés, puis les plus anciens sont
+# oubliés au-delà de JOBS_MAX_KEPT — il n'y a pas de disque à remplir.
+
+JOBS_MAX_KEPT = 20
+_jobs: dict[str, dict] = {}
+_jobs_lock = threading.Lock()
+_gpu_lock = threading.Lock()
+
+
+def _run_job(job_id: str, args: tuple) -> None:
+    with _gpu_lock:
+        with _jobs_lock:
+            _jobs[job_id]["status"] = "running"
+            _jobs[job_id]["started_at"] = time.time()
+        try:
+            result = transcribe(*args)
+        except Exception as exc:  # transcribe() attrape déjà tout ; ceinture et bretelles
+            result = {"error": str(exc)}
+        with _jobs_lock:
+            job = _jobs[job_id]
+            job["finished_at"] = time.time()
+            if "error" in result:
+                job["status"] = "error"
+                job["error"] = result["error"]
+            else:
+                job["status"] = "done"
+                job["result"] = result
+            statut = job["status"]
+    print(f"[pod_server] Travail {job_id} terminé ({statut}).")
+
+
+def submit_job(args: tuple) -> str:
+    """Enregistre un travail et lance son calcul dans un thread."""
+    job_id = uuid.uuid4().hex[:12]
+    with _jobs_lock:
+        _jobs[job_id] = {"status": "queued", "created_at": time.time()}
+        # Oublie les travaux terminés les plus anciens au-delà du plafond.
+        finis = [
+            (job["finished_at"], key)
+            for key, job in _jobs.items()
+            if job["status"] in ("done", "error") and key != job_id
+        ]
+        for _, key in sorted(finis)[: max(0, len(_jobs) - JOBS_MAX_KEPT)]:
+            _jobs.pop(key, None)
+    thread = threading.Thread(target=_run_job, args=(job_id, args), daemon=True)
+    thread.start()
+    print(f"[pod_server] Travail {job_id} accepté.")
+    return job_id
+
+
+def job_status(job_id: str) -> dict | None:
+    """État public d'un travail : ``status`` (queued/running/done/error),
+    ``result`` une fois terminé, ``error`` en cas d'échec."""
+    with _jobs_lock:
+        job = _jobs.get(job_id)
+        if job is None:
+            return None
+        payload = {"job_id": job_id, "status": job["status"]}
+        if job["status"] == "done":
+            payload["result"] = job["result"]
+        elif job["status"] == "error":
+            payload["error"] = job["error"]
+        return payload
+
+
 class Handler(BaseHTTPRequestHandler):
-    server_version = "TranscriptionPod/1.0"
+    server_version = "TranscriptionPod/1.1"
 
     def log_message(self, format, *args):  # noqa: A002 - signature imposée
         print(f"[pod_server] {self.address_string()} - {format % args}")
@@ -285,53 +413,44 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/health":
             self._send_json(200, {"status": "ok"})
             return
+        if self.path.startswith("/jobs/"):
+            job_id = self.path[len("/jobs/"):].split("?", 1)[0].strip("/")
+            payload = job_status(job_id) if job_id else None
+            if payload is None:
+                self._send_json(404, {"error": f"travail inconnu : {job_id}"})
+                return
+            self._send_json(200, payload)
+            return
         self._send_json(404, {"error": "introuvable"})
 
-    def do_POST(self):
-        if self.path != "/transcribe":
-            self._send_json(404, {"error": "introuvable"})
-            return
-
+    def _read_request(self) -> tuple:
         length = int(self.headers.get("Content-Length", "0") or "0")
         raw = self.rfile.read(length) if length else b"{}"
-        content_type = self.headers.get("Content-Type", "")
-        if content_type.startswith("multipart/form-data"):
+        return _parse_transcription_request(self.headers.get("Content-Type", ""), raw)
+
+    def do_POST(self):
+        if self.path == "/transcribe":
             try:
-                message = BytesParser(policy=policy.default).parsebytes(
-                    f"Content-Type: {content_type}\r\nMIME-Version: 1.0\r\n\r\n".encode()
-                    + raw
-                )
-                fields = {
-                    part.get_param("name", header="content-disposition"): part
-                    for part in message.iter_parts()
-                }
-                audio = fields["audio"].get_payload(decode=True) or b""
-                result = transcribe(
-                    base64.b64encode(audio).decode("ascii"),
-                    fields.get("model").get_content() if fields.get("model") else "large-v3",
-                    fields.get("language").get_content() if fields.get("language") else "auto",
-                    fields.get("initial_prompt").get_content() if fields.get("initial_prompt") else None,
-                    (fields.get("diarize").get_content().strip().lower() == "true") if fields.get("diarize") else False,
-                )
-            except (KeyError, ValueError, TypeError) as exc:
-                self._send_json(400, {"error": f"multipart invalide : {exc}"})
+                args = self._read_request()
+            except _RequeteInvalide as exc:
+                self._send_json(400, {"error": str(exc)})
                 return
+            result = transcribe(*args)
             self._send_json(400 if "error" in result else 200, result)
             return
-        try:
-            job_input = json.loads(raw or b"{}")
-        except json.JSONDecodeError as e:
-            self._send_json(400, {"error": f"JSON invalide : {e}"})
+        if self.path == "/jobs":
+            try:
+                args = self._read_request()
+            except _RequeteInvalide as exc:
+                self._send_json(400, {"error": str(exc)})
+                return
+            if not args[0]:
+                self._send_json(400, {"error": "audio manquant dans la requête."})
+                return
+            job_id = submit_job(args)
+            self._send_json(202, {"job_id": job_id, "status": "queued"})
             return
-
-        result = transcribe(
-            job_input.get("audio_base64"),
-            job_input.get("model", "large-v3"),
-            job_input.get("language") or None,
-            job_input.get("initial_prompt") or None,
-            bool(job_input.get("diarize")),
-        )
-        self._send_json(400 if "error" in result else 200, result)
+        self._send_json(404, {"error": "introuvable"})
 
 
 def main() -> None:

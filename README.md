@@ -732,9 +732,34 @@ suivants.
 - GPU par défaut : **L4**, comme pour le serverless. Changez-le si ce type
   n'est pas disponible dans votre région.
 - `handler.py` (le worker serverless, invoqué par job) et `pod_server.py`
-  (le pod, un petit serveur HTTP écoutant `/health` et `/transcribe`)
+  (le pod, un petit serveur HTTP écoutant `/health`, `/jobs` et `/transcribe`)
   partagent la même image ; seule la commande de démarrage diffère, et c'est
   l'application qui la choisit à la création du pod.
+
+### Pod : gros fichiers et route `/jobs`
+
+Une transcription longue (plusieurs heures d'audio en `large-v3` avec
+diarisation) ne tient pas dans une seule réponse HTTP : le proxy RunPod
+abandonne une réponse qui tarde (de l'ordre de 100 s), et l'application ne
+peut pas non plus tenir une lecture ouverte indéfiniment. C'est ainsi que
+deux gros fichiers ont été perdus avec l'ancien appel synchrone sur
+`/transcribe` — « Pod RunPod injoignable : The read operation timed out »
+après 120 s, alors que le pod travaillait toujours.
+
+L'application dépose donc le fichier sur `POST /jobs` (réponse immédiate
+`202` avec un `job_id`), puis sonde `GET /jobs/{id}` toutes les quelques
+secondes jusqu'à `status: done` (avec `result`) ou `status: error`. Chaque
+sonde est une petite requête rapide ; un raté ponctuel du proxy est retenté,
+et l'attente totale est bornée par `runpod_pod_job_timeout_seconds`
+(4 h par défaut, dans `data/config.json`).
+
+**Après cette mise à jour, l'image du pod doit être reconstruite** (le
+workflow `pod-image.yml` le fait tout seul dès que `pod_server.py` change
+sur `main`), puis le pool doit créer un **nouveau** pod. Un pod encore sur
+l'ancienne image ne connaît pas `/jobs` : l'application le détecte, retombe
+sur `/transcribe` en le signalant dans les logs (« reconstruisez l'image du
+pod »), et les gros fichiers continuent d'échouer tant que le pod n'a pas
+été recréé sur l'image à jour.
 
 ### Pod : volume réseau (recommandé)
 

@@ -126,6 +126,15 @@ class Settings:
     # modèle Whisper. Généreux à dessein — plus lent qu'un worker serverless
     # déjà chaud, mais ça ne se produit qu'en secours.
     runpod_pod_boot_timeout_seconds: int = 600
+    # Durée maximale d'une transcription sur le pod, du dépôt du fichier à
+    # la réponse. Le pod calcule dans un thread et l'application sonde
+    # l'état du travail (voir pod_server.py, /jobs) : ce délai borne cette
+    # attente, il n'est pas un délai de lecture HTTP. Généreux à dessein :
+    # plusieurs heures d'audio en large-v3 avec diarisation prennent
+    # longtemps, et abandonner en cours de route revient à payer le GPU
+    # pour rien (voir le travail 4ec65ffcebb5 : deux gros fichiers
+    # abandonnés après 120 s alors que le pod travaillait encore).
+    runpod_pod_job_timeout_seconds: int = 4 * 3600
     # Un seul thread traite la file de travaux (voir pipeline.py) : quand
     # plusieurs fichiers s'enchaînent, le pod créé pour le premier reste donc
     # disponible pour les suivants au lieu d'être détruit puis recréé à

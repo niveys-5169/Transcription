@@ -374,20 +374,23 @@ def test_transcribe_chunk_abandonne_apres_plusieurs_404_illisibles(monkeypatch):
 
 
 def test_transcribe_audio_retente_apres_un_404_illisible_du_proxy(monkeypatch):
+    """Un 404 *non JSON* vient du proxy (route pas encore propagée) : on
+    retente. À ne pas confondre avec le 404 JSON de l'ancienne image, testé
+    plus bas."""
     reponses = iter(
         [
             httpx.Response(404, text="404 page not found"),
+            httpx.Response(202, json={"job_id": "j1", "status": "queued"}),
             httpx.Response(
                 200,
-                json={"segments": [{"start": 0.0, "end": 1.0, "text": "bonjour"}]},
+                json={"status": "done", "result": {"segments": [{"start": 0.0, "end": 1.0, "text": "bonjour"}]}},
             ),
         ]
     )
     appels = []
 
     def http(request: httpx.Request) -> httpx.Response:
-        appels.append(1)
-        assert request.url.path == "/transcribe"
+        appels.append(request.url.path)
         return next(reponses)
 
     dodo = []
@@ -398,7 +401,7 @@ def test_transcribe_audio_retente_apres_un_404_illisible_du_proxy(monkeypatch):
     output = session.transcribe_audio(b"RIFF____WAVE", "large-v3", "fr")
 
     assert output["segments"][0]["text"] == "bonjour"
-    assert len(appels) == 2
+    assert appels == ["/jobs", "/jobs", "/jobs/j1"]
     assert dodo == [3.0]
 
 
@@ -406,17 +409,17 @@ def test_transcribe_audio_retente_apres_un_502_illisible_du_proxy(monkeypatch):
     reponses = iter(
         [
             httpx.Response(502, text="Bad Gateway"),
+            httpx.Response(202, json={"job_id": "j1", "status": "queued"}),
             httpx.Response(
                 200,
-                json={"segments": [{"start": 0.0, "end": 1.0, "text": "bonjour"}]},
+                json={"status": "done", "result": {"segments": [{"start": 0.0, "end": 1.0, "text": "bonjour"}]}},
             ),
         ]
     )
     appels = []
 
     def http(request: httpx.Request) -> httpx.Response:
-        appels.append(1)
-        assert request.url.path == "/transcribe"
+        appels.append(request.url.path)
         return next(reponses)
 
     dodo = []
@@ -427,7 +430,7 @@ def test_transcribe_audio_retente_apres_un_502_illisible_du_proxy(monkeypatch):
     output = session.transcribe_audio(b"RIFF____WAVE", "large-v3", "fr")
 
     assert output["segments"][0]["text"] == "bonjour"
-    assert len(appels) == 2
+    assert appels == ["/jobs", "/jobs", "/jobs/j1"]
     assert dodo == [3.0]
 
 
@@ -478,6 +481,234 @@ def test_transcribe_audio_message_apres_502_puis_404(monkeypatch):
         session.transcribe_audio(b"RIFF____WAVE", "large-v3", "fr")
 
     assert len(appels) == 3
+
+
+# ------------------------------------------------ transcribe_audio : /jobs
+#
+# Deux gros fichiers ont été perdus avec l'ancien appel synchrone sur
+# /transcribe : « The read operation timed out » après 120 s, alors que le
+# pod travaillait encore (ses logs montraient le chargement du modèle
+# d'alignement). Le fichier est désormais déposé sur /jobs, et le résultat
+# sondé sur /jobs/{id} par de petites requêtes rapides, sans jamais tenir une
+# réponse HTTP ouverte pendant toute la transcription.
+
+
+def _serveur_asynchrone(etats: list[httpx.Response]):
+    """Proxy simulé : POST /jobs accepte et rend j1, GET /jobs/j1 déroule
+    ``etats`` dans l'ordre. Rend (handler, journal des chemins appelés)."""
+    appels: list[str] = []
+    suite = iter(etats)
+
+    def http(request: httpx.Request) -> httpx.Response:
+        appels.append(f"{request.method} {request.url.path}")
+        if request.method == "POST" and request.url.path == "/jobs":
+            assert request.headers["content-type"].startswith("multipart/form-data")
+            assert b'name="audio"' in request.content
+            assert b"RIFF____WAVE" in request.content
+            return httpx.Response(202, json={"job_id": "j1", "status": "queued"})
+        assert request.method == "GET" and request.url.path == "/jobs/j1"
+        return next(suite)
+
+    return http, appels
+
+
+def test_transcribe_audio_depose_le_fichier_puis_sonde_le_resultat(monkeypatch):
+    http, appels = _serveur_asynchrone([
+        httpx.Response(200, json={"status": "queued"}),
+        httpx.Response(200, json={"status": "running"}),
+        httpx.Response(200, json={"status": "done", "result": {
+            "text": "bonjour", "segments": [{"start": 0.0, "end": 1.0, "text": "bonjour"}],
+        }}),
+    ])
+    dodo = []
+    monkeypatch.setattr("app.engines.runpod_pod.time.sleep", lambda s: dodo.append(s))
+    session = _session(_Settings(), lambda r: httpx.Response(200), http)
+    session.pod_id = "pod123"
+    avancement = []
+
+    output = session.transcribe_audio(
+        b"RIFF____WAVE", "large-v3", "fr",
+        on_progress=lambda fraction, message: avancement.append((fraction, message)),
+    )
+
+    assert output["segments"][0]["text"] == "bonjour"
+    assert appels == ["POST /jobs", "GET /jobs/j1", "GET /jobs/j1", "GET /jobs/j1"]
+    assert dodo == [3.0, 3.0]
+    assert len(avancement) == 2
+    assert all("Transcription en cours sur le pod" in message for _, message in avancement)
+    assert all(0.0 <= fraction <= 1.0 for fraction, _ in avancement)
+
+
+def test_transcribe_audio_ne_tient_pas_de_longue_lecture_sur_le_depot(monkeypatch):
+    """Le dépôt sur /jobs doit répondre vite : son délai de lecture reste
+    court (ce n'est plus lui qui attend la transcription), et les sondes
+    aussi. Aucune requête ne doit dépasser le délai du proxy RunPod."""
+    delais = []
+
+    class _Client(httpx.Client):
+        def send(self, request, **kwargs):
+            delais.append((request.method, request.url.path, request.extensions.get("timeout")))
+            return super().send(request, **kwargs)
+
+    http, _ = _serveur_asynchrone([
+        httpx.Response(200, json={"status": "done", "result": {"segments": []}}),
+    ])
+    monkeypatch.setattr("app.engines.runpod_pod.time.sleep", lambda s: None)
+    session = _session(_Settings(), lambda r: httpx.Response(200), http)
+    session._http = _Client(transport=httpx.MockTransport(http))
+    session.pod_id = "pod123"
+
+    session.transcribe_audio(b"RIFF____WAVE", "large-v3", "fr")
+
+    assert [(m, p) for m, p, _ in delais] == [("POST", "/jobs"), ("GET", "/jobs/j1")]
+    assert all(t["read"] is not None and t["read"] <= 120.0 for _, _, t in delais)
+
+
+def test_transcribe_audio_rend_l_erreur_du_travail(monkeypatch):
+    http, _ = _serveur_asynchrone([
+        httpx.Response(200, json={"status": "error", "error": "plus de mémoire GPU"}),
+    ])
+    monkeypatch.setattr("app.engines.runpod_pod.time.sleep", lambda s: None)
+    session = _session(_Settings(), lambda r: httpx.Response(200), http)
+    session.pod_id = "pod123"
+
+    with pytest.raises(TranscriptionError, match="plus de mémoire GPU"):
+        session.transcribe_audio(b"RIFF____WAVE", "large-v3", "fr")
+
+
+def test_transcribe_audio_tolere_des_sondes_ratees_ponctuelles(monkeypatch):
+    """Un proxy qui bafouille une seconde (502 HTML, coupure réseau) pendant
+    une transcription d'une heure ne doit pas faire perdre le travail."""
+    http, appels = _serveur_asynchrone([
+        httpx.Response(502, text="Bad Gateway"),
+        httpx.Response(504, text="Gateway Timeout"),
+        httpx.Response(200, json={"status": "running"}),
+        httpx.Response(200, json={"status": "done", "result": {"segments": []}}),
+    ])
+
+    def http_avec_coupure(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET" and len(appels) == 1:
+            appels.append("coupure")
+            raise httpx.ReadTimeout("The read operation timed out")
+        return http(request)
+
+    monkeypatch.setattr("app.engines.runpod_pod.time.sleep", lambda s: None)
+    session = _session(_Settings(), lambda r: httpx.Response(200), http_avec_coupure)
+    session.pod_id = "pod123"
+
+    output = session.transcribe_audio(b"RIFF____WAVE", "large-v3", "fr")
+
+    assert output == {"segments": []}
+    assert appels.count("GET /jobs/j1") == 4
+
+
+def test_transcribe_audio_abandonne_apres_trop_de_sondes_ratees(monkeypatch):
+    def http(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            return httpx.Response(202, json={"job_id": "j1"})
+        raise httpx.ConnectError("connexion refusée")
+
+    monkeypatch.setattr("app.engines.runpod_pod.time.sleep", lambda s: None)
+    session = _session(_Settings(), lambda r: httpx.Response(200), http)
+    session.pod_id = "pod123"
+
+    with pytest.raises(TranscriptionError, match="injoignable pendant le travail j1.*connexion refusée"):
+        session.transcribe_audio(b"RIFF____WAVE", "large-v3", "fr")
+
+
+def test_transcribe_audio_signale_un_travail_oublie_par_le_pod(monkeypatch):
+    """Un conteneur redémarré (plantage) repart avec une mémoire vide : son
+    404 JSON « travail inconnu » doit être expliqué, pas retenté à
+    l'infini."""
+    http, _ = _serveur_asynchrone([
+        httpx.Response(404, json={"error": "travail inconnu : j1"}),
+    ])
+    monkeypatch.setattr("app.engines.runpod_pod.time.sleep", lambda s: None)
+    session = _session(_Settings(), lambda r: httpx.Response(200), http)
+    session.pod_id = "pod123"
+
+    with pytest.raises(TranscriptionError, match="oublié le travail j1"):
+        session.transcribe_audio(b"RIFF____WAVE", "large-v3", "fr")
+
+
+def test_transcribe_audio_abandonne_au_dela_du_delai_du_travail(monkeypatch):
+    http, _ = _serveur_asynchrone([
+        httpx.Response(200, json={"status": "running"}),
+        httpx.Response(200, json={"status": "running"}),
+    ])
+    monkeypatch.setattr("app.engines.runpod_pod.time.sleep", lambda s: None)
+    horloges = iter([0.0, 0.0, 5.0, 100.0])
+    monkeypatch.setattr("app.engines.runpod_pod.time.monotonic", lambda: next(horloges, 999.0))
+
+    class _SettingsCourt(_Settings):
+        runpod_pod_job_timeout_seconds = 60
+
+    session = _session(_SettingsCourt(), lambda r: httpx.Response(200), http)
+    session.pod_id = "pod123"
+
+    with pytest.raises(TranscriptionError, match="délai imparti.*60s"):
+        session.transcribe_audio(b"RIFF____WAVE", "large-v3", "fr")
+
+
+def test_transcribe_audio_s_arrete_sur_annulation(monkeypatch):
+    http, appels = _serveur_asynchrone([
+        httpx.Response(200, json={"status": "running"}),
+        httpx.Response(200, json={"status": "running"}),
+    ])
+    monkeypatch.setattr("app.engines.runpod_pod.time.sleep", lambda s: None)
+    session = _session(_Settings(), lambda r: httpx.Response(200), http)
+    session.pod_id = "pod123"
+    sondes = iter([False, True])
+
+    with pytest.raises(TranscriptionError, match="annulée"):
+        session.transcribe_audio(
+            b"RIFF____WAVE", "large-v3", "fr", should_cancel=lambda: next(sondes),
+        )
+
+    assert appels.count("GET /jobs/j1") == 1
+
+
+def test_transcribe_audio_retombe_sur_transcribe_avec_une_ancienne_image(monkeypatch, caplog):
+    """Un pod encore sur l'image précédente ne connaît pas /jobs : son
+    propre 404 *JSON* (« introuvable ») n'est pas un raté du proxy mais le
+    signe de l'ancienne image. On garde l'appel synchrone d'avant, avec un
+    délai de lecture égal au délai du travail, et on prévient."""
+    appels = []
+
+    def http(request: httpx.Request) -> httpx.Response:
+        appels.append((request.url.path, request.extensions.get("timeout", {}).get("read")))
+        if request.url.path == "/jobs":
+            return httpx.Response(404, json={"error": "introuvable"})
+        assert request.url.path == "/transcribe"
+        return httpx.Response(200, json={"segments": [{"start": 0.0, "end": 1.0, "text": "bonjour"}]})
+
+    class _SettingsCourt(_Settings):
+        runpod_pod_job_timeout_seconds = 1234
+
+    monkeypatch.setattr("app.engines.runpod_pod.time.sleep", lambda s: None)
+    session = _session(_SettingsCourt(), lambda r: httpx.Response(200), http)
+    session.pod_id = "pod123"
+
+    with caplog.at_level("WARNING", logger="app.engines.runpod_pod"):
+        output = session.transcribe_audio(b"RIFF____WAVE", "large-v3", "fr")
+
+    assert output["segments"][0]["text"] == "bonjour"
+    assert appels == [("/jobs", 120.0), ("/transcribe", 1234.0)]
+    assert "reconstruisez l'image" in caplog.text
+
+
+def test_transcribe_audio_ancienne_image_rend_l_erreur_du_pod(monkeypatch):
+    def http(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/jobs":
+            return httpx.Response(404, json={"error": "introuvable"})
+        return httpx.Response(400, json={"error": "audio_base64 manquant"})
+
+    monkeypatch.setattr("app.engines.runpod_pod.time.sleep", lambda s: None)
+    session = _session(_Settings(), lambda r: httpx.Response(200), http)
+    session.pod_id = "pod123"
+
+    with pytest.raises(TranscriptionError, match="audio_base64 manquant"):
+        session.transcribe_audio(b"RIFF____WAVE", "large-v3", "fr")
 
 
 def test_transcribe_chunk_message_apres_502_puis_404(monkeypatch):
