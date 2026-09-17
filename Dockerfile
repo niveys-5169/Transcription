@@ -40,6 +40,28 @@ RUN python3 -m pip install --no-cache-dir \
          assert os.path.exists(os.path.join(lib, 'libcudnn_ops.so.9')), lib" \
     && ffmpeg -version | head -1
 
+# cuDNN 9 (wheel nvidia-cudnn-cu12, installé par torch) est découpé en une
+# bibliothèque principale et des sous-bibliothèques (libcudnn_cnn.so.9,
+# libcudnn_ops.so.9...) que la principale ouvre elle-même par dlopen sur
+# leur seul nom, à la première convolution. Le dossier du wheel n'est pas
+# sur le chemin de recherche du chargeur : ctranslate2 mourait d'un
+# « Unable to load any of {libcudnn_cnn.so.9.1.0, ...} » (abort natif, pas
+# d'exception Python) à la première transcription, le conteneur
+# redémarrait, et l'application ne voyait que des 502/404 du proxy RunPod.
+# Chemin fixe plutôt que calculé : ENV ne peut pas exécuter Python, et la
+# vérification ci-dessous fait échouer le build si le dossier bouge ou si
+# le chargeur ne trouve toujours pas la sous-bibliothèque par son nom —
+# exactement l'opération que cuDNN fait en production. pod_server.py
+# précharge aussi ces bibliothèques (ceinture et bretelles, voir
+# _preload_cudnn), au cas où RunPod écraserait la variable au lancement.
+ENV LD_LIBRARY_PATH=/usr/local/lib/python3.10/dist-packages/nvidia/cudnn/lib:/usr/local/lib/python3.10/dist-packages/nvidia/cublas/lib:${LD_LIBRARY_PATH}
+RUN python3 -c "import os, nvidia.cudnn, nvidia.cublas; \
+      chemins = os.environ['LD_LIBRARY_PATH'].split(':'); \
+      manquants = [p.__file__ for p in (nvidia.cudnn, nvidia.cublas) \
+                   if os.path.join(os.path.dirname(p.__file__), 'lib') not in chemins]; \
+      assert not manquants, f'dossiers absents de LD_LIBRARY_PATH : {manquants}'" \
+    && python3 -c "import ctypes; ctypes.CDLL('libcudnn_cnn.so.9'); print('libcudnn_cnn.so.9 trouvée par son nom.')"
+
 # Le modele large-v3 n'est plus precharge ici (comme avant) : ca gonflait
 # cette image de plusieurs Go, et RunPod doit la retirer en entier a chaque
 # fois qu'un pod de secours atterrit sur un hote qui ne l'a pas deja en
