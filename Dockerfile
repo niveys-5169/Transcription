@@ -38,6 +38,9 @@ RUN python3 -m pip install --no-cache-dir \
          assert tuple(map(int, ctranslate2.__version__.split('.')[:2])) >= (4, 5), ctranslate2.__version__; \
          lib = os.path.join(os.path.dirname(nvidia.cudnn.__file__), 'lib'); \
          assert os.path.exists(os.path.join(lib, 'libcudnn_ops.so.9')), lib" \
+    && python3 -c "import inspect, huggingface_hub; \
+         params = inspect.signature(huggingface_hub.hf_hub_download).parameters; \
+         assert 'use_auth_token' in params, f'huggingface_hub {huggingface_hub.__version__} sans use_auth_token : pyannote 3.3.2 en a besoin'" \
     && ffmpeg -version | head -1
 
 # cuDNN 9 (wheel nvidia-cudnn-cu12, installé par torch) est découpé en une

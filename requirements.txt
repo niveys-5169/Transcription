@@ -22,6 +22,18 @@ pyannote.audio==3.3.2
 # pyannote 3.3.2 importe matplotlib à l'initialisation mais ne le déclare
 # pas dans ses dépendances publiées.
 matplotlib>=3.7,<4
+# pyannote 3.3.2 ne déclare que huggingface_hub>=0.13 mais appelle encore
+# hf_hub_download(..., use_auth_token=...), un argument que huggingface_hub
+# 1.0 a supprimé (remplacé par `token`). Sans borne haute, pip installait
+# la 1.x et la diarisation échouait à la première transcription :
+# « hf_hub_download() got an unexpected keyword argument 'use_auth_token' ».
+# C'est transformers (non épinglé par whisperx) qui tirait la 1.x : ses
+# versions 5.x exigent huggingface_hub>=1.3, ses 4.5x huggingface_hub<1.0.
+# Les deux bornes vont donc ensemble ; borne basse de hub : celle de
+# transformers 4.56+ (et hf_xet, ci-dessous, n'est utilisé qu'à partir de
+# la 0.30).
+transformers>=4.48,<5
+huggingface_hub>=0.34,<1.0
 # Backend de transfert accéléré de huggingface_hub (téléchargement des
 # modèles Whisper) : sans lui, HF_XET_HIGH_PERFORMANCE (voir handler.py /
 # pod_server.py) n'a aucun effet et on retombe sur un simple GET HTTP.
