@@ -69,6 +69,7 @@ class NimProofreader:
             # réinjectent dans les logs et une clé ne doit jamais y transiter.
             raise ProofreadError(f"NVIDIA NIM a répondu {exc.code}.") from exc
         except (URLError, TimeoutError, json.JSONDecodeError) as exc:
+            logger.warning("NVIDIA NIM injoignable (%s: %s).", type(exc).__name__, exc.reason if hasattr(exc, "reason") else exc)
             raise ProofreadError("Impossible de joindre NVIDIA NIM.") from exc
         try:
             return str(data["choices"][0]["message"]["content"]).strip()
