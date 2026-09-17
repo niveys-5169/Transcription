@@ -380,6 +380,20 @@ def ensure_review_blocks(job_id: str) -> list[dict]:
         return []
     blocks = job.get("review_blocks") or []
     if blocks:
+        # Les travaux créés avant les tours de parole avaient déjà leurs
+        # ``review_blocks`` matérialisés, un par segment. On les modernise à
+        # l'ouverture seulement tant qu'ils sont intacts et non annotés : une
+        # correction humaine ou un lien d'annotation ne peut alors disparaître.
+        if _legacy_blocks_can_be_regrouped(job_id, blocks, job.get("segments") or []):
+            by_source = {block["source_segment_ids"][0]: block for block in blocks}
+            segments = [
+                {**segment,
+                 "speaker": by_source[f"segment-{index}"].get("speaker"),
+                 "role": by_source[f"segment-{index}"].get("role")}
+                for index, segment in enumerate(job.get("segments") or [], start=1)
+            ]
+            blocks = review_blocks_from_segments(segments)
+            update_job(job_id, review_blocks=blocks, clean_text=clean_text_from_blocks(blocks))
         return blocks
     segments = job.get("segments") or []
     if not segments:
@@ -390,29 +404,73 @@ def ensure_review_blocks(job_id: str) -> list[dict]:
 
 
 def review_blocks_from_segments(segments: list[dict]) -> list[dict]:
-    """Copie normalisée des segments pour l'éditeur, sans toucher au brut."""
-    blocks = []
+    """Construit des tours de parole éditables sans toucher aux segments bruts.
+
+    Whisper (et la diarisation) découpent l'audio en petits fragments pour
+    obtenir des horodatages précis. Ces fragments ne sont pas une unité de
+    lecture : quand un même locuteur parle à la suite, ils deviennent un seul
+    bloc éditable. Chaque fragment reste toutefois référencé, pour le bouton
+    ``Brut``, l'écoute et une éventuelle scission mot à mot.
+    """
+    blocks: list[dict] = []
     for index, segment in enumerate(segments, start=1):
+        text = str(segment.get("text") or "").strip()
+        speaker = segment.get("speaker")
         block = {
             "id": f"segment-{index}",
             "start": float(segment.get("start") or 0),
             "end": float(segment.get("end") or 0),
-            "text": str(segment.get("text") or "").strip(),
-            "raw_text": str(segment.get("text") or "").strip(),
+            "text": text,
+            "raw_text": text,
             "source_segment_ids": [f"segment-{index}"],
             "confidence": segment.get("confidence"),
             # La diarisation n'est pas devinée : Whisper ne fournit pas une
             # identité fiable. Ces champs permettent à la personne qui écoute
             # de distinguer sans ambiguïté professeur, élève et intervenants.
-            "speaker": segment.get("speaker"),
-            "role": None,
+            "speaker": speaker,
+            "role": segment.get("role"),
         }
         # Les travaux existants n'ont pas de mots : ne pas leur ajouter une
         # clé vide afin de garder les réponses historiques identiques.
         if segment.get("words") is not None:
             block["words"] = segment["words"]
-        blocks.append(block)
+        # Ne jamais fusionner des fragments sans locuteur : cela masquerait
+        # précisément le changement que la diarisation n'aurait pas repéré.
+        # Le bouton « Scinder » couvre le cas inverse, rare, où elle l'a raté.
+        previous = blocks[-1] if blocks else None
+        if speaker and previous and previous.get("speaker") == speaker:
+            separator = " " if previous.get("text") and text else ""
+            previous["id"] = f"block-{previous['source_segment_ids'][0].removeprefix('segment-')}-{index}"
+            previous["end"] = block["end"]
+            previous["text"] = f"{previous.get('text') or ''}{separator}{text}".strip()
+            previous["raw_text"] = f"{previous.get('raw_text') or ''}{separator}{text}".strip()
+            previous["source_segment_ids"].append(f"segment-{index}")
+            if block.get("words") is not None:
+                previous["words"] = list(previous.get("words") or []) + list(block["words"] or [])
+            confidences = [value for value in (previous.get("confidence"), block.get("confidence")) if value is not None]
+            previous["confidence"] = min(confidences) if confidences else None
+        else:
+            blocks.append(block)
     return blocks
+
+
+def _legacy_blocks_can_be_regrouped(job_id: str, blocks: list[dict], segments: list[dict]) -> bool:
+    """Détecte les anciens blocs 1:1 vierges qui peuvent devenir des tours."""
+    if len(blocks) != len(segments) or not blocks or list_annotations(job_id):
+        return False
+    for index, block in enumerate(blocks, start=1):
+        if block.get("id") != f"segment-{index}" or block.get("source_segment_ids") != [f"segment-{index}"]:
+            return False
+        if str(block.get("text") or "").strip() != str(block.get("raw_text") or "").strip():
+            return False
+        # Si le repère a été ajouté manuellement dans l'ancien éditeur, le
+        # segment brut ne le connaît pas : ne pas transformer cette édition.
+        if block.get("speaker") != segments[index - 1].get("speaker"):
+            return False
+    return any(
+        blocks[index - 1].get("speaker") and blocks[index - 1].get("speaker") == block.get("speaker")
+        for index, block in enumerate(blocks[1:], start=1)
+    )
 
 
 def review_blocks_from_pairs(pairs, segments: list[dict]) -> list[dict]:
@@ -431,11 +489,19 @@ def review_blocks_from_pairs(pairs, segments: list[dict]) -> list[dict]:
                 nearest = min(range(len(segments)), key=lambda i: abs(float(segments[i].get("start") or 0) - pair.start))
                 source_ids = [f"segment-{nearest + 1}"]
         block_id = getattr(pair, "block_id", None) or f"block-{number}"
+        source_segments = [segments[int(source_id.removeprefix("segment-")) - 1]
+                           for source_id in source_ids
+                           if source_id.removeprefix("segment-").isdigit()
+                           and 0 < int(source_id.removeprefix("segment-")) <= len(segments)]
+        speakers = {segment.get("speaker") for segment in source_segments if segment.get("speaker")}
+        roles = {segment.get("role") for segment in source_segments if segment.get("role")}
         blocks.append({
             "id": block_id, "start": pair.start, "end": pair.end,
             "text": pair.clean, "raw_text": pair.raw,
             "source_segment_ids": source_ids, "confidence": None,
-            "words": None, "speaker": None, "role": None,
+            "words": [word for segment in source_segments for word in (segment.get("words") or [])] or None,
+            "speaker": speakers.pop() if len(speakers) == 1 else None,
+            "role": roles.pop() if len(roles) == 1 else None,
         })
     return blocks
 

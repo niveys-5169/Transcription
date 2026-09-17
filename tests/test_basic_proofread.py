@@ -56,6 +56,19 @@ def test_split_paragraphs_ignore_les_pauses_trop_precoces():
     assert len(basic.split_paragraphs(segments)) == 1
 
 
+def test_split_paragraphs_separe_les_tours_de_parole_identifies():
+    segments = [
+        {"start": 0, "end": 1, "text": "Bonjour.", "speaker": "SPEAKER_00"},
+        {"start": 1, "end": 2, "text": "Bienvenue.", "speaker": "SPEAKER_00"},
+        {"start": 2, "end": 3, "text": "Merci.", "speaker": "SPEAKER_01"},
+    ]
+
+    paragraphs = basic.split_paragraph_spans(segments)
+
+    assert [paragraph.text for paragraph in paragraphs] == ["Bonjour. Bienvenue.", "Merci."]
+    assert [(paragraph.first_segment_index, paragraph.last_segment_index) for paragraph in paragraphs] == [(1, 2), (3, 3)]
+
+
 def test_basic_proofread_produit_un_texte_propre():
     segments = [
         segment(0.0, 3.0, "alors euh bonjour à à tous"),

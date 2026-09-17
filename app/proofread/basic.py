@@ -98,7 +98,7 @@ class Paragraph:
 
 
 def split_paragraph_spans(segments, *, max_chars: int = MAX_PARAGRAPH_CHARS) -> list[Paragraph]:
-    """Regroupe les segments en paragraphes, en s'appuyant sur les pauses."""
+    """Regroupe les segments en paragraphes, sans mélanger les locuteurs."""
     paragraphs: list[Paragraph] = []
     current: list[str] = []
     length = 0
@@ -106,6 +106,7 @@ def split_paragraph_spans(segments, *, max_chars: int = MAX_PARAGRAPH_CHARS) -> 
     previous_end: float | None = None
     first_index = 0
     previous_index = 0
+    previous_speaker = None
 
     for index, segment in enumerate(segments, start=1):
         text = _text_of(segment).strip()
@@ -114,7 +115,11 @@ def split_paragraph_spans(segments, *, max_chars: int = MAX_PARAGRAPH_CHARS) -> 
         start, end = _bounds_of(segment)
 
         pause = start - previous_end if previous_end is not None else 0.0
+        speaker = segment.get("speaker")
         should_break = current and (
+            # Deux locuteurs identifiés forment nécessairement deux tours.
+            (speaker and previous_speaker and speaker != previous_speaker)
+            or
             (pause >= PARAGRAPH_PAUSE and length >= MIN_PARAGRAPH_CHARS)
             or length >= max(1, max_chars)
         )
@@ -132,6 +137,7 @@ def split_paragraph_spans(segments, *, max_chars: int = MAX_PARAGRAPH_CHARS) -> 
         length += len(text) + 1
         previous_end = end
         previous_index = index
+        previous_speaker = speaker
 
     if current:
         paragraphs.append(

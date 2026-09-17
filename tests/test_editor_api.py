@@ -296,6 +296,40 @@ def test_review_blocks_propagent_mots_et_locuteur():
     assert blocks[0]["words"][0]["text"] == "Bonjour"
 
 
+def test_review_blocks_fusionnent_un_tour_de_parole_en_gardant_les_preuves():
+    blocks = db.review_blocks_from_segments([
+        {"start": 0.0, "end": 1.0, "text": "Bonjour", "speaker": "SPEAKER_00",
+         "words": [{"start": 0.0, "end": 1.0, "text": "Bonjour"}]},
+        {"start": 1.1, "end": 2.0, "text": "à toutes et tous.", "speaker": "SPEAKER_00",
+         "words": [{"start": 1.1, "end": 2.0, "text": "tous."}]},
+        {"start": 2.1, "end": 3.0, "text": "Merci.", "speaker": "SPEAKER_01"},
+    ])
+
+    assert [block["id"] for block in blocks] == ["block-1-2", "segment-3"]
+    assert blocks[0]["text"] == "Bonjour à toutes et tous."
+    assert blocks[0]["source_segment_ids"] == ["segment-1", "segment-2"]
+    assert len(blocks[0]["words"]) == 2
+
+
+def test_anciens_blocs_vierges_sont_regroupes_sans_toucher_aux_annotations(tmp_path):
+    job_id = db.create_job(filename="cours.wav", media_path="", size_bytes=0, engine="local", model="tiny", language="fr", proofread="none", structure=False)
+    segments = [
+        {"start": 0, "end": 1, "text": "Bonjour", "speaker": "SPEAKER_00"},
+        {"start": 1, "end": 2, "text": "à tous.", "speaker": "SPEAKER_00"},
+    ]
+    old_blocks = [
+        {"id": f"segment-{index}", "start": segment["start"], "end": segment["end"], "text": segment["text"], "raw_text": segment["text"],
+         "source_segment_ids": [f"segment-{index}"], "confidence": None, "speaker": segment["speaker"], "role": None}
+        for index, segment in enumerate(segments, start=1)
+    ]
+    db.update_job(job_id, segments=segments, review_blocks=old_blocks)
+
+    blocks = db.ensure_review_blocks(job_id)
+
+    assert len(blocks) == 1
+    assert blocks[0]["id"] == "block-1-2"
+
+
 def test_review_blocks_tolerent_un_segment_sans_confiance():
     """Compat des travaux transcrits avant l'ajout du champ : pas de KeyError,
     confidence retombe simplement à None (pas de coloration côté client)."""
