@@ -17,9 +17,10 @@ stable et exploitable, pas une étape de passage : le texte brut, les segments
 et les sous-titres sont déjà disponibles au téléchargement dès
 « transcribed » ; le texte relu, dès « done ».
 
-Un seul thread dépile la file : les moteurs Whisper saturent déjà la machine,
-en lancer deux en parallèle ne ferait que les ralentir tous les deux — et un
-appel à Claude, CLI ou API, n'a aucune raison d'être plus pressé qu'un autre.
+Les extractions WAV et les transcriptions ont chacune leur file ordonnée. Le
+préparateur peut donc extraire le fichier suivant pendant que le GPU traite le
+précédent, mais les moteurs Whisper restent bien séquentiels : deux appels
+concurrents ne feraient que se ralentir et risqueraient de créer deux pods.
 """
 from __future__ import annotations
 
@@ -65,7 +66,9 @@ _cancelled: set[str] = set()
 _lock = threading.Lock()
 
 _queue: "queue.Queue[tuple[str, str]]" = queue.Queue()
+_extraction_queue: "queue.Queue[str]" = queue.Queue()
 _worker: threading.Thread | None = None
+_extractor: threading.Thread | None = None
 DB_WRITE_INTERVAL = 2.0
 
 
@@ -73,18 +76,23 @@ DB_WRITE_INTERVAL = 2.0
 
 
 def start_worker() -> None:
-    """Démarre le thread de traitement (idempotent)."""
-    global _worker
+    """Démarre les workers de préparation et de traitement (idempotent)."""
+    global _worker, _extractor
     with _lock:
-        if _worker is not None and _worker.is_alive():
-            return
-        _worker = threading.Thread(target=_loop, name="transcription", daemon=True)
-        _worker.start()
+        if _worker is None or not _worker.is_alive():
+            _worker = threading.Thread(target=_loop, name="transcription", daemon=True)
+            _worker.start()
+        if _extractor is None or not _extractor.is_alive():
+            _extractor = threading.Thread(target=_extraction_loop, name="audio-extraction", daemon=True)
+            _extractor.start()
 
 
 def enqueue(job_id: str, task: str = TASK_TRANSCRIPTION) -> None:
     db.update_job(job_id, task=task)
-    _queue.put((job_id, task))
+    if task == TASK_TRANSCRIPTION:
+        _extraction_queue.put(job_id)
+    else:
+        _queue.put((job_id, task))
     start_worker()
 
 
@@ -116,6 +124,18 @@ def _loop() -> None:
             logger.exception("Échec inattendu du travail %s (%s)", job_id, task)
         finally:
             _queue.task_done()
+
+
+def _extraction_loop() -> None:
+    """Prépare les WAV dans l'ordre des dépôts, sans attendre Whisper."""
+    while True:
+        job_id = _extraction_queue.get()
+        try:
+            run_extraction(job_id)
+        except Exception:  # ne jamais laisser mourir le préparateur
+            logger.exception("Échec inattendu de l'extraction %s", job_id)
+        finally:
+            _extraction_queue.task_done()
 
 
 # ---------------------------------------------------------------- avancement
@@ -258,8 +278,12 @@ def _record_notebooklm_result(job_id: str, success: bool, detail: str) -> None:
 # ------------------------------------------------------ étape 1 : transcription
 
 
-def run_transcription(job_id: str) -> None:
-    """Fichier déposé → texte brut et segments horodatés. Rien de plus."""
+def run_extraction(job_id: str) -> None:
+    """Prépare le WAV, puis remet le travail dans la file Whisper.
+
+    Un WAV valide est conservé dès cette étape. Ainsi une panne réseau ou un
+    échec du pod n'oblige jamais une relance à reconvertir le média original.
+    """
     job = db.get_job(job_id, with_content=False)
     if job is None:
         logger.warning("Travail %s introuvable", job_id)
@@ -277,80 +301,95 @@ def run_transcription(job_id: str) -> None:
         error=None,
     )
 
-    workdir = config.MEDIA_DIR / job_id
-    source = Path(job["media_path"] or "")
+    try:
+        if is_cancelled(job_id):
+            raise TranscriptionError("Travail annulé.")
+        wav_path = Path(job.get("wav_path") or "")
+        if wav_path.is_file():
+            # Relance après une transcription échouée : ne jamais réextraire.
+            duration = float(job.get("duration") or 0.0) or media.wav_duration(wav_path)
+            if not job.get("duration"):
+                db.update_job(job_id, duration=duration)
+            progress(EXTRACTION_SHARE, "Piste audio déjà extraite — transcription en attente")
+        else:
+            source = Path(job["media_path"] or "")
+            if not source.exists():
+                raise TranscriptionError(
+                    f"Le fichier déposé est introuvable ({source.name})."
+                )
+            workdir = config.MEDIA_DIR / job_id
+            progress(0.0, "Analyse du fichier…")
+            duration = media.probe_duration(source)
+            if duration:
+                db.update_job(job_id, duration=duration)
+            wav_path = workdir / "audio.wav"
+            media.extract_wav(
+                source,
+                wav_path,
+                duration=duration,
+                on_progress=lambda f: progress(
+                    f * EXTRACTION_SHARE, "Extraction de la piste audio…"
+                ),
+                should_cancel=lambda: is_cancelled(job_id),
+            )
+            if not duration:
+                duration = media.wav_duration(wav_path)
+                db.update_job(job_id, duration=duration)
+            db.update_job(job_id, wav_path=str(wav_path))
+
+        _queue.put((job_id, TASK_TRANSCRIPTION))
+
+    except (TranscriptionError, media.MediaError) as exc:
+        _fail(job_id, exc, "Erreur de transcription")
+    except Exception as exc:  # pragma: no cover - garde-fou
+        logger.exception("Extraction %s en échec", job_id)
+        db.mark_finished(
+            job_id, status="error", stage="Erreur", task=None, error=str(exc)
+        )
+    finally:
+        _release(job_id)
+
+
+def run_transcription(job_id: str) -> None:
+    """WAV déjà préparé → texte brut et segments horodatés. Rien de plus."""
+    job = db.get_job(job_id, with_content=False)
+    if job is None or job["status"] in {"done", "transcribed", "checked", "published", "canceled"}:
+        return
+
+    progress = _Progress(job_id)
+    db.update_job(job_id, status="running", task=TASK_TRANSCRIPTION, stage="Transcription en cours…", error=None)
 
     try:
         if is_cancelled(job_id):
             raise TranscriptionError("Travail annulé.")
-        if not source.exists():
-            raise TranscriptionError(
-                f"Le fichier déposé est introuvable ({source.name})."
-            )
-
-        # -- Extraction audio ------------------------------------------------
-        progress(0.0, "Analyse du fichier…")
-        duration = media.probe_duration(source)
-        if duration:
-            db.update_job(job_id, duration=duration)
-
-        wav_path = workdir / "audio.wav"
-        media.extract_wav(
-            source,
-            wav_path,
-            duration=duration,
-            on_progress=lambda f: progress(
-                f * EXTRACTION_SHARE, "Extraction de la piste audio…"
-            ),
-            should_cancel=lambda: is_cancelled(job_id),
-        )
-        if not duration:
-            duration = media.wav_duration(wav_path)
-            db.update_job(job_id, duration=duration)
-        db.update_job(job_id, wav_path=str(wav_path))
-
-        # -- Transcription ---------------------------------------------------
+        wav_path = Path(job.get("wav_path") or "")
+        if not wav_path.is_file():
+            raise TranscriptionError("La piste audio préparée est introuvable : relancez le travail.")
+        duration = float(job.get("duration") or 0.0) or media.wav_duration(wav_path)
         engine = get_engine(job["engine"])
         segments = []
-        report = progress.scaled(
-            EXTRACTION_SHARE, TRANSCRIPTION_SHARE, "Transcription…"
-        )
+        report = progress.scaled(EXTRACTION_SHARE, TRANSCRIPTION_SHARE, "Transcription…")
         settings = config.load_settings()
-        initial_prompt = (
-            lexicon.whisper_prompt()
-            if settings.lexicon_enabled and settings.lexicon_whisper_prompt
-            else None
-        )
+        initial_prompt = lexicon.whisper_prompt() if settings.lexicon_enabled and settings.lexicon_whisper_prompt else None
         for segment in engine.transcribe(
-            wav_path,
-            model=job["model"],
-            language=job["language"],
-            duration=duration,
-            workdir=workdir,
-            initial_prompt=initial_prompt,
-            on_progress=report,
-            should_cancel=lambda: is_cancelled(job_id),
+            wav_path, model=job["model"], language=job["language"], duration=duration,
+            workdir=config.MEDIA_DIR / job_id, initial_prompt=initial_prompt,
+            on_progress=report, should_cancel=lambda: is_cancelled(job_id),
         ):
             segments.append(segment.to_dict())
 
         if not segments:
             raise TranscriptionError(
                 "Aucune parole n'a été détectée dans ce fichier. Vérifiez que "
-                "la piste audio n'est pas muette (le WAV extrait est "
-                "téléchargeable pour contrôle)."
+                "la piste audio n'est pas muette (le WAV extrait est téléchargeable pour contrôle)."
             )
-
         db.mark_finished(
-            job_id,
-            status="transcribed",
-            stage="Transcrit",
-            progress=1.0,
-            task=None,
-            segments=segments,
-            review_blocks=db.review_blocks_from_segments(segments),
+            job_id, status="transcribed", stage="Transcrit", progress=1.0, task=None,
+            segments=segments, review_blocks=db.review_blocks_from_segments(segments),
             raw_text=segments_to_text(segments),
         )
-        if not config.load_settings().keep_media:
+        source = Path(job.get("media_path") or "")
+        if not config.load_settings().keep_media and source.is_file():
             source.unlink(missing_ok=True)
 
     except (TranscriptionError, media.MediaError) as exc:
@@ -358,9 +397,7 @@ def run_transcription(job_id: str) -> None:
         return
     except Exception as exc:  # pragma: no cover - garde-fou
         logger.exception("Travail %s en échec", job_id)
-        db.mark_finished(
-            job_id, status="error", stage="Erreur", task=None, error=str(exc)
-        )
+        db.mark_finished(job_id, status="error", stage="Erreur", task=None, error=str(exc))
         return
     finally:
         _release(job_id)

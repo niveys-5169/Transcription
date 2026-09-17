@@ -877,9 +877,13 @@ async def retry_job(job_id: str) -> dict:
         raise HTTPException(404, "Travail introuvable.")
     if job["status"] == "running":
         raise HTTPException(409, "Ce travail est déjà en cours.")
-    if not Path(job["media_path"] or "").exists():
+    # Une transcription peut avoir échoué après la conversion audio (pod
+    # indisponible, envoi réseau…). Dans ce cas le WAV est une étape durable :
+    # la relance repart de lui, même si l'original a déjà été retiré.
+    wav_ready = Path(job.get("wav_path") or "").is_file()
+    if not wav_ready and not Path(job["media_path"] or "").exists():
         raise HTTPException(
-            410, "Le fichier d'origine n'est plus disponible : déposez-le à nouveau."
+            410, "Ni le fichier d'origine ni la piste audio extraite ne sont disponibles : déposez-le à nouveau."
         )
     db.update_job(
         job_id, status="queued", stage="En attente", progress=0.0, error=None

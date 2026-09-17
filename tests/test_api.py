@@ -2,6 +2,7 @@
 import json
 import time
 import wave
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -316,15 +317,24 @@ def test_suppression_efface_aussi_les_fichiers(client):
 
 
 def test_relance_d_un_travail_en_erreur(client, monkeypatch):
+    extractions = []
+    monkeypatch.setattr(
+        media,
+        "extract_wav",
+        lambda src, dst, **kwargs: (extractions.append((src, dst)), _ecrire_wav(dst))[1],
+    )
     monkeypatch.setitem(engines._ENGINES, "local", MoteurEnEchec)
     job_id = _deposer(client)
     assert _attendre(client, job_id)["status"] == "error"
+    # Le WAV suffit pour relancer, même si l'original n'est plus là.
+    Path(db.get_job(job_id, with_content=False)["media_path"]).unlink()
 
     monkeypatch.setitem(engines._ENGINES, "local", FauxMoteur)
     assert client.post(f"/api/jobs/{job_id}/retry").status_code == 200
     relance = _attendre(client, job_id)
     assert relance["status"] == "done"
     assert relance["error"] is None
+    assert len(extractions) == 1
 
 
 def test_mode_sans_relecture_ne_touche_pas_aux_mots(client):

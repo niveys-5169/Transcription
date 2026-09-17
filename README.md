@@ -671,11 +671,14 @@ couvre ce cas : une machine GPU louée **à la minute** (pas à la requête),
 créée seulement quand on en a besoin et détruite — pas seulement arrêtée, ce
 qui laisserait le disque facturé.
 
-Un seul travail est traité à la fois (un seul thread dépile la file), donc
-quand plusieurs fichiers s'enchaînent, le pod créé pour le premier reste
-disponible pour les suivants au lieu d'être détruit puis recréé à chaque
-fois — ce qui rechargerait l'image et le modèle Whisper à chaque fichier
-pour rien. Il n'est détruit que si plus aucun travail n'en a eu besoin
+Les transcriptions restent séquentielles (un seul appel Whisper/pod à la
+fois), mais l'extraction WAV possède sa propre file : le fichier suivant est
+préparé pendant que le GPU transcrit le précédent. Dès que le pod a terminé,
+il peut donc recevoir la piste suivante sans attendre sa conversion ni être
+détruit puis recréé — ce qui rechargerait l'image et le modèle Whisper pour
+rien. Un WAV déjà extrait est conservé après un échec d'envoi ou de
+transcription et sert directement à la relance. Le pod n'est détruit que si
+plus aucun travail n'en a eu besoin
 pendant `runpod_pod_idle_timeout_seconds` (90 secondes par défaut, réglable)
 — jamais laissé vivre indéfiniment. Après le tout dernier fichier, ce délai
 reste du temps GPU facturé pour rien : c'est le prix à payer pour couvrir
