@@ -52,12 +52,18 @@ def _message_proxy_muet(status_code: int, *, label: str | None = None) -> str:
     """Message après épuisement des tentatives sur un corps illisible.
 
     Un 404 qui persiste peut simplement venir d'une route pas encore
-    propagée par le proxy juste après la création du pod. Un 502/503/504 qui
-    persiste, lui, n'a plus cette excuse après trois tentatives espacées :
-    c'est le proxy RunPod qui ne trouve plus personne derrière le port du
-    pod, très probablement parce que le serveur a planté pendant le
-    chargement du modèle (un crash cuDNN natif tue le processus sans lever
-    d'exception Python, par exemple) et que le conteneur redémarre.
+    propagée par le proxy juste après la création du pod. Un 502/503/504,
+    lui, n'a plus cette excuse après trois tentatives espacées : c'est le
+    proxy RunPod qui ne trouve plus personne derrière le port du pod, très
+    probablement parce que le serveur a planté pendant le chargement du
+    modèle (un crash cuDNN natif tue le processus sans lever d'exception
+    Python, par exemple) et que le conteneur redémarre.
+
+    ``status_code`` est le statut le plus parlant vu sur l'ensemble des
+    tentatives, pas le dernier : pendant un redémarrage du conteneur, le
+    proxy passe de 502 (port sans personne derrière) à 404 (route retirée
+    le temps que le conteneur se réenregistre), et ce 404 final aurait
+    masqué le plantage sous un message de propagation de route.
     """
     suffixe = f" pour le {label}" if label else ""
     if status_code in (502, 503, 504):
@@ -68,6 +74,15 @@ def _message_proxy_muet(status_code: int, *, label: str | None = None) -> str:
             f"console RunPod."
         )
     return f"Réponse du pod{' de secours' if label else ''} illisible{suffixe} (HTTP {status_code})."
+
+
+def _statut_le_plus_parlant(statuts: list[int]) -> int:
+    """Statut à retenir pour le message d'erreur : un 502/503/504 prime sur
+    un 404, quel que soit l'ordre d'apparition (voir _message_proxy_muet)."""
+    for statut in statuts:
+        if statut in (502, 503, 504):
+            return statut
+    return statuts[-1]
 
 
 # Chemin de montage d'un volume reseau RunPod, cote pod comme cote
@@ -291,6 +306,7 @@ class PodFallbackSession:
             "initial_prompt": initial_prompt or None,
         }
         attempts = 3
+        statuts_muets: list[int] = []
         for attempt in range(1, attempts + 1):
             try:
                 response = self._http.post(url, json=payload)
@@ -308,10 +324,13 @@ class PodFallbackSession:
                 # création du pod, sa route peut ne pas être encore
                 # entièrement propagée, même si /health avait déjà répondu.
                 # On retente avant d'abandonner.
+                statuts_muets.append(response.status_code)
                 if response.status_code in PROXY_RETRY_STATUSES and attempt < attempts:
                     time.sleep(POLL_INTERVAL)
                     continue
-                raise TranscriptionError(_message_proxy_muet(response.status_code, label=label))
+                raise TranscriptionError(
+                    _message_proxy_muet(_statut_le_plus_parlant(statuts_muets), label=label)
+                )
             break
 
         if isinstance(output, dict) and output.get("error"):
@@ -327,6 +346,7 @@ class PodFallbackSession:
         """Envoie le média entier au pod, sans base64 ni limite de taille JSON."""
         url = f"{self._client.proxy_url(self.pod_id, self.settings.runpod_pod_port)}/transcribe"
         attempts = 3
+        statuts_muets: list[int] = []
         for attempt in range(1, attempts + 1):
             try:
                 response = self._http.post(
@@ -347,10 +367,13 @@ class PodFallbackSession:
                 # Le health-check peut réussir un instant avant que le proxy
                 # publie complètement la route POST du pod, ou pendant que
                 # le conteneur finit d'initialiser WhisperX.
+                statuts_muets.append(response.status_code)
                 if response.status_code in PROXY_RETRY_STATUSES and attempt < attempts:
                     time.sleep(POLL_INTERVAL)
                     continue
-                raise TranscriptionError(_message_proxy_muet(response.status_code)) from exc
+                raise TranscriptionError(
+                    _message_proxy_muet(_statut_le_plus_parlant(statuts_muets))
+                ) from exc
             break
         if response.status_code >= 400 or output.get("error"):
             raise TranscriptionError(f"Le pod a échoué : {output.get('error') or response.status_code}")

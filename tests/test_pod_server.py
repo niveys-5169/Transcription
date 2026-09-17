@@ -73,6 +73,95 @@ def worker(monkeypatch):
     sys.modules.pop("pod_server", None)
 
 
+# ------------------------------------------------------ préchargement cuDNN
+
+
+@pytest.fixture
+def faux_cudnn(monkeypatch, tmp_path):
+    """Simule le paquet ``nvidia.cudnn`` du wheel pip, avec ses .so factices."""
+    lib = tmp_path / "nvidia" / "cudnn" / "lib"
+    lib.mkdir(parents=True)
+    for name in ("libcudnn_graph.so.9", "libcudnn_ops.so.9", "libcudnn_cnn.so.9"):
+        (lib / name).write_bytes(b"pas un vrai .so")
+    paquet = types.ModuleType("nvidia")
+    sous = types.ModuleType("nvidia.cudnn")
+    sous.__file__ = str(lib.parent / "__init__.py")
+    paquet.cudnn = sous
+    monkeypatch.setitem(sys.modules, "nvidia", paquet)
+    monkeypatch.setitem(sys.modules, "nvidia.cudnn", sous)
+    return lib
+
+
+def test_les_sous_bibliotheques_cudnn_sont_prechargees_en_global(worker, monkeypatch, faux_cudnn):
+    """Le crash « Unable to load any of {libcudnn_cnn.so.9.1.0, ...} » vient
+    d'un dlopen par nom que le chargeur ne sait pas résoudre : une fois la
+    bibliothèque chargée par chemin complet en RTLD_GLOBAL, le dlopen sur le
+    SONAME la retrouve. Ordre : graph, puis ops, puis cnn (dépendances)."""
+    charges = []
+
+    def faux_cdll(path, mode=None):
+        charges.append((path, mode))
+
+    monkeypatch.setattr(worker.ctypes, "CDLL", faux_cdll)
+    monkeypatch.setattr(worker, "_cudnn_preloaded", False)
+
+    worker._preload_cudnn()
+
+    assert [Path(p).name for p, _ in charges] == [
+        "libcudnn_graph.so.9", "libcudnn_ops.so.9", "libcudnn_cnn.so.9",
+    ], "seules les bibliothèques présentes, dans l'ordre des dépendances"
+    assert all(Path(p).parent == faux_cudnn for p, _ in charges)
+    assert all(mode == worker.ctypes.RTLD_GLOBAL for _, mode in charges)
+
+
+def test_le_prechargement_cudnn_ne_se_fait_qu_une_fois(worker, monkeypatch, faux_cudnn):
+    charges = []
+    monkeypatch.setattr(worker.ctypes, "CDLL", lambda path, mode=None: charges.append(path))
+    monkeypatch.setattr(worker, "_cudnn_preloaded", False)
+
+    worker._preload_cudnn()
+    worker._preload_cudnn()
+
+    assert len(charges) == 3
+
+
+def test_le_prechargement_cudnn_tolere_une_bibliotheque_illisible(worker, monkeypatch, faux_cudnn, capsys):
+    """Un .so illisible ne doit pas empêcher le serveur de tenter la
+    transcription : on signale et on continue (LD_LIBRARY_PATH du Dockerfile
+    reste comme filet)."""
+    def faux_cdll(path, mode=None):
+        if path.endswith("libcudnn_ops.so.9"):
+            raise OSError("format ELF invalide")
+
+    monkeypatch.setattr(worker.ctypes, "CDLL", faux_cdll)
+    monkeypatch.setattr(worker, "_cudnn_preloaded", False)
+
+    worker._preload_cudnn()
+
+    assert "libcudnn_ops.so.9" in capsys.readouterr().out
+
+
+def test_le_prechargement_cudnn_est_sans_effet_sans_le_wheel(worker, monkeypatch):
+    monkeypatch.setitem(sys.modules, "nvidia", None)
+    monkeypatch.setitem(sys.modules, "nvidia.cudnn", None)
+    monkeypatch.setattr(worker, "_cudnn_preloaded", False)
+    worker._preload_cudnn()  # ne lève pas
+
+
+def test_le_chemin_faster_whisper_precharge_cudnn_avant_le_modele(worker, monkeypatch):
+    ordre = []
+    monkeypatch.setattr(worker, "_preload_cudnn", lambda: ordre.append("cudnn"))
+    original = sys.modules["faster_whisper"].WhisperModel.__init__
+
+    def init(self, taille, **kwargs):
+        ordre.append("modele")
+        original(self, taille, **kwargs)
+
+    monkeypatch.setattr(sys.modules["faster_whisper"].WhisperModel, "__init__", init)
+    worker.transcribe(base64.b64encode(b"RIFF____WAVE").decode(), "small", "fr")
+    assert ordre == ["cudnn", "modele"]
+
+
 # ------------------------------------------------------------ contrat d'API
 
 

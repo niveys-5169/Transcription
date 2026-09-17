@@ -10,6 +10,7 @@ partie de l'architecture.
 from __future__ import annotations
 
 import base64
+import ctypes
 from email import policy
 from email.parser import BytesParser
 import json
@@ -30,6 +31,61 @@ os.environ.setdefault("HF_XET_HIGH_PERFORMANCE", "1")
 VALID_MODELS = {"tiny", "base", "small", "medium", "large-v3"}
 VOLUME_ROOT = "/runpod-volume"
 _model_cache: dict[str, object] = {}
+
+# Sous-bibliothèques de cuDNN 9, dans l'ordre de leurs dépendances (graph ←
+# ops ← cnn/adv ; les moteurs et l'heuristique s'appuient sur les trois
+# premières). Voir _preload_cudnn.
+CUDNN_SUBLIBS = (
+    "libcudnn_graph.so.9",
+    "libcudnn_ops.so.9",
+    "libcudnn_cnn.so.9",
+    "libcudnn_adv.so.9",
+    "libcudnn_engines_precompiled.so.9",
+    "libcudnn_engines_runtime_compiled.so.9",
+    "libcudnn_heuristic.so.9",
+)
+_cudnn_preloaded = False
+
+
+def _preload_cudnn() -> None:
+    """Charge en RTLD_GLOBAL les sous-bibliothèques de cuDNN 9 du wheel pip.
+
+    cuDNN 9 est découpé en une bibliothèque principale (``libcudnn.so.9``,
+    que torch précharge) et des sous-bibliothèques que la principale ouvre
+    elle-même par ``dlopen`` sur leur seul nom (``libcudnn_cnn.so.9``...) au
+    moment de la première convolution. Le wheel ``nvidia-cudnn-cu12`` les
+    dépose dans ``site-packages/nvidia/cudnn/lib``, un dossier que le
+    chargeur dynamique ne parcourt pas : ctranslate2 (faster-whisper) meurt
+    alors d'un « Unable to load any of {libcudnn_cnn.so.9.1.0, ...} » puis
+    « Invalid handle. Cannot load symbol cudnnCreateConvolutionDescriptor »,
+    un abort natif qui tue le processus sans exception Python — le pod
+    redémarre et l'application ne voit que des 502/404 du proxy.
+
+    Une fois une bibliothèque chargée ici par son chemin complet, un
+    ``dlopen`` ultérieur sur son ``SONAME`` la retrouve sans parcourir le
+    moindre dossier. Le ``Dockerfile`` ajoute aussi le dossier à
+    ``LD_LIBRARY_PATH`` ; ce préchargement rend le serveur robuste même
+    lancé hors de cette image (variable absente ou écrasée par RunPod).
+    À appeler après ``import torch`` (qui a déjà chargé cuBLAS et
+    ``libcudnn.so.9`` en global) et avant toute inférence ctranslate2.
+    """
+    global _cudnn_preloaded
+    if _cudnn_preloaded:
+        return
+    _cudnn_preloaded = True
+    try:
+        import nvidia.cudnn
+    except ImportError:
+        return
+    lib_dir = os.path.join(os.path.dirname(nvidia.cudnn.__file__), "lib")
+    for name in CUDNN_SUBLIBS:
+        path = os.path.join(lib_dir, name)
+        if not os.path.exists(path):
+            continue
+        try:
+            ctypes.CDLL(path, mode=ctypes.RTLD_GLOBAL)
+        except OSError as exc:
+            print(f"[pod_server] Préchargement de {name} impossible : {exc}")
 
 
 def _confidence_from_logprob(avg_logprob: float | None) -> float | None:
@@ -71,6 +127,7 @@ def get_model(model_size):
         import torch  # noqa: F401
         from faster_whisper import WhisperModel
 
+        _preload_cudnn()
         print(f"[pod_server] Chargement du modele '{model_size}' sur GPU (float16)...")
         _model_cache[model_size] = WhisperModel(
             model_size, device="cuda", compute_type="float16",
@@ -87,6 +144,9 @@ def _transcribe_with_whisperx(
     """WhisperX : transcription, alignement mot à mot et diarisation optionnelle."""
     import whisperx
 
+    # whisperx importe torch ; les sous-bibliothèques cuDNN doivent être
+    # chargées avant la première inférence ctranslate2 (model.transcribe).
+    _preload_cudnn()
     if model_size not in VALID_MODELS:
         model_size = "large-v3"
     if os.path.isdir(VOLUME_ROOT):

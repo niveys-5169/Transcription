@@ -452,6 +452,51 @@ def test_transcribe_audio_message_apres_502_persistant(monkeypatch):
     assert len(appels) == 3
 
 
+def test_transcribe_audio_message_apres_502_puis_404(monkeypatch):
+    """Séquence réelle d'un plantage du serveur pod : 502 tant que le port
+    est orphelin, puis 404 le temps que le conteneur redémarré se
+    réenregistre auprès du proxy. Le dernier statut (404) ne doit pas
+    masquer le plantage sous le message générique « illisible »."""
+    reponses = iter(
+        [
+            httpx.Response(502, text="Bad Gateway"),
+            httpx.Response(502, text="Bad Gateway"),
+            httpx.Response(404, text="404 page not found"),
+        ]
+    )
+    appels = []
+
+    def http(request: httpx.Request) -> httpx.Response:
+        appels.append(1)
+        return next(reponses)
+
+    monkeypatch.setattr("app.engines.runpod_pod.time.sleep", lambda s: None)
+    session = _session(_Settings(), lambda r: httpx.Response(200), http)
+    session.pod_id = "pod123"
+
+    with pytest.raises(TranscriptionError, match="ne répond plus derrière le proxy.*HTTP 502"):
+        session.transcribe_audio(b"RIFF____WAVE", "large-v3", "fr")
+
+    assert len(appels) == 3
+
+
+def test_transcribe_chunk_message_apres_502_puis_404(monkeypatch):
+    reponses = iter(
+        [
+            httpx.Response(502, text="Bad Gateway"),
+            httpx.Response(404, text="404 page not found"),
+            httpx.Response(404, text="404 page not found"),
+        ]
+    )
+
+    monkeypatch.setattr("app.engines.runpod_pod.time.sleep", lambda s: None)
+    session = _session(_Settings(), lambda r: httpx.Response(200), lambda r: next(reponses))
+    session.pod_id = "pod123"
+
+    with pytest.raises(TranscriptionError, match="ne répond plus derrière le proxy.*tronçon 1/3.*HTTP 502"):
+        session.transcribe_chunk(b"x", "large-v3", "fr", label="tronçon 1/3")
+
+
 def test_transcribe_chunk_leve_une_erreur_si_le_pod_en_renvoie_une():
     def http(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"error": "plus de mémoire GPU"})
