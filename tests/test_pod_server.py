@@ -347,3 +347,121 @@ def test_transcribe_via_multipart_accepte_un_fichier_entier(serveur):
 
 def test_route_inconnue_rend_404(serveur):
     assert httpx.get(f"{serveur}/autre-chose", timeout=5.0).status_code == 404
+
+
+# ------------------------------------------------------ travaux asynchrones
+#
+# Un gros fichier se transcrit en bien plus que les ~100 s au bout desquelles
+# le proxy RunPod abandonne une réponse : /jobs accepte le fichier et répond
+# tout de suite, l'application sonde ensuite /jobs/{id}.
+
+
+def _attendre(serveur, job_id, *, attendu=("done", "error"), essais=200):
+    import time
+
+    for _ in range(essais):
+        reponse = httpx.get(f"{serveur}/jobs/{job_id}", timeout=5.0)
+        assert reponse.status_code == 200
+        corps = reponse.json()
+        if corps["status"] in attendu:
+            return corps
+        time.sleep(0.01)
+    raise AssertionError(f"le travail {job_id} n'a jamais fini")
+
+
+def test_jobs_accepte_le_fichier_et_repond_aussitot(serveur, worker):
+    """Le dépôt ne doit pas attendre la transcription : il répond 202 avec un
+    identifiant avant même que le calcul ait fini."""
+    barriere = threading.Event()
+    original = worker.transcribe
+
+    def transcribe_lent(*args, **kwargs):
+        barriere.wait(5)
+        return original(*args, **kwargs)
+
+    worker.transcribe = transcribe_lent
+    try:
+        reponse = httpx.post(
+            f"{serveur}/jobs",
+            data={"model": "large-v3", "language": "auto", "diarize": "true"},
+            files={"audio": ("cours.wav", b"RIFF____WAVE", "audio/wav")},
+            timeout=5.0,
+        )
+        assert reponse.status_code == 202
+        job_id = reponse.json()["job_id"]
+        assert reponse.json()["status"] == "queued"
+
+        etat = httpx.get(f"{serveur}/jobs/{job_id}", timeout=5.0).json()
+        assert etat["status"] in ("queued", "running")
+        assert "result" not in etat
+    finally:
+        barriere.set()
+        worker.transcribe = original
+
+    corps = _attendre(serveur, job_id)
+    assert corps["status"] == "done"
+    assert corps["result"]["text"] == "Bonjour à tous. On commence le cours."
+    assert corps["result"]["segments"][0]["text"] == " Bonjour à tous."
+
+
+def test_jobs_accepte_aussi_le_json_base64(serveur):
+    reponse = httpx.post(
+        f"{serveur}/jobs",
+        json={"audio_base64": base64.b64encode(b"RIFF____WAVE").decode(), "model": "small", "language": "fr"},
+        timeout=5.0,
+    )
+    assert reponse.status_code == 202
+    corps = _attendre(serveur, reponse.json()["job_id"])
+    assert corps["status"] == "done"
+    assert corps["result"]["language"] == "fr"
+
+
+def test_jobs_rend_l_erreur_de_transcription(serveur, monkeypatch):
+    def explose(self, chemin, **kwargs):
+        raise RuntimeError("plus de mémoire GPU")
+
+    monkeypatch.setattr(sys.modules["faster_whisper"].WhisperModel, "transcribe", explose)
+    reponse = httpx.post(
+        f"{serveur}/jobs",
+        files={"audio": ("cours.wav", b"RIFF____WAVE", "audio/wav")},
+        timeout=5.0,
+    )
+    assert reponse.status_code == 202
+    corps = _attendre(serveur, reponse.json()["job_id"])
+    assert corps["status"] == "error"
+    assert corps["error"] == "plus de mémoire GPU"
+    assert "result" not in corps
+
+
+def test_jobs_refuse_une_requete_sans_audio(serveur):
+    reponse = httpx.post(f"{serveur}/jobs", json={"model": "small"}, timeout=5.0)
+    assert reponse.status_code == 400
+    assert "audio" in reponse.json()["error"]
+
+    reponse = httpx.post(f"{serveur}/jobs", content=b"pas du json", headers={"Content-Type": "application/json"}, timeout=5.0)
+    assert reponse.status_code == 400
+
+
+def test_jobs_inconnu_rend_404_json(serveur):
+    """Un 404 *JSON* : c'est ainsi que l'application distingue un travail
+    oublié (conteneur redémarré) d'un 404 HTML du proxy RunPod."""
+    reponse = httpx.get(f"{serveur}/jobs/inexistant", timeout=5.0)
+    assert reponse.status_code == 404
+    assert "inexistant" in reponse.json()["error"]
+
+
+def test_les_travaux_termines_les_plus_anciens_sont_oublies(worker, monkeypatch):
+    monkeypatch.setattr(worker, "JOBS_MAX_KEPT", 2)
+    worker._jobs.clear()
+    args = (base64.b64encode(b"RIFF____WAVE").decode(), "small", "fr", None, False)
+    identifiants = []
+    for _ in range(4):
+        job_id = worker.submit_job(args)
+        identifiants.append(job_id)
+        for _ in range(500):
+            if worker.job_status(job_id)["status"] in ("done", "error"):
+                break
+            threading.Event().wait(0.01)
+    # Plafond à 2 : seuls les deux derniers travaux subsistent.
+    assert [worker.job_status(job_id) is not None for job_id in identifiants] == [False, False, True, True]
+    worker._jobs.clear()

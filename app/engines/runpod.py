@@ -43,6 +43,7 @@ class RunPodEngine:
             output = session.transcribe_audio(
                 wav_path.read_bytes(), model, language, initial_prompt=initial_prompt,
                 diarize=bool(settings.diarization_enabled),
+                on_progress=on_progress, should_cancel=should_cancel,
             )
             for raw in output.get("segments") or []:
                 text = (raw.get("text") or "").strip()

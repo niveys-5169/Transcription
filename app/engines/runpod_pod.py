@@ -339,12 +339,14 @@ class PodFallbackSession:
             )
         return output if isinstance(output, dict) else {}
 
-    def transcribe_audio(
-        self, audio_bytes: bytes, model: str, language: str | None, *,
-        initial_prompt: str | None = None, diarize: bool = True,
-    ) -> dict:
-        """Envoie le média entier au pod, sans base64 ni limite de taille JSON."""
-        url = f"{self._client.proxy_url(self.pod_id, self.settings.runpod_pod_port)}/transcribe"
+    def _post_audio(
+        self, path: str, audio_bytes: bytes, model: str, language: str | None,
+        initial_prompt: str | None, diarize: bool, *, read_timeout: float,
+    ) -> tuple[httpx.Response, dict]:
+        """Envoie le média entier (multipart) sur ``path`` et rend la réponse
+        JSON, en retentant les corps illisibles du proxy (voir
+        PROXY_RETRY_STATUSES). Lève sur erreur réseau ou proxy muet."""
+        url = f"{self._client.proxy_url(self.pod_id, self.settings.runpod_pod_port)}{path}"
         attempts = 3
         statuts_muets: list[int] = []
         for attempt in range(1, attempts + 1):
@@ -356,6 +358,7 @@ class PodFallbackSession:
                         "initial_prompt": initial_prompt or "", "diarize": str(bool(diarize)).lower(),
                     },
                     files={"audio": ("audio.wav", audio_bytes, "audio/wav")},
+                    timeout=httpx.Timeout(120.0, read=read_timeout),
                 )
             except httpx.HTTPError as exc:
                 raise TranscriptionError(f"Pod RunPod injoignable : {exc}") from exc
@@ -374,10 +377,132 @@ class PodFallbackSession:
                 raise TranscriptionError(
                     _message_proxy_muet(_statut_le_plus_parlant(statuts_muets))
                 ) from exc
-            break
-        if response.status_code >= 400 or output.get("error"):
-            raise TranscriptionError(f"Le pod a échoué : {output.get('error') or response.status_code}")
-        return output
+            return response, output if isinstance(output, dict) else {}
+        raise AssertionError("boucle de tentatives sortie sans réponse")  # pragma: no cover
+
+    def transcribe_audio(
+        self, audio_bytes: bytes, model: str, language: str | None, *,
+        initial_prompt: str | None = None, diarize: bool = True,
+        on_progress=None, should_cancel=None,
+    ) -> dict:
+        """Envoie le média entier au pod et attend le résultat.
+
+        Le fichier est déposé sur ``/jobs`` (réponse immédiate avec un
+        identifiant) puis le résultat est sondé sur ``/jobs/{id}`` : une
+        transcription longue ne tient jamais dans une seule réponse HTTP —
+        le proxy RunPod abandonne une réponse qui tarde (~100 s), et deux
+        gros fichiers ont été perdus ainsi avec l'ancien appel synchrone,
+        alors que le pod travaillait toujours (« The read operation timed
+        out » après 120 s). Un pod encore sur l'ancienne image (sans
+        ``/jobs``) retombe sur ``/transcribe``, avec un délai de lecture
+        égal au délai du travail — ce qui ne suffit pas pour un gros
+        fichier : il faut alors laisser le pool recréer le pod sur l'image
+        à jour.
+
+        ``on_progress(fraction, message)`` et ``should_cancel()`` sont
+        optionnels ; l'annulation abandonne l'attente (le pod finit son
+        calcul pour rien, mais l'application n'attend plus).
+        """
+        job_timeout = float(getattr(self.settings, "runpod_pod_job_timeout_seconds", 4 * 3600))
+        response, output = self._post_audio(
+            "/jobs", audio_bytes, model, language, initial_prompt, diarize,
+            read_timeout=120.0,
+        )
+        if response.status_code == 404 and "job_id" not in output:
+            # Ancienne image : pod_server.py ne connaît pas /jobs et répond
+            # son propre 404 JSON. On garde l'appel synchrone d'avant.
+            logger.warning(
+                "Le pod %s tourne sur une image sans /jobs : appel synchrone, "
+                "qui échoue sur les gros fichiers — reconstruisez l'image du pod.",
+                self.pod_id,
+            )
+            response, output = self._post_audio(
+                "/transcribe", audio_bytes, model, language, initial_prompt, diarize,
+                read_timeout=job_timeout,
+            )
+            if response.status_code >= 400 or output.get("error"):
+                raise TranscriptionError(
+                    f"Le pod a échoué : {output.get('error') or response.status_code}"
+                )
+            return output
+        if response.status_code >= 400 or output.get("error") or not output.get("job_id"):
+            raise TranscriptionError(
+                f"Le pod a refusé le travail : {output.get('error') or response.status_code}"
+            )
+        return self._wait_job(
+            str(output["job_id"]), job_timeout,
+            on_progress=on_progress, should_cancel=should_cancel,
+        )
+
+    def _wait_job(
+        self, job_id: str, job_timeout: float, *, on_progress=None, should_cancel=None,
+    ) -> dict:
+        """Sonde ``/jobs/{id}`` jusqu'au résultat, à l'erreur ou au délai.
+
+        Chaque sonde est une petite requête rapide, loin sous le délai du
+        proxy. Un raté ponctuel (réseau, proxy 502/504 pendant une
+        seconde) ne fait pas échouer le travail : on retente, et on
+        n'abandonne qu'après plusieurs ratés consécutifs — un pod planté
+        (conteneur redémarré) répond alors 404 JSON « travail inconnu »,
+        signalé comme tel.
+        """
+        url = f"{self._client.proxy_url(self.pod_id, self.settings.runpod_pod_port)}/jobs/{job_id}"
+        debut = time.monotonic()
+        deadline = debut + job_timeout
+        rates_consecutifs = 0
+        max_rates = 10
+        derniere_erreur = ""
+        while True:
+            if should_cancel and should_cancel():
+                raise TranscriptionError("Transcription annulée.")
+            if time.monotonic() >= deadline:
+                raise TranscriptionError(
+                    f"Le pod n'a pas rendu le travail {job_id} dans le délai imparti "
+                    f"({int(job_timeout)}s, réglage runpod_pod_job_timeout_seconds)."
+                )
+            try:
+                response = self._http.get(url, timeout=httpx.Timeout(30.0, read=30.0))
+                statut = response.json()
+                if not isinstance(statut, dict):
+                    raise ValueError("réponse inattendue")
+            except (httpx.HTTPError, ValueError) as exc:
+                rates_consecutifs += 1
+                derniere_erreur = str(exc) or type(exc).__name__
+                if rates_consecutifs >= max_rates:
+                    raise TranscriptionError(
+                        f"Pod RunPod injoignable pendant le travail {job_id} "
+                        f"({rates_consecutifs} sondes ratées d'affilée) : {derniere_erreur}"
+                    ) from exc
+                time.sleep(POLL_INTERVAL)
+                continue
+            rates_consecutifs = 0
+            if response.status_code == 404:
+                raise TranscriptionError(
+                    f"Le pod a oublié le travail {job_id} (serveur redémarré ? "
+                    f"consultez l'onglet Logs du pod dans la console RunPod) : "
+                    f"{statut.get('error') or 'travail inconnu'}"
+                )
+            if response.status_code >= 400:
+                raise TranscriptionError(
+                    f"Le pod a échoué : {statut.get('error') or response.status_code}"
+                )
+            etat = statut.get("status")
+            if etat == "done":
+                result = statut.get("result")
+                if not isinstance(result, dict):
+                    raise TranscriptionError(f"Le pod a rendu un résultat illisible pour {job_id}.")
+                return result
+            if etat == "error":
+                raise TranscriptionError(f"Le pod a échoué : {statut.get('error') or 'erreur inconnue'}")
+            if on_progress:
+                ecoule = int(time.monotonic() - debut)
+                # Le pod ne rend pas d'avancement : fraction fixe, seul le
+                # message bouge, pour montrer que l'attente est vivante.
+                on_progress(
+                    0.1,
+                    f"Transcription en cours sur le pod ({ecoule // 60} min {ecoule % 60:02d} s)…",
+                )
+            time.sleep(POLL_INTERVAL)
 
     def close(self) -> None:
         if self._closed:
