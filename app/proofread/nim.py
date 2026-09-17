@@ -61,16 +61,23 @@ class NimProofreader:
             headers={"Authorization": f"Bearer {self.settings.nim_api_key}", "Content-Type": "application/json"},
             method="POST",
         )
-        try:
-            with urlopen(request, timeout=self.settings.nim_timeout) as response:
-                data = json.loads(response.read().decode("utf-8"))
-        except HTTPError as exc:
-            # Ne jamais inclure le corps de réponse : certains proxys le
-            # réinjectent dans les logs et une clé ne doit jamais y transiter.
-            raise ProofreadError(f"NVIDIA NIM a répondu {exc.code}.") from exc
-        except (URLError, TimeoutError, json.JSONDecodeError) as exc:
-            logger.warning("NVIDIA NIM injoignable (%s: %s).", type(exc).__name__, exc.reason if hasattr(exc, "reason") else exc)
-            raise ProofreadError("Impossible de joindre NVIDIA NIM.") from exc
+        max_attempts = 3
+        last_exc: Exception | None = None
+        for attempt in range(1, max_attempts + 1):
+            try:
+                with urlopen(request, timeout=self.settings.nim_timeout) as response:
+                    data = json.loads(response.read().decode("utf-8"))
+                break
+            except HTTPError as exc:
+                # Ne jamais inclure le corps de réponse : certains proxys le
+                # réinjectent dans les logs et une clé ne doit jamais y transiter.
+                raise ProofreadError(f"NVIDIA NIM a répondu {exc.code}.") from exc
+            except (URLError, TimeoutError, json.JSONDecodeError) as exc:
+                reason = exc.reason if hasattr(exc, "reason") else exc
+                logger.warning("NVIDIA NIM injoignable (tentative %d/%d — %s: %s).", attempt, max_attempts, type(exc).__name__, reason)
+                last_exc = exc
+        else:
+            raise ProofreadError("Impossible de joindre NVIDIA NIM après 3 tentatives.") from last_exc
         try:
             return str(data["choices"][0]["message"]["content"]).strip()
         except (KeyError, IndexError, TypeError) as exc:
