@@ -24,7 +24,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # L'image part d'une base CUDA (runpod/base) et embarque WhisperX :
+      # L'image part d'une base CUDA officielle NVIDIA et embarque WhisperX :
       # plusieurs Go, alors que le runner GitHub n'a qu'une quinzaine de Go
       # libres une fois ses outils préinstallés (.NET, Android, Haskell...)
       # comptés. Sans ce nettoyage, le build finit en "No space left on

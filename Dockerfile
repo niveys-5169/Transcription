@@ -1,4 +1,26 @@
-FROM runpod/base:0.6.2-cuda12.1.0
+# Base officielle NVIDIA maintenue (remplace runpod/base:0.6.2-cuda12.1.0,
+# dont la couche nvidia/cuda:12.1.0-*-ubuntu22.04 est en fin de vie —
+# NVIDIA supprime les tags EOL de Docker Hub six mois après leur passage en
+# EOL, voir doc/unsupported-tags.md du dépôt NVIDIA ; le jour où c'est fait,
+# `docker pull` échoue sur tout hôte RunPod sans l'image déjà en cache et le
+# pod ne démarre plus). nvidia/cuda:12.8.2-runtime-ubuntu22.04 est listée
+# dans doc/supported-tags.md. On y installe nous-mêmes le peu dont le pod a
+# besoin : Python 3.10 (celui d'Ubuntu 22.04 — exactement la version de
+# l'image précédente), pip, ffmpeg (requis par whisperx.load_audio).
+#
+# La pile PyTorch n'a pas à changer : les roues torch==2.5.1+cu121 embarquent
+# leur propre runtime CUDA via les paquets pip nvidia-* (cuBLAS 12.4,
+# cuDNN 9.1...). Le CUDA de l'image de base ne sert qu'au pilote/conteneur ;
+# 12.8 reste compatible avec les pilotes des hôtes RunPod.
+FROM nvidia/cuda:12.8.2-runtime-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 PIP_ROOT_USER_ACTION=ignore PIP_BREAK_SYSTEM_PACKAGES=1
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+         python3 python3-pip ffmpeg ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt /requirements.txt
 # `python3 -m pip` plutôt que `pip` : garantit que l'installation atterrit
@@ -8,15 +30,15 @@ COPY requirements.txt /requirements.txt
 # vérification fait échouer le build tout de suite si ce n'est pas le cas,
 # plutôt que de livrer une image qui ne le découvre qu'à l'exécution — un
 # pod a échoué en production avec une dépendance de transcription absente.
-# Les roues PyPI récentes de Torch embarquent une pile CUDA différente de
-# l'image CUDA 12.1. Installer d'abord le couple officiel CUDA 12.1 garantit
-# la présence de torchaudio.AudioMetaData, attendu par pyannote.audio 3.3.2,
-# tout en restant compatible avec les versions récentes de Transformers.
 RUN python3 -m pip install --no-cache-dir \
       --index-url https://download.pytorch.org/whl/cu121 \
       torch==2.5.1+cu121 torchaudio==2.5.1+cu121 \
     && python3 -m pip install --no-cache-dir -r /requirements.txt \
-    && python3 -c "import whisperx; import pyannote.audio"
+    && python3 -c "import torch, ctranslate2, whisperx, pyannote.audio, os, nvidia.cudnn; \
+         assert tuple(map(int, ctranslate2.__version__.split('.')[:2])) >= (4, 5), ctranslate2.__version__; \
+         lib = os.path.join(os.path.dirname(nvidia.cudnn.__file__), 'lib'); \
+         assert os.path.exists(os.path.join(lib, 'libcudnn_ops.so.9')), lib" \
+    && ffmpeg -version | head -1
 
 # Le modele large-v3 n'est plus precharge ici (comme avant) : ca gonflait
 # cette image de plusieurs Go, et RunPod doit la retirer en entier a chaque
