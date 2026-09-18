@@ -176,6 +176,10 @@ class Settings:
     nim_fallback_enabled: bool = False
     nim_base_url: str = "https://integrate.api.nvidia.com/v1/chat/completions"
     nim_model: str = "nvidia/llama-3.3-nemotron-super-49b-v1"
+    # Deux alternatives, utilisées dans cet ordre si le modèle principal est
+    # saturé, indisponible ou rend une réponse inutilisable.
+    nim_fallback_model_1: str = ""
+    nim_fallback_model_2: str = ""
     nim_timeout: int = 300
 
     # --- Vérification externe (recherche web) ---
@@ -265,6 +269,8 @@ def _from_env(settings: Settings) -> Settings:
         "nim_api_key": "NIM_API_KEY",
         "nim_base_url": "NIM_BASE_URL",
         "nim_model": "NIM_MODEL",
+        "nim_fallback_model_1": "NIM_FALLBACK_MODEL_1",
+        "nim_fallback_model_2": "NIM_FALLBACK_MODEL_2",
         "nim_timeout": "NIM_TIMEOUT",
         "proofread_model": "TRANSCRIPTION_PROOFREAD_MODEL",
         "default_engine": "TRANSCRIPTION_ENGINE",

@@ -12,7 +12,7 @@ import pytest
 from app.config import Settings
 from app.proofread.backends.base import BackendResult
 from app.proofread.claude import ClaudeProofreader
-from app.proofread.base import ProofreadError
+from app.proofread.base import ProofreadError, TextPair
 
 from conftest import segment
 
@@ -167,3 +167,26 @@ def test_indisponible_sans_cle():
 
 def test_relecture_sans_segments(relecteur):
     assert relecteur.proofread([], structure=True).text == ""
+
+
+def test_reprend_les_blocs_checkpointes_sans_rappeler_le_modele(relecteur, monkeypatch):
+    raw = "Une phrase source suffisamment longue pour devenir un bloc stable. " * 12
+    segments = [segment(0, 10, raw), segment(10, 20, raw)]
+    first = segments[0]
+    checkpoint = TextPair(
+        start=first["start"], end=first["end"], raw=first["text"].strip(), clean="Bloc déjà archivé.",
+        block_id="block-1-1", source_segment_ids=["segment-1"],
+    )
+    calls = []
+    monkeypatch.setattr(
+        relecteur.backend, "complete",
+        lambda **kwargs: calls.append(kwargs) or BackendResult(text="Texte relu suffisamment long. " * 20),
+    )
+
+    result = relecteur.proofread(
+        segments, structure=False, completed_pairs=[checkpoint],
+    )
+
+    assert result.pairs[0] == checkpoint
+    assert result.text.startswith("Bloc déjà archivé.")
+    assert len(calls) == 1

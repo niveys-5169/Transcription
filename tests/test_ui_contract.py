@@ -33,6 +33,11 @@ def test_confiance_et_repli_nim_sont_visibles_sans_exposer_la_cle():
 
     assert 'id="nim_api_key"' in html
     assert 'type="password" id="nim_api_key"' in html
+    assert 'id="nim_model"' in html
+    assert 'id="nim_fallback_model_1"' in html
+    assert 'id="nim_fallback_model_2"' in html
+    assert "populateNimModels" in script
+    assert "nimModelsDetail" in script
     assert "timeline-marker.needs-review" in css
     assert "confidence-badge" in css
     assert "markerLabel" in script

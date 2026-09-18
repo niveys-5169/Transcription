@@ -61,7 +61,9 @@ async def status() -> dict:
     settings = config.load_settings()
     proofreader = ClaudeProofreader(settings)
     claude_ok, claude_detail = proofreader.is_available()
-    nim_ok, nim_detail = NimProofreader(settings).is_available()
+    nim_proofreader = NimProofreader(settings)
+    nim_ok, nim_detail = nim_proofreader.is_available()
+    nim_models, nim_models_detail = nim_proofreader.startup_models()
     ffmpeg_ok = media.ffmpeg_available()
     obsidian_ok, obsidian_detail = _obsidian_status(settings)
     notebooklm_ok, notebooklm_detail = _notebooklm_status(settings)
@@ -78,7 +80,15 @@ async def status() -> dict:
             ),
         },
         "engines": engine_availability(),
-        "proofread": {"claude": {"available": claude_ok, "detail": claude_detail}, "nim": {"available": nim_ok, "detail": nim_detail}},
+        "proofread": {
+            "claude": {"available": claude_ok, "detail": claude_detail},
+            "nim": {
+                "available": nim_ok,
+                "detail": nim_detail,
+                "models": nim_models,
+                "models_detail": nim_models_detail,
+            },
+        },
         "obsidian": {"available": obsidian_ok, "detail": obsidian_detail},
         "notebooklm": {"available": notebooklm_ok, "detail": notebooklm_detail},
         "models": config.WHISPER_MODELS,

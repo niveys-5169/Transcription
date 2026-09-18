@@ -31,6 +31,8 @@ const state = {
   editorRedoStack: [],
   editorHistoryJobId: null,
   lexiconTerms: [],
+  nimModels: [],
+  nimModelsDetail: "",
 };
 
 /* ----------------------------------------------------------- utilitaires */
@@ -136,6 +138,8 @@ async function loadStatus() {
 
   const claude = status.proofread.claude;
   const nim = status.proofread.nim;
+  state.nimModels = nim?.models || [];
+  state.nimModelsDetail = nim?.models_detail || "";
   const proofSelect = $("proofread");
   proofSelect.options[0].disabled = !claude.available && !nim?.available;
   proofSelect.options[1].disabled = !nim?.available;
@@ -2142,7 +2146,7 @@ function openSettings() {
   $("proofread_model").value = settings.proofread_model || "";
   $("proofread_effort").value = settings.proofread_effort || "high";
   $("nim_fallback_enabled").checked = Boolean(settings.nim_fallback_enabled);
-  $("nim_model").value = settings.nim_model || "";
+  populateNimModels(settings.nim_model || "", settings.nim_fallback_model_1 || "", settings.nim_fallback_model_2 || "");
   $("nim_base_url").value = settings.nim_base_url || "";
   $("runpod_chunk_seconds").value = settings.runpod_chunk_seconds || 180;
   $("runpod_pod_image").value = settings.runpod_pod_image || "";
@@ -2214,6 +2218,8 @@ async function saveSettings() {
     proofread_effort: $("proofread_effort").value,
     nim_fallback_enabled: $("nim_fallback_enabled").checked,
     nim_model: $("nim_model").value.trim(),
+    nim_fallback_model_1: $("nim_fallback_model_1").value.trim(),
+    nim_fallback_model_2: $("nim_fallback_model_2").value.trim(),
     nim_base_url: $("nim_base_url").value.trim(),
     runpod_chunk_seconds: Number($("runpod_chunk_seconds").value) || 180,
     runpod_pod_image: $("runpod_pod_image").value.trim(),
@@ -2762,6 +2768,25 @@ function initActions() {
       toast("Terme supprimé du lexique utilisateur.");
     } catch (error) { toast(error.message, true); }
   });
+}
+
+function populateNimModels(primary, fallback1, fallback2) {
+  [["nim_model", primary, false], ["nim_fallback_model_1", fallback1, true], ["nim_fallback_model_2", fallback2, true]].forEach(([id, selectedModel, optional]) => {
+    const select = $(id);
+    const models = [...state.nimModels];
+    if (selectedModel && !models.includes(selectedModel)) models.unshift(selectedModel);
+    select.innerHTML = "";
+    if (optional) select.append(new Option("Aucun", ""));
+    models.forEach((model) => {
+      select.append(new Option(
+        model === selectedModel && !state.nimModels.includes(model) ? `${model} — modèle enregistré` : model,
+        model,
+      ));
+    });
+    if (!models.length && !optional) select.append(new Option("Aucun modèle chargé", selectedModel || ""));
+    select.value = selectedModel || (optional ? "" : models[0] || "");
+  });
+  $("nim-model-detail").textContent = state.nimModelsDetail || "Les modèles seront chargés au démarrage avec la clé NIM.";
 }
 
 /* ------------------------------------------------------------ init */

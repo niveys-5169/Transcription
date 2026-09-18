@@ -48,6 +48,8 @@ class ClaudeProofreader:
         structure: bool = True,
         on_progress=None,
         should_cancel=None,
+        completed_pairs=None,
+        on_checkpoint=None,
     ) -> ProofreadResult:
         available, detail = self.is_available()
         if not available:
@@ -60,6 +62,10 @@ class ClaudeProofreader:
         if not chunks:
             return ProofreadResult(text="", mode="claude")
 
+        # Un checkpoint ne vaut que pour le même bloc brut. Cela autorise une
+        # reprise avec NIM après Claude (ou l'inverse), sans jamais réemployer
+        # un texte qui ne correspondrait plus à la transcription source.
+        saved = {pair.block_id: pair for pair in (completed_pairs or [])}
         cleaned: list[str] = []
         pairs: list[TextPair] = []
 
@@ -72,16 +78,25 @@ class ClaudeProofreader:
                     f"Relecture du bloc {chunk.index + 1}/{len(chunks)}…",
                 )
 
+            paragraph = paragraphs[chunk.index]
+            block_id = f"block-{paragraph.first_segment_index}-{paragraph.last_segment_index}"
+            cached = saved.get(block_id)
+            if cached and cached.raw == chunk.text:
+                pairs.append(cached)
+                cleaned.append(cached.clean)
+                continue
+
             context = tail(cleaned[-1], CONTEXT_CHARS) if cleaned else ""
             text = self._proofread_chunk(chunk, len(chunks), context)
-            cleaned.append(text)
-            pairs.append(
-                TextPair(
-                    start=chunk.start, end=chunk.end, raw=chunk.text, clean=text,
-                    block_id=f"block-{paragraphs[chunk.index].first_segment_index}-{paragraphs[chunk.index].last_segment_index}",
-                    source_segment_ids=[f"segment-{i}" for i in range(paragraphs[chunk.index].first_segment_index, paragraphs[chunk.index].last_segment_index + 1)],
-                )
+            pair = TextPair(
+                start=chunk.start, end=chunk.end, raw=chunk.text, clean=text,
+                block_id=block_id,
+                source_segment_ids=[f"segment-{i}" for i in range(paragraph.first_segment_index, paragraph.last_segment_index + 1)],
             )
+            pairs.append(pair)
+            cleaned.append(text)
+            if on_checkpoint:
+                on_checkpoint(pairs)
 
         body = "\n\n".join(part for part in cleaned if part).strip()
         result = ProofreadResult(text=body, mode="claude", pairs=pairs)

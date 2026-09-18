@@ -43,6 +43,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     clean_text    TEXT,
     segments      TEXT,
     review_blocks TEXT,
+    review_checkpoint TEXT,
     review_version INTEGER DEFAULT 0,
     manual_review_status TEXT DEFAULT 'not_started',
     verification  TEXT,
@@ -97,6 +98,9 @@ MIGRATIONS = {
     "obsidian_path": "TEXT",
     "obsidian_verbatim_path": "TEXT",
     "review_blocks": "TEXT",
+    # Point de reprise durable de la relecture IA : chaque bloc confirmé y
+    # est écrit avant de demander le suivant au fournisseur.
+    "review_checkpoint": "TEXT",
     "review_version": "INTEGER DEFAULT 0",
     # Relecture humaine optionnelle, indépendante de la relecture IA.
     "manual_review_status": "TEXT DEFAULT 'not_started'",
@@ -198,7 +202,7 @@ def init_db(db_path: Path | None = None) -> None:
 def _row_to_dict(row: sqlite3.Row) -> dict:
     data = dict(row)
     for colonne in (
-        "segments", "review_blocks", "verification", "factcheck_report", "entities", "revision", "knowledge",
+    "segments", "review_blocks", "review_checkpoint", "verification", "factcheck_report", "entities", "revision", "knowledge",
     ):
         if colonne in data:
             try:
@@ -211,6 +215,8 @@ def _row_to_dict(row: sqlite3.Row) -> dict:
         data["segments"] = []
     if data.get("review_blocks") is None and "review_blocks" in data:
         data["review_blocks"] = []
+    if data.get("review_checkpoint") is None and "review_checkpoint" in data:
+        data["review_checkpoint"] = {}
     if data.get("verification") is None and "verification" in data:
         data["verification"] = []
     if data.get("entities") is None and "entities" in data:
@@ -272,7 +278,7 @@ def update_job(job_id: str, **fields: Any) -> None:
     if not fields:
         return
     for colonne in (
-        "segments", "review_blocks", "verification", "factcheck_report", "entities",
+        "segments", "review_blocks", "review_checkpoint", "verification", "factcheck_report", "entities",
     ):
         if colonne in fields and not isinstance(fields[colonne], (str, type(None))):
             fields[colonne] = json.dumps(fields[colonne], ensure_ascii=False)

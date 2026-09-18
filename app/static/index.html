@@ -436,7 +436,9 @@
       <p class="hint">Si Claude est indisponible ou échoue, l'application peut relire avec NVIDIA NIM. La clé reste sur cette machine et n'est jamais renvoyée à l'interface. NIM ne remplace pas la recherche web de Claude.</p>
       <label class="check"><input type="checkbox" id="nim_fallback_enabled"><span>Utiliser NVIDIA NIM comme repli pour la relecture</span></label>
       <label class="field"><span>Clé API NVIDIA NIM</span><input type="password" id="nim_api_key" placeholder="nvapi-…" autocomplete="off"><small id="nim-state"></small></label>
-      <label class="field"><span>Modèle NIM</span><input type="text" id="nim_model" placeholder="nvidia/llama-3.3-nemotron-super-49b-v1"></label>
+      <label class="field"><span>Modèle NIM principal</span><select id="nim_model"></select><small id="nim-model-detail"></small></label>
+      <label class="field"><span>1er modèle de secours NIM</span><select id="nim_fallback_model_1"></select></label>
+      <label class="field"><span>2e modèle de secours NIM</span><select id="nim_fallback_model_2"></select><small>Utilisés seulement si le modèle précédent est saturé ou répond mal.</small></label>
       <label class="field"><span>URL API NIM</span><input type="url" id="nim_base_url" placeholder="https://integrate.api.nvidia.com/v1/chat/completions"></label>
     </details>
 

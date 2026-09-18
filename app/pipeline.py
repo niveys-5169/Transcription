@@ -484,6 +484,7 @@ def run_proofread(job_id: str) -> None:
             summary=json.dumps(result.summary, ensure_ascii=False),
             proofread=result.mode,
             verification=report.to_dict(),
+            review_checkpoint=None,
         )
 
     except ProofreadError as exc:
@@ -535,6 +536,24 @@ def _proofread(job: dict, segments: list[dict], *, on_progress, should_cancel):
     """Applique le mode de relecture demandé, avec repli en cas d'échec."""
     mode = job.get("proofread") or "none"
 
+    def checkpoint_pairs() -> list[TextPair]:
+        checkpoint = (db.get_job(job["id"]) or {}).get("review_checkpoint") or {}
+        pairs = checkpoint.get("pairs", []) if isinstance(checkpoint, dict) else []
+        restored = []
+        for item in pairs:
+            try:
+                restored.append(TextPair(**item))
+            except (TypeError, ValueError):
+                logger.warning("Checkpoint de relecture invalide ignoré pour %s.", job["id"])
+        return restored
+
+    def save_checkpoint(pairs: list[TextPair]) -> None:
+        # SQLite valide cette écriture avant que l'appel suivant au réseau ne
+        # parte. Une coupure ne peut donc perdre au plus le bloc en cours.
+        db.update_job(job["id"], review_checkpoint={
+            "pairs": [pair.to_dict() for pair in pairs],
+        })
+
     if mode == "none":
         # « Aucune relecture » veut dire aucune : on se contente de regrouper
         # les segments en paragraphes, sans toucher aux mots prononcés.
@@ -563,6 +582,8 @@ def _proofread(job: dict, segments: list[dict], *, on_progress, should_cancel):
                     structure=bool(job.get("structure", True)),
                     on_progress=on_progress,
                     should_cancel=should_cancel,
+                    completed_pairs=checkpoint_pairs(),
+                    on_checkpoint=save_checkpoint,
                 )
             except ProofreadError as exc:
                 # Une annulation doit remonter ; un incident d'API, non :
@@ -579,7 +600,7 @@ def _proofread(job: dict, segments: list[dict], *, on_progress, should_cancel):
         if available:
             try:
                 on_progress(0.05, "Claude indisponible : repli NVIDIA NIM…")
-                return nim.proofread(segments, structure=bool(job.get("structure", True)), on_progress=on_progress, should_cancel=should_cancel)
+                return nim.proofread(segments, structure=bool(job.get("structure", True)), on_progress=on_progress, should_cancel=should_cancel, completed_pairs=checkpoint_pairs(), on_checkpoint=save_checkpoint)
             except ProofreadError as exc:
                 if should_cancel():
                     raise
@@ -600,6 +621,8 @@ def _proofread(job: dict, segments: list[dict], *, on_progress, should_cancel):
             structure=bool(job.get("structure", True)),
             on_progress=on_progress,
             should_cancel=should_cancel,
+            completed_pairs=checkpoint_pairs(),
+            on_checkpoint=save_checkpoint,
         )
 
     on_progress(0.5, "Relecture mécanique…")
