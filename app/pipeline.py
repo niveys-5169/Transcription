@@ -35,13 +35,14 @@ from . import config, db, exporters, lexicon, media, obsidian
 from .engines import get_engine
 from .engines.base import TranscriptionError
 from .proofread import ProofreadError, ProofreadResult, basic_proofread
+from .proofread import asr_quality
 from .proofread import factcheck as factcheck_module
 from .proofread.base import TextPair
 from .proofread.basic import split_paragraph_spans
 from .proofread.chunking import segments_to_text
 from .proofread.claude import ClaudeProofreader
 from .proofread.nim import NimProofreader
-from .proofread.verify import SEVERITIES, verify
+from .proofread.verify import SEVERITIES, Finding, verify
 
 logger = logging.getLogger(__name__)
 
@@ -188,6 +189,43 @@ def _release(job_id: str) -> None:
     with _lock:
         _live.pop(job_id, None)
         _cancelled.discard(job_id)
+
+
+# Motifs de rejet du validateur (proofread/validation.py) → phrase lisible.
+_REJECT_REASON_LABELS = {
+    "empty": "réponse vide",
+    "too_short": "réponse trop courte (résumé au lieu d'une relecture)",
+    "too_long": "réponse anormalement longue (probable raisonnement de modèle)",
+    "added_word_ratio": "trop de mots ajoutés par rapport au brut",
+    "long_added_span": "long passage inventé, absent du brut",
+    "model_artifact": "artefact de modèle détecté (ex. balise <think>)",
+    "reasoning_leak": "raisonnement de modèle détecté dans la réponse",
+    "numbers_altered": "des nombres prononcés ont été modifiés",
+    "acronyms_altered": "des sigles prononcés ont été modifiés",
+    "enveloppe_manquante": "réponse sans l'enveloppe de sortie attendue",
+}
+
+
+def _rejection_finding(rejection: dict) -> Finding:
+    """Un bloc dont le candidat NIM a été rejeté devient un finding visible.
+
+    Rend l'incident impossible à publier silencieusement : il apparaît dans
+    la même liste que les autres findings, avec la raison mécanique du rejet
+    et le modèle exact concerné (fallback compris).
+    """
+    reasons = [r for r in str(rejection.get("reject_reason") or "").split(",") if r]
+    labels = [_REJECT_REASON_LABELS.get(reason, reason) for reason in reasons] or ["motif non déterminé"]
+    model = rejection.get("model") or "modèle inconnu"
+    return Finding(
+        kind="candidat_rejete",
+        severity="moyenne",
+        message=(
+            f"Relecture NVIDIA NIM ({model}) rejetée pour ce bloc et remplacée "
+            f"par le texte brut nettoyé mécaniquement : {', '.join(labels)}."
+        ),
+        block_id=rejection.get("block_id"),
+        source="nim_validator",
+    )
 
 
 # --------------------------------------------------- compilation NotebookLM
@@ -383,10 +421,16 @@ def run_transcription(job_id: str) -> None:
                 "Aucune parole n'a été détectée dans ce fichier. Vérifiez que "
                 "la piste audio n'est pas muette (le WAV extrait est téléchargeable pour contrôle)."
             )
+        # Contrôle qualité ASR : un rapport, jamais une réécriture des
+        # segments. Un segment suspect reste tel quel ; il n'est jamais
+        # « reconstruit » par un LLM.
+        quality_issues = asr_quality.check_segments(segments)
+
         db.mark_finished(
             job_id, status="transcribed", stage="Transcrit", progress=1.0, task=None,
             segments=segments, review_blocks=db.review_blocks_from_segments(segments),
             raw_text=segments_to_text(segments),
+            asr_quality=json.dumps(quality_issues, ensure_ascii=False) if quality_issues else None,
         )
         source = Path(job.get("media_path") or "")
         if not config.load_settings().keep_media and source.is_file():
@@ -462,14 +506,40 @@ def run_proofread(job_id: str) -> None:
         blocks = db.review_blocks_from_pairs(result.pairs, segments)
         clean_text = db.clean_text_from_blocks(blocks)
 
+        # La vérification sémantique (Claude) est indépendante du moteur qui a
+        # produit le texte : une relecture NIM doit être comparée au brut au
+        # même titre qu'une relecture Claude, dès lors que ``verify=True``.
+        # ``verify()`` dégrade déjà proprement (contrôles mécaniques seuls,
+        # ``report.mode`` reflétant l'indisponibilité) si Claude est absent —
+        # inutile de le décider ici en fonction du moteur de relecture.
         report = verify(
             result.pairs,
-            use_claude=bool(job.get("verify", True)) and result.mode == "claude",
+            use_claude=bool(job.get("verify", True)),
             on_progress=progress.scaled(
                 PROOFREAD_SHARE, VERIFICATION_SHARE, "Vérification…"
             ),
             should_cancel=lambda: is_cancelled(job_id),
         )
+
+        # Un bloc dont le candidat NIM a été rejeté par le validateur local
+        # (voir proofread/validation.py) n'est jamais publié silencieusement :
+        # il apparaît dans la même liste de findings que le reste, avec la
+        # raison mécanique du rejet.
+        for rejection in result.rejections:
+            report.findings.append(_rejection_finding(rejection))
+        if result.rejections:
+            report.findings.sort(key=lambda f: ({"haute": 0, "moyenne": 1, "basse": 2}.get(f.severity, 3), f.start))
+
+        review_engine_detail = None
+        if result.block_log:
+            review_engine_detail = json.dumps(
+                {
+                    "engine": result.mode,
+                    "models_used": sorted({b["model"] for b in result.block_log if b.get("model")}),
+                    "blocks": result.block_log,
+                },
+                ensure_ascii=False,
+            )
 
         db.mark_finished(
             job_id,
@@ -485,6 +555,7 @@ def run_proofread(job_id: str) -> None:
             proofread=result.mode,
             verification=report.to_dict(),
             review_checkpoint=None,
+            review_engine_detail=review_engine_detail,
         )
 
     except ProofreadError as exc:

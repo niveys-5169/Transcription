@@ -100,9 +100,12 @@ def test_fiche_obsidian_utilise_les_blocs_corriges_sans_toucher_au_brut(vault, s
 
 
 def test_publier_ecrit_un_verbatim_horodate_et_lie_a_la_fiche(vault, settings):
-    j = job(review_blocks=[
-        {"id": "segment-1", "start": 65.9, "speaker": "SPEAKER_01", "text": "Version humaine."},
-    ])
+    # Le verbatim vient des segments ASR bruts, jamais des blocs relus : un
+    # `review_blocks` divergent ne doit avoir aucune influence sur son contenu.
+    j = job(
+        segments=[{"start": 65.9, "end": 68.0, "speaker": "SPEAKER_01", "text": "Version brute."}],
+        review_blocks=[{"id": "segment-1", "start": 65.9, "speaker": "SPEAKER_01", "text": "Version humaine."}],
+    )
     relative = obsidian.publish(j, settings=settings)
 
     verbatim_relative = j["_obsidian_verbatim_path"]
@@ -111,7 +114,8 @@ def test_publier_ecrit_un_verbatim_horodate_et_lie_a_la_fiche(vault, settings):
     assert verbatim_relative.startswith(settings.obsidian_verbatim_folder)
     assert "type: verbatim" in verbatim
     assert "fiche: \"[[2026-09-14 — Introduction à la tutelle]]\"" in verbatim
-    assert "**[00:01:05] SPEAKER_01** — Version humaine." in verbatim
+    assert "**[00:01:05] SPEAKER_01** — Version brute." in verbatim
+    assert "Version humaine." not in verbatim
     assert "verbatim: \"[[2026-09-14 — Introduction à la tutelle (verbatim)]]\"" in fiche
 
 
@@ -126,16 +130,52 @@ def test_publier_ecrit_une_fiche_revision_compatible_spaced_repetition(vault, se
 
 
 def test_republier_reutilise_le_meme_verbatim(vault, settings):
-    j = job(review_blocks=[{"start": 0, "text": "Version initiale."}])
+    j = job(segments=[{"start": 0, "end": 1, "text": "Version brute initiale."}])
     obsidian.publish(j, settings=settings)
     j["obsidian_path"] = f"{settings.obsidian_notes_folder}/2026-09-14 — Introduction à la tutelle.md"
     j["obsidian_verbatim_path"] = j["_obsidian_verbatim_path"]
-    j["review_blocks"] = [{"start": 0, "text": "Version mise à jour."}]
+    # Republier ne republie qu'un seul fichier verbatim (idempotence du
+    # chemin) ; le contenu reste celui des segments, jamais de review_blocks.
+    j["segments"] = [{"start": 0, "end": 1, "text": "Version brute mise à jour."}]
     obsidian.publish(j, settings=settings)
 
     verbatims = list((vault / settings.obsidian_verbatim_folder).glob("*.md"))
     assert len(verbatims) == 1
-    assert "Version mise à jour." in verbatims[0].read_text(encoding="utf-8")
+    assert "Version brute mise à jour." in verbatims[0].read_text(encoding="utf-8")
+
+
+def test_render_verbatim_ignore_toujours_review_blocks_corrompus():
+    """Invariant : le verbatim ne peut jamais contenir une donnée de review_blocks.
+
+    Même un incident de relecture qui aurait laissé du raisonnement de modèle
+    dans ``review_blocks``/``clean_text`` (voir proofread/validation.py) ne
+    doit avoir aucune conséquence sur le fichier verbatim.
+    """
+    from app.obsidian.notes import render_verbatim
+
+    j = job(
+        segments=[{"start": 0, "end": 2, "text": "Le brut fidèle à l'audio.", "speaker": "Prof"}],
+        review_blocks=[{
+            "id": "segment-1", "start": 0, "speaker": "Prof",
+            "text": "We need to apply the rules. The passage is raw transcription...",
+        }],
+        clean_text="We need to apply the rules. The passage is raw transcription...",
+    )
+    verbatim = render_verbatim(j)
+    assert "Le brut fidèle à l'audio." in verbatim
+    assert "We need to apply the rules" not in verbatim
+    assert "raw transcription" not in verbatim
+
+
+def test_render_verbatim_sans_segments_retombe_sur_raw_text():
+    """Compatibilité : un très ancien travail sans segments reste lisible."""
+    from app.obsidian.notes import render_verbatim
+
+    j = job(segments=[], raw_text="Un vieux travail sans segments horodatés.",
+            review_blocks=[{"id": "segment-1", "text": "Corrigé, mais ce n'est pas la source."}])
+    verbatim = render_verbatim(j)
+    assert "Un vieux travail sans segments horodatés." in verbatim
+    assert "Corrigé, mais ce n'est pas la source." not in verbatim
 
 
 def test_encart_warning_si_points_incertains(vault, settings):

@@ -111,6 +111,15 @@ MIGRATIONS = {
     "notebooklm_doc_id": "TEXT",
     "revision": "TEXT",
     "knowledge": "TEXT",
+    # Détail du moteur de relecture réellement utilisé bloc par bloc — voir
+    # proofread/nim.py. Distinct de la colonne ``proofread`` (le mode
+    # demandé/obtenu, "nim"/"claude"/"basic"/"none") : ce champ garde la
+    # trace des modèles NIM effectivement appelés (fallback compris) et des
+    # blocs dont le candidat a été rejeté par le validateur local.
+    "review_engine_detail": "TEXT",
+    # Contrôle qualité ASR (app/proofread/asr_quality.py) : signalement pur,
+    # ne modifie jamais segments/raw_text.
+    "asr_quality": "TEXT",
 }
 
 ANNOTATION_MIGRATIONS = {
@@ -131,6 +140,8 @@ HEAVY_COLUMNS = (
     "entities",
     "revision",
     "knowledge",
+    "review_engine_detail",
+    "asr_quality",
 )
 
 # Statuts d'un travail. Chaque étape est un état stable et exploitable, pas
