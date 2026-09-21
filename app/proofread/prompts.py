@@ -37,6 +37,24 @@ des phrases : ne le reprends pas dans ta réponse.]
 
 """
 
+# Ajouté uniquement au prompt système envoyé à NVIDIA NIM (jamais à Claude,
+# qui rend déjà fiablement du texte brut). Impose un protocole de sortie
+# strict : sans cette enveloppe, la réponse est rejetée par
+# envelope.extract_candidate plutôt que devinée.
+NIM_RELECTURE_ENVELOPE = """\
+
+Ta réponse doit se limiter STRICTEMENT à ceci, sans aucune exception :
+
+<transcription>
+le texte relu, et rien d'autre
+</transcription>
+
+N'écris RIEN avant la balise ouvrante ni après la balise fermante : ni \
+raisonnement, ni explication, ni résumé de la consigne, ni répétition de \
+cette instruction, ni découpage en « Paragraphe 1 », « Paragraphe 2 ». Une \
+réponse qui ne respecte pas exactement ce format sera rejetée.\
+"""
+
 STRUCTURE_SYSTEM = """\
 Tu analyses la transcription relue d'un cours pour en produire le sommaire.
 

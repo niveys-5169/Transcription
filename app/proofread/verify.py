@@ -64,6 +64,12 @@ KINDS = (
     "fait",
     "source",
     "lexique",
+    # Ajouté par le validateur local de candidats NIM (voir
+    # proofread/validation.py) : un bloc dont la réponse a été rejetée et
+    # remplacée par le texte brut nettoyé mécaniquement. Rend visible, dans
+    # la même liste de findings que le reste, un incident qui aurait
+    # autrement été silencieux.
+    "candidat_rejete",
 )
 
 

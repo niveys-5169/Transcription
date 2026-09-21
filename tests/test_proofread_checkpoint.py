@@ -1,7 +1,7 @@
 """Points de reprise durables de la relecture IA."""
 from app import db
 from app.proofread.base import TextPair
-from app.proofread.nim import NimProofreader
+from app.proofread.nim import NimCompletion, NimProofreader
 from app.config import Settings
 from conftest import segment
 
@@ -55,7 +55,10 @@ def test_nim_reutilise_un_bloc_archive_par_claude(monkeypatch):
     calls = []
     monkeypatch.setattr(
         proofreader, "complete",
-        lambda **kwargs: calls.append(kwargs) or "Texte NIM suffisamment long. " * 20,
+        lambda **kwargs: calls.append(kwargs) or NimCompletion(
+            text="<transcription>" + "Texte NIM suffisamment long. " * 20 + "</transcription>",
+            model="nvidia/test",
+        ),
     )
 
     result = proofreader.proofread(

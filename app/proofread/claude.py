@@ -10,6 +10,7 @@ from . import prompts
 from .backends import get_backend
 from .base import ProofreadError, ProofreadResult, TextPair
 from .basic import clean_line, split_paragraph_spans
+from .grounding import grounding_hints
 from .chunking import TextChunk, tail
 from .structure import insert_headings, insert_wikilinks, parse_json_object
 
@@ -127,6 +128,9 @@ class ClaudeProofreader:
         glossary = glossary_block(self.settings) if self.settings.lexicon_enabled else ""
         if glossary:
             system = f"{system}\n\n{glossary}"
+        hints = grounding_hints(chunk.text, self.settings)
+        if hints:
+            system = f"{system}\n\n{hints}"
 
         text = self.backend.complete(
             system=system,

@@ -37,6 +37,17 @@ class ProofreadResult:
     summary: list[str] = field(default_factory=list)
     mode: str = "basic"
     pairs: list[TextPair] = field(default_factory=list)
+    # Blocs où un candidat de relecture a été rejeté par
+    # ``proofread.validation.validate_proofread_candidate`` et remplacé par
+    # une version sûre (texte brut nettoyé mécaniquement). Vide pour les
+    # moteurs qui ne produisent pas de candidat à valider (Claude, basic).
+    rejections: list[dict] = field(default_factory=list)
+    # Observabilité complète, bloc par bloc (accepté ET rejeté) : modèle
+    # exact utilisé (fallback compris), compteurs de mots, statut de
+    # validation. Sert à répondre après coup à « pourquoi ce bloc précis
+    # est-il revenu au brut ? ». Vide pour les moteurs sans notion de
+    # candidat à valider (Claude, basic).
+    block_log: list[dict] = field(default_factory=list)
 
     def as_markdown(self) -> str:
         """Document final : titre, résumé, puis le texte relu."""
