@@ -10,6 +10,7 @@ import shutil
 import threading
 import uuid
 from contextlib import asynccontextmanager
+from datetime import date
 from pathlib import Path
 
 from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
@@ -17,6 +18,7 @@ from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingRes
 from fastapi.staticfiles import StaticFiles
 
 from . import __version__, config, db, exporters, lexicon, media, obsidian, pipeline, updates
+from .lexicon import verification as lexicon_verification
 from .obsidian import index as vault_index
 from .engines import availability as engine_availability
 from .proofread import factcheck as factcheck_module
@@ -191,11 +193,15 @@ async def sync_notebooklm_now() -> dict:
 # ------------------------------------------------------------------ lexique
 
 
+def _lexicon_response() -> dict:
+    user_terms = lexicon.user_term_names()
+    return {"terms": [{**term.to_dict(), "user_editable": term.terme in user_terms} for term in lexicon.load_lexicon()]}
+
+
 @app.get("/api/lexicon")
 async def get_lexicon() -> dict:
     """Le lexique MJPM courant — livré, plus les ajouts de l'utilisateur."""
-    user_terms = lexicon.user_term_names()
-    return {"terms": [{**term.to_dict(), "user_editable": term.terme in user_terms} for term in lexicon.load_lexicon()]}
+    return _lexicon_response()
 
 
 @app.post("/api/lexicon")
@@ -218,20 +224,77 @@ async def post_lexicon(payload: dict = Body(...)) -> dict:
         reference=str(payload.get("reference") or ""),
         wikilink=str(payload.get("wikilink") or terme),
         sources=list(payload.get("sources") or []),
-        verifie=bool(payload.get("verifie", False)),
+        verifie=bool(payload.get("verifie", False) and payload.get("sources")),
         verifie_le=payload.get("verifie_le"),
     )
     lexicon.save_user_term(term)
-    user_terms = lexicon.user_term_names()
-    return {"terms": [{**item.to_dict(), "user_editable": item.terme in user_terms} for item in lexicon.load_lexicon()]}
+    return _lexicon_response()
+
+
+@app.post("/api/lexicon/verification")
+async def start_lexicon_verification(payload: dict | None = Body(default=None)) -> dict:
+    terms = None if not payload or "termes" not in payload else [str(item) for item in payload.get("termes") or []]
+    result = lexicon_verification.start(terms)
+    if not result.pop("started", False):
+        raise HTTPException(409, "Une vérification du lexique est déjà en cours.")
+    return result
+
+
+@app.get("/api/lexicon/verification")
+async def get_lexicon_verification() -> dict:
+    return lexicon_verification.status()
+
+
+@app.delete("/api/lexicon/verification")
+async def cancel_lexicon_verification() -> dict:
+    lexicon_verification.cancel()
+    return lexicon_verification.status()
 
 
 @app.delete("/api/lexicon/{terme}")
 async def delete_lexicon_term(terme: str) -> dict:
     if not lexicon.delete_user_term(terme):
         raise HTTPException(404, "Cette entrée utilisateur est introuvable.")
-    user_terms = lexicon.user_term_names()
-    return {"terms": [{**item.to_dict(), "user_editable": item.terme in user_terms} for item in lexicon.load_lexicon()]}
+    return _lexicon_response()
+
+
+@app.post("/api/lexicon/{terme}/valider")
+async def validate_lexicon_term(terme: str, payload: dict | None = Body(default=None)) -> dict:
+    current = next((item for item in lexicon.load_lexicon() if item.terme == terme), None)
+    if current is None:
+        raise HTTPException(404, "Ce terme est inconnu.")
+    proposal = lexicon_verification.find_proposal(terme)
+    supplied = payload or {}
+    is_manual_edit = any(key in supplied for key in ("definition", "reference", "sources"))
+    if proposal is not None and proposal.get("status") != "attente" and not is_manual_edit:
+        raise HTTPException(409, "Cette proposition a déjà été traitée.")
+
+    changes = {key: supplied[key] for key in ("definition", "reference") if key in supplied}
+    sources = supplied.get("sources") if "sources" in supplied else (proposal or {}).get("sources", current.sources)
+    sources = [source for source in (sources or []) if isinstance(source, dict) and source.get("url")]
+    changes.update({
+        "sources": sources,
+        "verifie": bool(sources),
+        "verifie_le": date.today().isoformat() if sources else None,
+    })
+    if lexicon.update_term(terme, **changes) is None:
+        raise HTTPException(404, "Ce terme est inconnu.")
+    if proposal is not None and proposal.get("status") == "attente":
+        lexicon_verification.mark_proposal(terme, "validee")
+    return _lexicon_response()
+
+
+@app.post("/api/lexicon/{terme}/rejeter")
+async def reject_lexicon_term(terme: str) -> dict:
+    if not any(item.terme == terme for item in lexicon.load_lexicon()):
+        raise HTTPException(404, "Ce terme est inconnu.")
+    proposal = lexicon_verification.find_proposal(terme)
+    if proposal is None:
+        raise HTTPException(404, "Aucune proposition pour ce terme.")
+    if proposal.get("status") != "attente":
+        raise HTTPException(409, "Cette proposition a déjà été traitée.")
+    lexicon_verification.mark_proposal(terme, "rejetee")
+    return _lexicon_response()
 
 
 # -------------------------------------------------------------- index coffre

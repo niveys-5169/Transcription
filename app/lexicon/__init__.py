@@ -14,12 +14,17 @@ from __future__ import annotations
 
 import json
 import logging
+import sys
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-LEXICON_PATH = Path(__file__).parent / "mjpm.json"
+LEXICON_PATH = (
+    Path(getattr(sys, "_MEIPASS")) / "app" / "lexicon" / "mjpm.json"
+    if getattr(sys, "frozen", False) and getattr(sys, "_MEIPASS", None)
+    else Path(__file__).parent / "mjpm.json"
+)
 
 # Amorce Whisper (``initial_prompt``) : la fenêtre de prompt du modèle fait
 # environ 224 jetons ; on reste large en dessous pour laisser de la place à
@@ -113,6 +118,27 @@ def save_user_term(term: Term) -> None:
     tmp.replace(path)
 
     load_lexicon(refresh=True)
+
+
+def update_term(terme: str, **changements) -> Term | None:
+    """Modifie seulement les champs demandés d'une entrée existante.
+
+    La copie locale ainsi créée conserve tous les autres champs de l'entrée
+    livrée (sigles, variantes, référence et sources notamment).
+    """
+    current = next((item for item in load_lexicon() if item.terme == terme), None)
+    if current is None:
+        return None
+    allowed = set(Term.__dataclass_fields__) - {"terme"}
+    values = current.to_dict()
+    for key, value in changements.items():
+        if key in allowed:
+            values[key] = value
+    updated = _from_dict(values)
+    if updated is None:
+        return None
+    save_user_term(updated)
+    return updated
 
 
 def delete_user_term(terme: str) -> bool:

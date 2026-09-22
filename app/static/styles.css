@@ -723,10 +723,16 @@ audio#audio-player { display: block; }
 .annotation-list { display: grid; gap: 7px; margin-top: 8px; }
 .lexicon-form { display: grid; grid-template-columns: 1fr auto; gap: 7px; margin-top: 8px; }
 .lexicon-form input { min-width: 0; }
-.lexicon-form .lexicon-verified { grid-column: 1 / -1; font-size: 12px; }
-.lexicon-list { display: grid; gap: 6px; margin-top: 10px; }
-.lexicon-entry { display: flex; align-items: start; justify-content: space-between; gap: 8px; font-size: 12px; }
+.lexicon-toolbar, .lexicon-entry-head { display: flex; align-items: center; justify-content: space-between; gap: 7px; }
+.lexicon-progress { margin-top: 8px; }
+.lexicon-progress progress { width: 100%; accent-color: var(--accent); }
+.lexicon-list { display: grid; gap: 10px; margin-top: 10px; }
+.lexicon-entry { display: block; border-bottom: 1px solid var(--border); padding-bottom: 10px; font-size: 12px; }
 .lexicon-entry p { margin: 2px 0 0; color: var(--text-soft); }
+.badge-muted { background: var(--surface-2); color: var(--text-soft); }
+.lexicon-edit-form { display: grid; gap: 7px; margin-top: 8px; }
+.lexicon-edit-form textarea { width: 100%; resize: vertical; }
+.lexicon-proposal { margin-top: 8px; }
 .annotation { border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 7px; padding: 8px; font-size: 12.5px; }.annotation-highlight-yellow { border-left-color: #d0ac16; }.annotation-highlight-blue { border-left-color: #4b8edc; }.annotation-highlight-green { border-left-color: #4ca269; }
 .annotation p { margin: 7px 0; white-space: pre-wrap; }.annotation-head { display: flex; align-items: center; gap: 6px; }.annotation-jump { border: 0; padding: 0; background: none; color: var(--accent); cursor: pointer; font: 12px var(--mono); }.annotation-actions { justify-content: space-between; }.annotation-actions select { width: auto; padding: 4px; font-size: 11px; }
 .tag-editor input { min-width: 0; flex: 1; }

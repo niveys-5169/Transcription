@@ -80,7 +80,12 @@ def test_lexique_est_editable_depuis_l_interface():
     html = (STATIC / "index.html").read_text(encoding="utf-8")
     script = (STATIC / "app.js").read_text(encoding="utf-8")
     assert 'id="lexicon-form"' in html
-    assert "delete-lexicon" in script
+    assert 'id="verify-lexicon-all"' in html
+    assert 'id="lexicon-verification-progress"' in html
+    assert 'data-lexicon-action="verify"' in script
+    assert 'data-lexicon-action="edit"' in script
+    assert 'data-lexicon-action="delete"' in script
+    assert "/api/lexicon/verification" in script
     assert "valider-lexique" in script
 
 

@@ -31,6 +31,9 @@ const state = {
   editorRedoStack: [],
   editorHistoryJobId: null,
   lexiconTerms: [],
+  lexiconVerification: { en_cours: false, faits: 0, total: 0, propositions: [] },
+  lexiconVerificationTimer: null,
+  lexiconEditingTerm: null,
   nimModels: [],
   nimModelsDetail: "",
 };
@@ -636,15 +639,78 @@ function renderKnowledge(job) {
 function renderLexicon() {
   const panel = $("panel-lexicon");
   const terms = state.lexiconTerms || [];
+  const verification = state.lexiconVerification || {};
+  const proposals = new Map((verification.propositions || []).map((item) => [item.terme, item]));
+  const nonVerified = terms.filter((term) => !term.verifie).length;
+  const progress = $("lexicon-verification-progress");
+  const progressBar = $("lexicon-progress-bar");
+  const progressLabel = $("lexicon-progress-label");
+  const globalButton = $("verify-lexicon-all");
+  const cancelButton = $("cancel-lexicon-verification");
+  globalButton.textContent = `Vérifier les entrées non vérifiées (${nonVerified} appel${nonVerified > 1 ? "s" : ""} maximum)`;
+  globalButton.disabled = verification.en_cours || nonVerified === 0;
+  cancelButton.hidden = !verification.en_cours;
+  progress.hidden = !verification.en_cours;
+  progressBar.max = Math.max(1, Number(verification.total) || 0);
+  progressBar.value = Number(verification.faits) || 0;
+  progressLabel.textContent = verification.en_cours
+    ? `${verification.faits || 0} / ${verification.total || 0}${verification.terme_courant ? ` — ${verification.terme_courant}` : ""}`
+    : "";
   panel.innerHTML = terms.length
-    ? `<div class="lexicon-list">${terms.slice(0, 30).map((term) => `<div class="lexicon-entry"><div><b>${escapeHtml(term.terme)}</b>${term.verifie ? " <span class=\"badge\">vérifié</span>" : ""}<p>${escapeHtml(term.definition || term.categorie || "")}</p></div>${term.user_editable ? `<button type="button" class="btn btn-mini btn-ghost" data-action="delete-lexicon" data-term="${escapeHtml(term.terme)}">Supprimer</button>` : ""}</div>`).join("")}</div>${terms.length > 30 ? `<p class="meta">${terms.length - 30} autres termes disponibles dans les réglages.</p>` : ""}`
+    ? `<div class="lexicon-list">${terms.map((term) => {
+        const proposal = proposals.get(term.terme);
+        const sources = (term.sources || []).filter((source) => /^https?:\/\//i.test(source.url || ""));
+        const proposalSources = (proposal?.sources || []).filter((source) => /^https?:\/\//i.test(source.url || ""));
+        const editing = state.lexiconEditingTerm === term.terme;
+        return `<article class="lexicon-entry" data-lexicon-term="${escapeHtml(term.terme)}">
+          <div class="lexicon-entry-head"><div><b>${escapeHtml(term.terme)}</b> <span class="badge ${term.verifie ? "" : "badge-muted"}">${term.verifie ? "vérifié" : "non vérifié"}</span></div><span class="finding-kind">${escapeHtml(term.categorie || "autre")}</span></div>
+          ${term.sigles?.length ? `<p class="meta">Sigles : ${escapeHtml(term.sigles.join(", "))}</p>` : ""}
+          <p>${escapeHtml(term.definition || "Définition à compléter")}</p>
+          ${term.reference ? `<p class="meta"><b>Référence :</b> ${escapeHtml(term.reference)}</p>` : ""}
+          ${sources.length ? `<div class="finding-sources">${sources.map((source) => `<a href="${escapeHtml(source.url)}" target="_blank" rel="noopener">${escapeHtml(source.titre || source.url)}</a>`).join("")}</div>` : ""}
+          ${term.verifie_le ? `<p class="meta">Vérifié le ${escapeHtml(term.verifie_le)}</p>` : ""}
+          <div class="pending-actions">
+            ${!term.verifie ? `<button type="button" class="btn btn-mini btn-ghost" data-lexicon-action="verify">Vérifier</button>` : ""}
+            <button type="button" class="btn btn-mini btn-ghost" data-lexicon-action="edit">Corriger</button>
+            ${proposal?.status === "attente" ? `<button type="button" class="btn btn-mini btn-ghost" data-lexicon-action="reject">Rejeter</button>` : ""}
+            ${term.user_editable ? `<button type="button" class="btn btn-mini btn-ghost" data-lexicon-action="delete">Supprimer</button>` : ""}
+          </div>
+          ${editing ? `<form class="lexicon-edit-form">
+            <textarea name="definition" rows="3" aria-label="Définition corrigée">${escapeHtml(term.definition || "")}</textarea>
+            <input name="reference" value="${escapeHtml(term.reference || "")}" aria-label="Référence corrigée" placeholder="Référence juridique">
+            <div class="pending-actions"><button class="btn btn-primary btn-mini" type="submit">Enregistrer${proposal?.status === "attente" ? " et valider" : ""}</button><button class="btn btn-ghost btn-mini" type="button" data-lexicon-action="cancel-edit">Annuler</button></div>
+          </form>` : ""}
+          ${proposal ? `<div class="finding pending-correction lexicon-proposal">
+            <div class="finding-head"><span class="finding-kind">proposition ${escapeHtml(proposal.verdict)}</span><span class="finding-kind">confiance ${escapeHtml(proposal.confiance)}</span></div>
+            ${proposal.forme_correcte ? `<p class="finding-message">Graphie proposée : <b>${escapeHtml(proposal.forme_correcte)}</b></p>` : ""}
+            ${proposal.explication ? `<p class="meta">${escapeHtml(proposal.explication)}</p>` : ""}
+            ${proposalSources.length ? `<div class="finding-sources">${proposalSources.map((source) => `<a href="${escapeHtml(source.url)}" target="_blank" rel="noopener">${escapeHtml(source.titre || source.url)}</a>`).join("")}</div>` : ""}
+            ${proposal.status === "attente" ? `<div class="pending-actions"><button class="btn btn-primary btn-mini" type="button" data-lexicon-action="validate">Valider</button><button class="btn btn-ghost btn-mini" type="button" data-lexicon-action="reject">Rejeter</button></div>` : `<p class="meta">Proposition ${proposal.status === "validee" ? "validée" : "rejetée"}.</p>`}
+          </div>` : ""}
+        </article>`;
+      }).join("")}</div>`
     : "<p class=\"meta\">Aucun terme dans le lexique.</p>";
+}
+
+async function pollLexiconVerification() {
+  try {
+    const wasRunning = Boolean(state.lexiconVerification?.en_cours);
+    state.lexiconVerification = await api("/api/lexicon/verification");
+    renderLexicon();
+    if (state.lexiconVerification.en_cours && !state.lexiconVerificationTimer) {
+      state.lexiconVerificationTimer = window.setInterval(pollLexiconVerification, 1000);
+    } else if (!state.lexiconVerification.en_cours && state.lexiconVerificationTimer) {
+      window.clearInterval(state.lexiconVerificationTimer);
+      state.lexiconVerificationTimer = null;
+      if (wasRunning) toast("Vérification du lexique terminée : validez ou rejetez les propositions.");
+    }
+  } catch (error) { toast(error.message, true); }
 }
 
 async function loadLexicon() {
   try {
     state.lexiconTerms = (await api("/api/lexicon")).terms || [];
-    renderLexicon();
+    await pollLexiconVerification();
   } catch (error) { toast(error.message, true); }
 }
 
@@ -2786,7 +2852,7 @@ function initActions() {
     try {
       const response = await api("/api/lexicon", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ terme, definition: $("lexicon-definition-input").value.trim(), verifie: $("lexicon-verified-input").checked }),
+        body: JSON.stringify({ terme, definition: $("lexicon-definition-input").value.trim() }),
       });
       state.lexiconTerms = response.terms || [];
       $("lexicon-form").reset();
@@ -2795,15 +2861,71 @@ function initActions() {
     } catch (error) { toast(error.message, true); }
   });
 
-  document.addEventListener("click", async (event) => {
-    const button = event.target.closest('[data-action="delete-lexicon"]');
-    if (!button || !window.confirm(`Supprimer « ${button.dataset.term} » du lexique utilisateur ?`)) return;
+  $("verify-lexicon-all").addEventListener("click", async () => {
+    const count = state.lexiconTerms.filter((term) => !term.verifie).length;
+    if (!count || !window.confirm(`Cette opération peut effectuer jusqu'à ${count} recherches web et entamer votre quota d'abonnement. Continuer ?`)) return;
     try {
-      const response = await api(`/api/lexicon/${encodeURIComponent(button.dataset.term)}`, { method: "DELETE" });
-      state.lexiconTerms = response.terms || [];
-      renderLexicon();
-      toast("Terme supprimé du lexique utilisateur.");
+      await api("/api/lexicon/verification", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+      await pollLexiconVerification();
     } catch (error) { toast(error.message, true); }
+  });
+
+  $("cancel-lexicon-verification").addEventListener("click", async () => {
+    try { await api("/api/lexicon/verification", { method: "DELETE" }); await pollLexiconVerification(); }
+    catch (error) { toast(error.message, true); }
+  });
+
+  document.addEventListener("click", async (event) => {
+    const button = event.target.closest("[data-lexicon-action]");
+    if (!button) return;
+    const entry = button.closest("[data-lexicon-term]");
+    if (!entry) return;
+    const term = entry.dataset.lexiconTerm;
+    const action = button.dataset.lexiconAction;
+    if (action === "edit") { state.lexiconEditingTerm = term; renderLexicon(); return; }
+    if (action === "cancel-edit") { state.lexiconEditingTerm = null; renderLexicon(); return; }
+    if (action === "delete" && !window.confirm(`Supprimer « ${term} » du lexique utilisateur ?`)) return;
+    entry.querySelectorAll("button").forEach((item) => { item.disabled = true; });
+    try {
+      if (action === "verify") {
+        await api("/api/lexicon/verification", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ termes: [term] }) });
+        await pollLexiconVerification();
+        return;
+      }
+      const response = action === "delete"
+        ? await api(`/api/lexicon/${encodeURIComponent(term)}`, { method: "DELETE" })
+        : await api(`/api/lexicon/${encodeURIComponent(term)}/${action === "reject" ? "rejeter" : "valider"}`, { method: "POST" });
+      state.lexiconTerms = response.terms || [];
+      await pollLexiconVerification();
+      toast(action === "delete" ? "Terme supprimé du lexique utilisateur." : action === "reject" ? "Proposition rejetée." : "Terme validé.");
+    } catch (error) {
+      toast(error.message, true);
+      entry.querySelectorAll("button").forEach((item) => { item.disabled = false; });
+    }
+  });
+
+  document.addEventListener("submit", async (event) => {
+    const form = event.target.closest(".lexicon-edit-form");
+    if (!form) return;
+    event.preventDefault();
+    const entry = form.closest("[data-lexicon-term]");
+    const term = entry.dataset.lexiconTerm;
+    const definition = form.elements.definition.value;
+    const reference = form.elements.reference.value;
+    form.querySelectorAll("button, input, textarea").forEach((item) => { item.disabled = true; });
+    try {
+      const response = await api(`/api/lexicon/${encodeURIComponent(term)}/valider`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ definition, reference }),
+      });
+      state.lexiconTerms = response.terms || [];
+      state.lexiconEditingTerm = null;
+      await pollLexiconVerification();
+      toast("Correction enregistrée.");
+    } catch (error) {
+      toast(error.message, true);
+      form.querySelectorAll("button, input, textarea").forEach((item) => { item.disabled = false; });
+    }
   });
 }
 

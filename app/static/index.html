@@ -314,10 +314,18 @@
 
       <section class="analysis-section" id="lexicon-zone">
         <h3>Lexique</h3>
+        <p class="meta">Valider un terme évite une recherche web ultérieure et fixe sa graphie de référence pour la relecture.</p>
+        <div class="lexicon-toolbar">
+          <button type="button" class="btn btn-mini btn-ghost" id="verify-lexicon-all">Vérifier les entrées non vérifiées</button>
+          <button type="button" class="btn btn-mini btn-ghost" id="cancel-lexicon-verification" hidden>Annuler</button>
+        </div>
+        <div id="lexicon-verification-progress" class="lexicon-progress" hidden>
+          <progress id="lexicon-progress-bar" value="0" max="1"></progress>
+          <span id="lexicon-progress-label" class="meta"></span>
+        </div>
         <form id="lexicon-form" class="lexicon-form">
           <input id="lexicon-term-input" placeholder="Nouveau terme" aria-label="Nouveau terme du lexique">
           <input id="lexicon-definition-input" placeholder="Définition (facultative)" aria-label="Définition du terme">
-          <label class="check lexicon-verified"><input type="checkbox" id="lexicon-verified-input"><span>Vérifié</span></label>
           <button type="submit" class="btn btn-mini btn-ghost">Ajouter</button>
         </form>
         <div id="panel-lexicon"></div>

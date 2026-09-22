@@ -19,8 +19,8 @@ from datetime import date
 from .. import config
 from ..proofread import factcheck as factcheck_module
 from ..proofread.base import ProofreadError
-from ..proofread.factcheck import Claim, verify_claim
 from . import LEXICON_PATH, _from_dict
+from .verification import question_for, verify_term
 
 
 def _load_raw() -> list[dict]:
@@ -30,16 +30,6 @@ def _load_raw() -> list[dict]:
 def _save_raw(entries: list[dict]) -> None:
     LEXICON_PATH.write_text(
         json.dumps(entries, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
-    )
-
-
-def _question_for(term) -> str:
-    sigles = f", sigle {'/'.join(term.sigles)}," if term.sigles else ""
-    return (
-        f"Le terme du domaine MJPM (protection juridique des majeurs) "
-        f"« {term.terme} »{sigles} est défini ainsi : « {term.definition} ». "
-        f"Référence juridique donnée : « {term.reference} ». Cette "
-        "définition et cette référence sont-elles exactes ?"
     )
 
 
@@ -65,9 +55,8 @@ def verify_lexicon(*, dry_run: bool = False) -> int:
         if term is None:
             continue
 
-        claim = Claim(type="reference_juridique", citation=term.terme, question=_question_for(term))
         try:
-            verdict = verify_claim(claim, settings=settings)
+            verdict = verify_term(term, settings=settings)
         except ProofreadError as exc:
             print(f"[erreur] {term.terme} : {exc}", file=sys.stderr)
             continue

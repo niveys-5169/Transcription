@@ -394,14 +394,22 @@ majeurs), livré non vérifié — mesures de protection, acteurs, actes,
 prestations, textes de référence, avec leurs sigles et variantes.
 `app/lexicon/mjpm.json`.
 
-Il n'est jamais opposé comme référence sur la foi de sa seule rédaction :
-`python -m app.lexicon verify` — commande réservée aux mainteneurs — passe
-chaque entrée non vérifiée par la même recherche web que
-l'étape 3, et ne la marque vérifiée que si elle est confirmée. Une entrée non
-vérifiée continue à amorcer la reconnaissance vocale (le pire risque y est un
-mot de vocabulaire inutile), mais n'est jamais recopiée dans une fiche
-d'entité du coffre tant qu'elle ne l'est pas. Une fois vérifiée, en revanche,
-elle résout les affirmations correspondantes à l'étape 3 sans aucun appel.
+Il n'est jamais opposé comme référence sur la foi de sa seule rédaction.
+Depuis le panneau **Lexique**, chaque entrée peut être vérifiée séparément ou
+avec l'action globale **Vérifier les entrées non vérifiées**. Le nombre maximal
+de recherches web est annoncé avant le lancement. Les résultats restent des
+propositions persistantes : l'utilisateur les valide, les corrige ou les
+rejette, et aucune entrée n'est marquée vérifiée sans au moins une source.
+Une validation est enregistrée dans `data/lexique_utilisateur.json`, prend
+effet immédiatement et ne modifie jamais le dépôt. La commande de maintenance
+`python -m app.lexicon verify` reste disponible pour vérifier directement le
+fichier livré `mjpm.json` avec exactement la même question et le même moteur.
+
+Une entrée non vérifiée continue à amorcer la reconnaissance vocale (le pire
+risque y est un mot de vocabulaire inutile), mais n'est jamais recopiée dans
+une fiche d'entité du coffre tant qu'elle ne l'est pas. Une fois vérifiée, elle
+résout les affirmations correspondantes à l'étape 3 sans appel web et fournit
+la graphie de référence à la relecture.
 
 Cinq points d'usage : amorce de vocabulaire pour Whisper (`initial_prompt`),
 bloc de référence dans le prompt de relecture, gravité relevée dans la
@@ -409,6 +417,8 @@ vérification de fidélité, résolution sans recherche à l'étape 3, note
 « Glossaire MJPM » tenue à jour dans le coffre. Un terme confirmé par
 recherche web pendant un fact-check peut être ajouté au lexique de
 l'utilisateur (`POST /api/lexicon`) — jamais au fichier livré avec le dépôt.
+Les propositions de vérification du lexique sont conservées dans
+`data/lexique_propositions.json`, y compris après un redémarrage.
 
 ## Le coffre Obsidian
 
@@ -947,6 +957,8 @@ POST /api/jobs/{id}/notebooklm-sync           synchronisation Google Docs / Note
 POST /api/jobs/{id}/cancel, /retry            interruption ou reprise
 GET  /api/jobs/{id}/download/{fmt}            export txt, md, json ou aperçu Obsidian
 GET/POST /api/lexicon                         consultation et ajout au lexique
+GET/POST/DELETE /api/lexicon/verification     progression, lancement et annulation des recherches
+POST /api/lexicon/{terme}/valider|rejeter     décision humaine sur une proposition
 GET /api/vault/index, POST /api/vault/reindex  consultation et reconstruction de l'index Obsidian
 GET/POST /api/update                          vérification puis application d'une mise à jour Windows
 ```
@@ -957,10 +969,6 @@ GET/POST /api/update                          vérification puis application d'u
   l'autre. Les envoyer par paquets réduirait encore la facture.
 - **Repérage des locuteurs.** Un seul orateur est supposé, ce qui convient à un
   cours magistral mais pas à une table ronde.
-- **Acceptation des propositions de lexique dans l'interface.** Un terme
-  confirmé par recherche web pendant un fact-check peut déjà être ajouté au
-  lexique via `POST /api/lexicon` ; la page ne propose pas encore de bouton
-  dédié pour ça — à faire à la main, pour l'instant.
 - **Enveloppe exacte du CLI en mode `--output-format stream-json`.** Le
   back-end CLI (`app/proofread/backends/cli.py`) l'analyse de façon tolérante
   (jamais d'échec silencieux, un format inattendu donne un message d'erreur

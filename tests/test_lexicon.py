@@ -36,6 +36,10 @@ def test_le_lexique_livre_est_charge():
     assert any(t.terme == "Sauvegarde de justice" for t in terms)
 
 
+def test_le_fichier_du_lexique_livre_existe():
+    assert lex.LEXICON_PATH.exists()
+
+
 def test_toutes_les_entrees_livrees_sont_non_verifiees():
     # Le lexique livré est un point de départ écrit à la main, jamais une
     # source d'autorité tant qu'il n'est pas passé par `verify_lexicon`.
@@ -115,6 +119,19 @@ def test_save_user_term_remplace_une_entree_existante(tmp_path, monkeypatch):
     matches = [e for e in data if e["terme"] == "Terme test"]
     assert len(matches) == 1
     assert matches[0]["definition"] == "v2"
+
+
+def test_update_term_preserve_les_champs_de_l_entree_livree(tmp_path, monkeypatch):
+    monkeypatch.setattr(lex, "_user_lexicon_path", lambda: tmp_path / "lexique_utilisateur.json")
+    original = next(term for term in lex.load_lexicon() if term.terme == "Sauvegarde de justice")
+
+    updated = lex.update_term(original.terme, definition="Définition corrigée")
+
+    assert updated is not None
+    assert updated.definition == "Définition corrigée"
+    assert updated.sigles == original.sigles
+    assert updated.reference == original.reference
+    assert updated.variantes == original.variantes
 
 
 def test_lexique_utilisateur_remplace_une_entree_livree(tmp_path, monkeypatch):

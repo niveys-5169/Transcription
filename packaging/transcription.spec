@@ -30,6 +30,7 @@ binaries = collect_dynamic_libs("ctranslate2")
 
 datas = [
     (str(ROOT / "app" / "static"), "app/static"),
+    (str(ROOT / "app" / "lexicon" / "mjpm.json"), "app/lexicon"),
 ] + collect_data_files("imageio_ffmpeg") + collect_data_files("docx")
 
 a = Analysis(
