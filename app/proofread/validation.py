@@ -50,6 +50,8 @@ _METADISCOURSE_MARKERS = (
     r"\bexaminons\b",
     r"\banalysons\b",
     r"\bvoici le texte corrigé\b",
+    r"\bil faut analyser (?:ce|le) (?:passage|texte)\b",
+    r"\bpoursuivre la correction\b",
     r"\bje dois\b",
     r"\bparagraphe\s*\d+\s*:",
 )

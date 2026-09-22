@@ -172,3 +172,71 @@ def test_non_regression_corrections_locales_acceptees():
     for raw, candidate in cases:
         result = validate_proofread_candidate(raw, candidate)
         assert result.valid is True, (raw, candidate, result.reasons)
+
+
+def test_rejette_un_raisonnement_anglais_noye_dans_un_long_passage_francais():
+    raw = (
+        "le juge reçoit la requête puis consulte le certificat médical détaillé il vérifie la "
+        "situation familiale les ressources les charges et les besoins de la personne concernée "
+        "avant de l entendre avec son avocat puis il rend une décision motivée proportionnée et "
+        "limitée dans le temps"
+    )
+    candidate = (
+        "Le juge reçoit la requête, puis consulte le certificat médical détaillé. Il vérifie la "
+        "situation familiale, les ressources, les charges et les besoins de la personne concernée. "
+        "We need to carefully rewrite this paragraph before continuing. Il l'entend avec son "
+        "avocat, puis rend une décision motivée, proportionnée et limitée dans le temps."
+    )
+
+    result = validate_proofread_candidate(raw, candidate)
+
+    assert result.valid is False
+    assert "language_mismatch" in result.reasons
+
+
+def test_rejette_un_metadiscours_francais_noye_dans_un_long_passage():
+    raw = (
+        "le juge reçoit la requête puis consulte le certificat médical détaillé il vérifie la "
+        "situation familiale les ressources les charges et les besoins de la personne concernée "
+        "avant de l entendre avec son avocat puis il rend une décision motivée proportionnée et "
+        "limitée dans le temps"
+    )
+    candidate = (
+        "Le juge reçoit la requête, puis consulte le certificat médical détaillé. Il vérifie la "
+        "situation familiale, les ressources, les charges et les besoins de la personne concernée. "
+        "Il faut analyser ce passage avant de poursuivre la correction. Il l'entend avec son avocat, "
+        "puis rend une décision motivée, proportionnée et limitée dans le temps."
+    )
+
+    result = validate_proofread_candidate(raw, candidate)
+
+    assert result.valid is False
+    assert "reasoning_leak" in result.reasons
+
+
+def test_accepte_une_citation_anglaise_deja_presente_dans_le_brut():
+    raw = (
+        "dans le cours l intervenant cite la phrase we need to carefully rewrite this paragraph "
+        "before continuing puis il explique pourquoi cette consigne anglaise ne doit pas apparaître "
+        "dans le texte relu"
+    )
+    candidate = (
+        "Dans le cours, l'intervenant cite la phrase « We need to carefully rewrite this paragraph "
+        "before continuing », puis il explique pourquoi cette consigne anglaise ne doit pas "
+        "apparaître dans le texte relu."
+    )
+
+    assert validate_proofread_candidate(raw, candidate).valid is True
+
+
+def test_accepte_analyser_une_situation_juridique_sans_metadiscours_editorial():
+    raw = (
+        "pour statuer il faut analyser la situation juridique les ressources et les besoins de la "
+        "personne avant de choisir une mesure proportionnée"
+    )
+    candidate = (
+        "Pour statuer, il faut analyser la situation juridique, les ressources et les besoins de la "
+        "personne avant de choisir une mesure proportionnée."
+    )
+
+    assert validate_proofread_candidate(raw, candidate).valid is True
