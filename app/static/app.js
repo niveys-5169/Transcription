@@ -784,6 +784,20 @@ function openPassage(point) {
   $("passage-dialog").showModal();
 }
 
+/* Les règles mécaniques couvrent tout le document ; la lecture par Claude ne
+   porte que sur les blocs porteurs d'un signal (mode « claude-cible »). Dire
+   combien de blocs ont réellement été lus évite de laisser croire qu'ils
+   l'ont tous été. */
+function lectureClaudeLabel(rapport) {
+  const mode = rapport.mode || "";
+  if (mode !== "claude" && mode !== "claude-cible") return "règles seules";
+  const lus = Number(rapport.claude_pairs || 0);
+  if (mode === "claude-cible" && lus) {
+    return `règles + lecture par Claude sur ${lus} bloc${lus > 1 ? "s" : ""}`;
+  }
+  return "règles + lecture par Claude";
+}
+
 function renderVerification(job) {
   const rapport = job.verification || {};
   const allPoints = Array.isArray(rapport.findings) ? rapport.findings : [];
@@ -813,9 +827,7 @@ function renderVerification(job) {
   const entete = `
     <div class="verify-summary">
       <span class="badge">${rapport.checked_pairs || 0} passages comparés</span>
-      <span class="badge">${
-        rapport.mode === "claude" ? "règles + lecture par Claude" : "règles seules"
-      }</span>
+      <span class="badge">${lectureClaudeLabel(rapport)}</span>
       ${points.length
         ? `<span class="badge error">${graves} point${graves > 1 ? "s" : ""} à regarder de près</span>`
         : `<span class="verify-ok">Aucun écart détecté</span>`}
@@ -841,6 +853,7 @@ function renderSources(job) {
   const report = job.factcheck_report;
   const enAttente = (report && Array.isArray(report.pending) ? report.pending : [])
     .filter((p) => p.status === "attente");
+  const skipped = report && Array.isArray(report.skipped) ? report.skipped : [];
 
   const badge = $("sources-count");
   const badgeCount = points.length + enAttente.length;
@@ -866,6 +879,7 @@ function renderSources(job) {
     <div class="verify-summary">
       <span class="badge">${report.claims_checked || 0} affirmation${report.claims_checked > 1 ? "s" : ""} vérifiée${report.claims_checked > 1 ? "s" : ""}</span>
       <span class="badge">${report.corrections || 0} correction${report.corrections > 1 ? "s" : ""} appliquée${report.corrections > 1 ? "s" : ""}</span>
+      ${skipped.length ? `<span class="badge">${skipped.length} repérée${skipped.length > 1 ? "s" : ""} hors périmètre</span>` : ""}
       ${enAttente.length ? `<span class="badge warn">${enAttente.length} en attente de validation</span>` : ""}
       ${points.length
         ? `<span class="badge error">${points.length} point${points.length > 1 ? "s" : ""} non confirmé${points.length > 1 ? "s" : ""}</span>`
@@ -880,12 +894,25 @@ function renderSources(job) {
     </p>
     ${enAttente.map(renderPendingCard).join("")}` : "";
 
+  const skippedSection = skipped.length ? `
+    <details class="skipped-claims">
+      <summary>Affirmations repérées hors périmètre (${skipped.length})</summary>
+      <p class="meta">
+        Repérées mais hors du périmètre vérifié par recherche web : elles
+        n'apparaissent pas en note dans le texte.
+      </p>
+      <ul>
+        ${skipped.map((s) => `<li><span class="finding-kind">${escapeHtml(CLAIM_TYPE_LABELS[s.type] || s.type)}</span> « ${escapeHtml(s.citation)} »</li>`).join("")}
+      </ul>
+    </details>` : "";
+
   if (!points.length && !enAttente.length) {
     panel.innerHTML = `${entete}
       <p class="meta">
         Les notes de bas de page du texte relu détaillent les sources. Une
         vérification automatique reste une aide, pas une garantie.
-      </p>`;
+      </p>
+      ${skippedSection}`;
     return;
   }
 
@@ -895,7 +922,7 @@ function renderSources(job) {
       ces points ; les sources consultées y sont citées.
     </p>` + points.map(renderFindingCard).join("") : "";
 
-  panel.innerHTML = entete + pendingSection + pointsSection;
+  panel.innerHTML = entete + pendingSection + pointsSection + skippedSection;
 }
 
 /* ------------------------------------------------------- annotations */
@@ -2145,6 +2172,8 @@ function openSettings() {
   $("claude_cli_path").value = settings.claude_cli_path || "";
   $("proofread_model").value = settings.proofread_model || "";
   $("proofread_effort").value = settings.proofread_effort || "high";
+  $("proofread_model_fast").value = settings.proofread_model_fast || "claude-haiku-4-5-20251001";
+  $("proofread_effort_fast").value = settings.proofread_effort_fast || "low";
   $("nim_fallback_enabled").checked = Boolean(settings.nim_fallback_enabled);
   populateNimModels(settings.nim_model || "", settings.nim_fallback_model_1 || "", settings.nim_fallback_model_2 || "");
   $("nim_base_url").value = settings.nim_base_url || "";
@@ -2183,6 +2212,9 @@ function openSettings() {
 
   $("factcheck_setting").checked = Boolean(settings.factcheck);
   $("factcheck_max_searches").value = settings.factcheck_max_searches || 8;
+  $("factcheck_priority_types").value = settings.factcheck_priority_types || "reference_juridique,date,organisme";
+  $("factcheck_workers").value = settings.factcheck_workers || 4;
+  $("factcheck_cache_days").value = settings.factcheck_cache_days || 90;
   $("lexicon_enabled").checked = Boolean(settings.lexicon_enabled);
   $("lexicon_whisper_prompt").checked = Boolean(settings.lexicon_whisper_prompt);
 
@@ -2216,6 +2248,8 @@ async function saveSettings() {
     claude_cli_path: $("claude_cli_path").value.trim(),
     proofread_model: $("proofread_model").value.trim(),
     proofread_effort: $("proofread_effort").value,
+    proofread_model_fast: $("proofread_model_fast").value.trim(),
+    proofread_effort_fast: $("proofread_effort_fast").value,
     nim_fallback_enabled: $("nim_fallback_enabled").checked,
     nim_model: $("nim_model").value.trim(),
     nim_fallback_model_1: $("nim_fallback_model_1").value.trim(),
@@ -2234,6 +2268,9 @@ async function saveSettings() {
     structure_output: $("structure").checked,
     factcheck: $("factcheck_setting").checked,
     factcheck_max_searches: Number($("factcheck_max_searches").value) || 8,
+    factcheck_priority_types: $("factcheck_priority_types").value.trim(),
+    factcheck_workers: Number($("factcheck_workers").value) || 4,
+    factcheck_cache_days: Number($("factcheck_cache_days").value) || 90,
     lexicon_enabled: $("lexicon_enabled").checked,
     lexicon_whisper_prompt: $("lexicon_whisper_prompt").checked,
     domain_label: $("domain_label").value.trim() || "MJPM",

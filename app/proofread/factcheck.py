@@ -21,15 +21,37 @@ requalifié de force en « introuvable », quoi qu'ait écrit le modèle — voi
 ``_coerce_verdict``. L'incertitude résiduelle reste visible dans le texte —
 un appel de note — plutôt que lissée en une version fluide et faussement
 définitive.
+
+Périmètre de la vérification web : le repérage (passe A) reste large — les
+six catégories sont toujours repérées, le repérage a de la valeur même sans
+vérification. C'est la vérification (passe B) qui est restreinte : seules
+les catégories coûteuses en cas d'erreur (``factcheck_priority_types``, par
+défaut le juridique, les dates et les organismes liés à une mesure de
+protection) déclenchent une recherche. Voir ``is_in_scope``.
+
+Coûteux même trié : la même citation répétée plusieurs fois dans un texte
+n'est vérifiée qu'une fois (déduplication intra-document, voir
+``cache_key``), et un verdict déjà établi pour cette citation ailleurs — dans
+ce document ou un autre — est réutilisé depuis ``db.factcheck_cache_*``
+tant qu'il n'est pas périmé. Jamais au prix du garde-fou : seul un verdict
+issu d'une recherche web effective (``origine == "web"``) est mémorisé, voir
+``verify_claim``.
 """
 from __future__ import annotations
 
 import logging
+import re
+import threading
 import uuid
-from dataclasses import asdict, dataclass, field
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import asdict, dataclass, field, replace
 
 from .. import config as config_module
+from .. import db
+from ..lexicon import Term
+from ..lexicon import load_lexicon as lexicon_load_all
 from ..lexicon import lookup as lexicon_lookup
+from . import legalref
 from . import prompts
 from .backends import get_backend
 from .backends.cli import QuotaExhausted
@@ -40,7 +62,9 @@ from .verify import Finding
 
 logger = logging.getLogger(__name__)
 
-MAX_TOKENS_CLAIMS = 4_000
+# Sortie de l'extraction : un court tableau JSON (citations + catégories),
+# pas un texte à produire — le modèle rapide y suffit (voir extract_claims).
+MAX_TOKENS_CLAIMS = 2_000
 MAX_TOKENS_VERDICT = 2_000
 
 VERDICTS = ("confirme", "corrige", "infirme", "introuvable", "ambigu")
@@ -122,8 +146,9 @@ class Verdict:
     sources: list[Source] = field(default_factory=list)
     confiance: str = "basse"
     # "web" (recherche effective), "lexique" (résolu sans recherche par le
-    # lexique MJPM vérifié), "coerce" (garde-fou : aucune preuve trouvée),
-    # "quota" (limite d'usage de l'abonnement atteinte).
+    # lexique MJPM vérifié), "cache" (verdict "web" mémorisé réutilisé sans
+    # nouvel appel, voir cache_key/factcheck), "coerce" (garde-fou : aucune
+    # preuve trouvée), "quota" (limite d'usage de l'abonnement atteinte).
     origine: str = "web"
 
 
@@ -157,6 +182,11 @@ class FactCheckReport:
     corrections: int = 0
     findings: list[Finding] = field(default_factory=list)
     pending: list[PendingCorrection] = field(default_factory=list)
+    # Affirmations repérées mais hors périmètre de la vérification web (voir
+    # is_in_scope) : ni appel, ni note, ni Finding — seulement listées ici,
+    # pour que l'interface puisse les montrer sans laisser croire qu'elles
+    # ont été vérifiées.
+    skipped: list[dict] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
@@ -164,6 +194,7 @@ class FactCheckReport:
             "corrections": self.corrections,
             "findings": [f.to_dict() for f in self.findings],
             "pending": [p.to_dict() for p in self.pending],
+            "skipped": self.skipped,
         }
 
 
@@ -251,6 +282,11 @@ def extract_claims(
             user=prompts.FACTCHECK_EXTRACTION_USER.format(body=block_text),
             max_tokens=MAX_TOKENS_CLAIMS,
             schema=CLAIMS_SCHEMA,
+            # Repérage mécanique (une citation dans le texte, pas un
+            # jugement) : le modèle rapide suffit. Jamais pour les verdicts
+            # de vérification (verify_claim), qui exigent le jugement du
+            # modèle principal — voir la docstring de proofread_model_fast.
+            fast=True,
         )
         raw_claims = result.parsed if result.parsed is not None else parse_json_array(result.text)
         for raw in raw_claims or []:
@@ -278,11 +314,101 @@ def extract_claims(
     return claims
 
 
+# ------------------------------------------------------- périmètre et clé
+
+
+def is_in_scope(claim: Claim, settings) -> bool:
+    """Cette affirmation déclenche-t-elle une recherche web ?
+
+    Restreint la vérification (jamais le repérage, voir extract_claims) aux
+    catégories coûteuses en cas d'erreur (``factcheck_priority_types``). Cas
+    particulier de ``organisme`` : même prioritaire, il n'est retenu que s'il
+    est lié à une mesure de protection — sinon un simple organisme cité en
+    passant (une caisse, un employeur...) déclencherait une recherche sans
+    justification. Deux vérifications mécaniques, sans appel réseau : le
+    lexique MJPM (s'il est activé) puis, à défaut, les sigles/expressions
+    reconnus par ``legalref``.
+    """
+    priority_types = {t.strip() for t in settings.factcheck_priority_types.split(",") if t.strip()}
+    if claim.type not in priority_types:
+        return False
+
+    if claim.type == "organisme":
+        if settings.lexicon_enabled:
+            term = lexicon_lookup(claim.citation, verified_only=False)
+            if term is not None and term.categorie in {"mesure", "acteur", "prestation", "texte"}:
+                return True
+        return legalref.is_organisme_de_mesure(claim.citation)
+
+    return True
+
+
+# Ponctuation de bordure (guillemets, tirets, points...) : \W couvre tout
+# caractère non alphanumérique, accents compris parmi les caractères gardés
+# (un caractère accentué est un caractère de mot pour re, pas un \W).
+_BORDER_PUNCT_RE = re.compile(r"^[\W_]+|[\W_]+$", re.UNICODE)
+
+
+def _normalize_for_match(text: str) -> str:
+    """Minuscule, espaces compactés, ponctuation de bordure retirée.
+
+    Les accents sont conservés à dessein — contrairement à ``legalref``, qui
+    les supprime pour tolérer une transcription automatique dégradée : ici,
+    on compare des citations à des entrées du lexique, toutes deux déjà en
+    français correctement accentué, et un accent compte dans une référence
+    légale.
+    """
+    normalized = " ".join(text.split()).lower()
+    return _BORDER_PUNCT_RE.sub("", normalized)
+
+
+def cache_key(claim_type: str, citation: str) -> str:
+    """Clé de déduplication et de cache pour une affirmation.
+
+    Deux occurrences de la même citation (à la casse et aux espaces près)
+    partagent la même clé, qu'elles proviennent du même document ou non —
+    voir factcheck() pour la déduplication intra-document et verify_claim()
+    pour le cache inter-documents (``db.factcheck_cache_*``).
+    """
+    return f"{claim_type}:{_normalize_for_match(citation)}"
+
+
+# En deçà, une référence est trop courte pour identifier quoi que ce soit.
+_MIN_REFERENCE_MATCH_CHARS = 10
+
+
+def _lexicon_reference_match(citation: str) -> Term | None:
+    """Entrée vérifiée du lexique dont le champ ``reference`` correspond à
+    ``citation``, par inclusion tolérante (après la même normalisation que
+    ``cache_key``) — ou ``None``.
+
+    Les entrées livrées sont actuellement toutes ``verifie: false`` (voir
+    ``app/lexicon/__init__.py``) : ce court-circuit ne se déclenche donc pas
+    tant qu'un mainteneur n'a pas lancé ``python -m app.lexicon verify``.
+    """
+    citation_norm = _normalize_for_match(citation)
+    if not citation_norm:
+        return None
+    for term in lexicon_load_all():
+        if not term.verifie or not term.reference:
+            continue
+        reference_norm = _normalize_for_match(term.reference)
+        # Dans ce sens uniquement : la citation doit contenir la référence
+        # entière. L'inclusion inverse confirmerait « code civil » sur la foi
+        # de l'entrée « Code civil, art. 433 à 439 » — une citation vague
+        # validée par une référence bien plus précise qu'elle, soit la faute
+        # exacte que cette étape doit empêcher. Longueur minimale pour qu'une
+        # référence trop courte ne se retrouve pas partout.
+        if len(reference_norm) >= _MIN_REFERENCE_MATCH_CHARS and reference_norm in citation_norm:
+            return term
+    return None
+
+
 # ---------------------------------------------------- passe B : vérification
 
 
 def verify_claim(claim: Claim, *, settings=None) -> Verdict:
-    """Vérifie une affirmation : lexique d'abord, recherche web sinon."""
+    """Vérifie une affirmation : lexique d'abord, cache ensuite, recherche web sinon."""
     settings = settings or config_module.load_settings()
 
     if settings.lexicon_enabled:
@@ -302,6 +428,46 @@ def verify_claim(claim: Claim, *, settings=None) -> Verdict:
                 origine="lexique",
             )
 
+        # Extension à la référence elle-même (pas seulement au terme) pour
+        # les affirmations de type "reference_juridique" : « article 440 du
+        # code civil » cité tel quel dans le lexique résout sans recherche.
+        if claim.type == "reference_juridique":
+            term = _lexicon_reference_match(claim.citation)
+            if term is not None:
+                return Verdict(
+                    claim=claim,
+                    verdict="confirme",
+                    forme_correcte=term.terme,
+                    explication=f"Référence légale du lexique MJPM, vérifiée ({term.reference}).",
+                    sources=[
+                        Source(titre=str(s.get("titre") or ""), url=str(s.get("url") or ""))
+                        for s in term.sources
+                        if isinstance(s, dict)
+                    ],
+                    confiance="haute",
+                    origine="lexique",
+                )
+
+    key = cache_key(claim.type, claim.citation)
+    cached = db.factcheck_cache_get(key, max_age_days=settings.factcheck_cache_days)
+    if cached is not None:
+        # Un verdict relu du cache n'a jamais contourné _coerce_verdict : il
+        # n'a été écrit (voir plus bas) qu'après une recherche web effective
+        # ("web"). Le garde-fou reste donc entier, même relu depuis le cache.
+        return Verdict(
+            claim=claim,
+            verdict=str(cached.get("verdict") or "introuvable"),
+            forme_correcte=str(cached.get("forme_correcte") or ""),
+            explication=str(cached.get("explication") or ""),
+            sources=[
+                Source(titre=str(s.get("titre") or ""), url=str(s.get("url") or ""))
+                for s in cached.get("sources") or []
+                if isinstance(s, dict)
+            ],
+            confiance=str(cached.get("confiance") or "basse"),
+            origine="cache",
+        )
+
     backend = get_backend(settings)
     try:
         result = backend.complete(
@@ -313,6 +479,10 @@ def verify_claim(claim: Claim, *, settings=None) -> Verdict:
             max_tokens=MAX_TOKENS_VERDICT,
             schema=VERDICT_SCHEMA,
             web_search=True,
+            # Jamais fast=True ici : un verdict, contrairement au repérage,
+            # engage une correction potentielle du texte — notamment sur les
+            # références juridiques, où une erreur coûte plus cher que le
+            # temps économisé (voir proofread_model_fast dans config.py).
         )
     except QuotaExhausted:
         return Verdict(
@@ -324,7 +494,28 @@ def verify_claim(claim: Claim, *, settings=None) -> Verdict:
         )
 
     data = result.parsed if isinstance(result.parsed, dict) else parse_json_object(result.text)
-    return _coerce_verdict(claim, data or {}, result)
+    verdict = _coerce_verdict(claim, data or {}, result)
+
+    # On ne mémorise que les vrais résultats d'une recherche effective
+    # ("web") assortis d'au moins une source : "coerce" (garde-fou déclenché,
+    # aucune recherche constatée) et "quota" (limite d'abonnement atteinte)
+    # sont des non-réponses, pas des verdicts — les mettre en cache figerait
+    # une absence de preuve en preuve d'absence pour 90 jours.
+    if verdict.origine == "web" and verdict.sources:
+        db.factcheck_cache_put(
+            key,
+            {
+                "claim_type": claim.type,
+                "citation": claim.citation,
+                "verdict": verdict.verdict,
+                "forme_correcte": verdict.forme_correcte,
+                "explication": verdict.explication,
+                "sources": [{"titre": s.titre, "url": s.url} for s in verdict.sources],
+                "confiance": verdict.confiance,
+            },
+        )
+
+    return verdict
 
 
 def _coerce_verdict(claim: Claim, data: dict, result) -> Verdict:
@@ -549,6 +740,75 @@ def reject_pending(clean_text: str, pending: PendingCorrection) -> str:
 # --------------------------------------------------------- orchestration
 
 
+def _verify_unique_claims_parallel(
+    unique_claims: list[Claim],
+    *,
+    settings,
+    on_progress,
+    should_cancel,
+) -> list[Verdict]:
+    """Vérifie ``unique_claims`` (une entrée par clé de cache) en parallèle.
+
+    Ordre déterministe en sortie (même position que l'entrée), quel que soit
+    l'ordre réel d'achèvement des threads : la numérotation des notes de
+    ``apply_verdicts`` doit rester stable d'une exécution à l'autre.
+    """
+    total = len(unique_claims)
+    results: list[Verdict | None] = [None] * total
+    # Dès qu'un worker rencontre un quota épuisé, on arrête d'en soumettre
+    # d'autres : marteler un quota épuisé avec plusieurs threads est pire
+    # qu'avec un seul.
+    quota_hit = threading.Event()
+    progress_lock = threading.Lock()
+    completed = 0
+
+    def _report_progress():
+        nonlocal completed
+        if on_progress is None:
+            return
+        # Appel sous verrou : on_progress écrit en base (voir pipeline._Progress),
+        # et plusieurs threads y arrivent de front.
+        with progress_lock:
+            completed += 1
+            on_progress(0.3 + 0.7 * completed / total, f"Vérification {completed}/{total}…")
+
+    def _run(claim: Claim) -> Verdict:
+        if quota_hit.is_set():
+            return Verdict(
+                claim=claim,
+                verdict="introuvable",
+                confiance="basse",
+                explication="Limite d'usage de l'abonnement Claude atteinte au moment de la vérification.",
+                origine="quota",
+            )
+        result = verify_claim(claim, settings=settings)
+        if result.origine == "quota":
+            quota_hit.set()
+        return result
+
+    max_workers = max(1, int(settings.factcheck_workers))
+    executor = ThreadPoolExecutor(max_workers=max_workers)
+    try:
+        futures: dict = {}
+        for index, claim in enumerate(unique_claims):
+            if should_cancel is not None and should_cancel():
+                raise ProofreadError("Fact-check annulé.")
+            futures[executor.submit(_run, claim)] = index
+        for future in as_completed(futures):
+            if should_cancel is not None and should_cancel():
+                raise ProofreadError("Fact-check annulé.")
+            results[futures[future]] = future.result()
+            _report_progress()
+    except BaseException:
+        # Pas seulement ProofreadError : une erreur de back-end remontée par
+        # future.result() laisserait sinon l'executor et ses threads en vie.
+        executor.shutdown(cancel_futures=True)
+        raise
+    else:
+        executor.shutdown()
+    return results  # type: ignore[return-value]
+
+
 def factcheck(
     clean_text: str,
     *,
@@ -573,16 +833,42 @@ def factcheck(
             on_progress(1.0, "Aucune affirmation à vérifier.")
         return clean_text, FactCheckReport(claims_checked=0), []
 
-    verdicts: list[Verdict] = []
-    for index, claim in enumerate(claims):
-        if should_cancel is not None and should_cancel():
-            raise ProofreadError("Fact-check annulé.")
-        if on_progress:
-            on_progress(
-                0.3 + 0.7 * index / len(claims),
-                f"Vérification {index + 1}/{len(claims)}…",
-            )
-        verdicts.append(verify_claim(claim, settings=settings))
+    # Périmètre : seules les catégories coûteuses en cas d'erreur (voir
+    # is_in_scope) déclenchent une vérification. Le reste est repéré mais
+    # n'entraîne ni appel, ni note, ni Finding.
+    in_scope: list[Claim] = []
+    skipped: list[dict] = []
+    for claim in claims:
+        if is_in_scope(claim, settings):
+            in_scope.append(claim)
+        else:
+            skipped.append({"type": claim.type, "citation": claim.citation})
+
+    # Déduplication intra-document : une seule vérification par citation
+    # (même clé de cache), réappliquée à chaque occurrence plus bas.
+    unique_claims: list[Claim] = []
+    position_by_key: dict[str, int] = {}
+    for claim in in_scope:
+        key = cache_key(claim.type, claim.citation)
+        if key not in position_by_key:
+            position_by_key[key] = len(unique_claims)
+            unique_claims.append(claim)
+
+    resolved = (
+        _verify_unique_claims_parallel(
+            unique_claims, settings=settings, on_progress=on_progress, should_cancel=should_cancel
+        )
+        if unique_claims
+        else []
+    )
+
+    # Un Verdict par occurrence, copié depuis le verdict résolu pour sa clé
+    # mais portant son propre Claim (sa propre position) — apply_verdicts en
+    # a besoin pour poser une note par occurrence, pas une seule pour toutes.
+    verdicts: list[Verdict] = [
+        replace(resolved[position_by_key[cache_key(claim.type, claim.citation)]], claim=claim)
+        for claim in in_scope
+    ]
 
     text, findings, entities, pending = apply_verdicts(clean_text, verdicts, duration=duration)
     corrections = sum(
@@ -594,7 +880,11 @@ def factcheck(
         and v.claim.type not in SENSITIVE_CLAIM_TYPES
     )
     report = FactCheckReport(
-        claims_checked=len(claims), corrections=corrections, findings=findings, pending=pending
+        claims_checked=len(verdicts),
+        corrections=corrections,
+        findings=findings,
+        pending=pending,
+        skipped=skipped,
     )
 
     if on_progress:

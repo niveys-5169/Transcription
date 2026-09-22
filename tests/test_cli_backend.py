@@ -10,7 +10,13 @@ import json
 import pytest
 
 from app.config import Settings
-from app.proofread.backends.cli import CliBackend, QuotaExhausted
+from app.proofread.backends.cli import (
+    CALL_TIMEOUT_SECONDS,
+    FAST_CALL_TIMEOUT_SECONDS,
+    WEB_CALL_TIMEOUT_SECONDS,
+    CliBackend,
+    QuotaExhausted,
+)
 from app.proofread.base import ProofreadError
 
 
@@ -370,3 +376,135 @@ def test_parsed_tableau_enveloppe_est_defait(backend, monkeypatch):
         system="s", user="u", max_tokens=100, schema={"type": "array"}
     )
     assert result.parsed == payload
+
+
+# ----------------------------------------------------------- modèle « fast »
+
+
+def test_fast_utilise_le_modele_et_l_effort_rapides(monkeypatch):
+    monkeypatch.setattr("shutil.which", lambda name: "/usr/local/bin/claude")
+    instance = CliBackend(
+        Settings(
+            claude_backend="cli",
+            proofread_model="claude-sonnet-5",
+            proofread_effort="high",
+            proofread_model_fast="claude-haiku-4-5-20251001",
+            proofread_effort_fast="low",
+        )
+    )
+    _make_available(monkeypatch)
+    captured = {}
+
+    def fake_popen(cmd, **kwargs):
+        captured["cmd"] = cmd
+        return _FakeProcess(_stream(_result("ok")))
+
+    monkeypatch.setattr("subprocess.Popen", fake_popen)
+    instance.complete(system="s", user="u", max_tokens=100, fast=True)
+
+    cmd = captured["cmd"]
+    assert cmd[cmd.index("--model") + 1] == "claude-haiku-4-5-20251001"
+    assert cmd[cmd.index("--effort") + 1] == "low"
+
+
+def test_sans_fast_le_modele_normal_est_utilise(backend, monkeypatch):
+    _make_available(monkeypatch)
+    captured = {}
+
+    def fake_popen(cmd, **kwargs):
+        captured["cmd"] = cmd
+        return _FakeProcess(_stream(_result("ok")))
+
+    monkeypatch.setattr("subprocess.Popen", fake_popen)
+    backend.complete(system="s", user="u", max_tokens=100)
+
+    cmd = captured["cmd"]
+    assert cmd[cmd.index("--model") + 1] == "claude-sonnet-5"
+
+
+# ------------------------------------------------------------ délai par appel
+
+
+def test_delai_web_search(backend, monkeypatch):
+    _make_available(monkeypatch)
+    monkeypatch.setattr("subprocess.Popen", lambda cmd, **k: _FakeProcess(_stream(_result("ok"))))
+    captured = {}
+    real_timer = __import__("threading").Timer
+
+    def fake_timer(seconds, fn):
+        captured["seconds"] = seconds
+        return real_timer(seconds, fn)
+
+    monkeypatch.setattr("threading.Timer", fake_timer)
+    backend.complete(system="s", user="u", max_tokens=100, web_search=True)
+    assert captured["seconds"] == WEB_CALL_TIMEOUT_SECONDS
+
+
+def test_delai_fast_sans_recherche_web(backend, monkeypatch):
+    _make_available(monkeypatch)
+    monkeypatch.setattr("subprocess.Popen", lambda cmd, **k: _FakeProcess(_stream(_result("ok"))))
+    captured = {}
+    real_timer = __import__("threading").Timer
+
+    def fake_timer(seconds, fn):
+        captured["seconds"] = seconds
+        return real_timer(seconds, fn)
+
+    monkeypatch.setattr("threading.Timer", fake_timer)
+    backend.complete(system="s", user="u", max_tokens=100, fast=True)
+    assert captured["seconds"] == FAST_CALL_TIMEOUT_SECONDS
+
+
+def test_delai_par_defaut(backend, monkeypatch):
+    _make_available(monkeypatch)
+    monkeypatch.setattr("subprocess.Popen", lambda cmd, **k: _FakeProcess(_stream(_result("ok"))))
+    captured = {}
+    real_timer = __import__("threading").Timer
+
+    def fake_timer(seconds, fn):
+        captured["seconds"] = seconds
+        return real_timer(seconds, fn)
+
+    monkeypatch.setattr("threading.Timer", fake_timer)
+    backend.complete(system="s", user="u", max_tokens=100)
+    assert captured["seconds"] == CALL_TIMEOUT_SECONDS
+
+
+# --------------------------------------------------- plafond de recherches web
+
+
+def test_plafond_de_recherches_web_tue_le_processus_et_garde_le_texte_recu(monkeypatch):
+    monkeypatch.setattr("shutil.which", lambda name: "/usr/local/bin/claude")
+    instance = CliBackend(Settings(claude_backend="cli", factcheck_max_searches=1))
+    _make_available(monkeypatch)
+
+    # Une recherche autorisée, une seconde qui franchit le plafond : le flux
+    # s'arrête là (processus tué), sans événement « result » — comme un vrai
+    # kill couperait le flux en plein milieu.
+    events = _stream(
+        _assistant(tool_use={"id": "tool_1", "name": "WebSearch"}),
+        _tool_result("tool_1", "https://example.org/a"),
+        _assistant("réponse partielle avant le plafond"),
+        _assistant(tool_use={"id": "tool_2", "name": "WebSearch"}),
+    )
+    monkeypatch.setattr("subprocess.Popen", lambda cmd, **k: _FakeProcess(events))
+
+    result = instance.complete(system="s", user="u", max_tokens=100, web_search=True)
+
+    assert result.text == "réponse partielle avant le plafond"
+    assert result.web_searches == 2
+
+
+def test_sous_le_plafond_rien_ne_change(backend, monkeypatch):
+    _make_available(monkeypatch)
+    events = _stream(
+        _assistant(tool_use={"id": "tool_1", "name": "WebSearch"}),
+        _tool_result("tool_1", "https://example.org/a"),
+        _assistant("réponse finale"),
+        _result("réponse finale"),
+    )
+    monkeypatch.setattr("subprocess.Popen", lambda cmd, **k: _FakeProcess(events))
+
+    result = backend.complete(system="s", user="u", max_tokens=100, web_search=True)
+    assert result.text == "réponse finale"
+    assert result.web_searches == 1

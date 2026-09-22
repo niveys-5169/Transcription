@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import difflib
+import logging
 import math
 import re
 import sqlite3
@@ -17,6 +18,8 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from . import config
+
+logger = logging.getLogger(__name__)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS jobs (
@@ -82,6 +85,17 @@ CREATE TABLE IF NOT EXISTS review_versions (
     FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_review_versions_job ON review_versions (job_id, version DESC);
+CREATE TABLE IF NOT EXISTS factcheck_cache (
+    key            TEXT PRIMARY KEY,
+    claim_type     TEXT,
+    citation       TEXT,
+    verdict        TEXT,
+    forme_correcte TEXT,
+    explication    TEXT,
+    sources        TEXT,
+    confiance      TEXT,
+    created_at     TEXT NOT NULL
+);
 """
 
 # Colonnes ajoutées après coup : appliquées à une base existante au démarrage.
@@ -891,3 +905,86 @@ def iter_all(columns: Iterable[str] = ("id",)) -> list[dict]:
     with connect() as conn:
         rows = conn.execute(f"SELECT {', '.join(columns)} FROM jobs").fetchall()
     return [dict(row) for row in rows]
+
+
+# ------------------------------------------------------ cache des verdicts
+
+# Un verdict « introuvable » ou « ambigu » n'est pas une réponse mais un
+# échec de recherche : le mémoriser aussi longtemps qu'un verdict établi
+# (``factcheck_cache_days``, potentiellement 90 jours) figerait une absence
+# de résultat qu'une prochaine recherche aurait pu lever. Durée de vie
+# courte, indépendante de ``max_age_days``.
+SHORT_LIVED_VERDICTS = ("introuvable", "ambigu")
+SHORT_CACHE_DAYS = 7
+
+
+def factcheck_cache_get(key: str, *, max_age_days: int) -> dict | None:
+    """Verdict mémorisé pour ``key``, ou ``None`` s'il est absent ou périmé.
+
+    Ne décide jamais s'il *faut* mettre en cache ou réutiliser un verdict —
+    ce jugement appartient à l'appelant (``factcheck.py``) ; ce module
+    n'obéit qu'à la règle de péremption ci-dessus.
+    """
+    try:
+        with connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM factcheck_cache WHERE key = ?", (key,)
+            ).fetchone()
+    except sqlite3.OperationalError:
+        # Base non initialisée (commande de mainteneur lancée hors de
+        # l'application, par exemple). Le cache accélère la vérification, il
+        # n'en est jamais une condition : on se comporte comme un défaut de
+        # cache plutôt que de faire échouer ce qu'on devait accélérer.
+        return None
+    if row is None:
+        return None
+    entry = dict(row)
+    max_age = SHORT_CACHE_DAYS if entry.get("verdict") in SHORT_LIVED_VERDICTS else max_age_days
+    try:
+        created_at = datetime.fromisoformat(entry["created_at"])
+    except (TypeError, ValueError):
+        return None
+    if created_at.tzinfo is None:
+        created_at = created_at.replace(tzinfo=timezone.utc)
+    age_days = (datetime.now(timezone.utc) - created_at).total_seconds() / 86400
+    if age_days > max_age:
+        return None
+    # Une entrée illisible est traitée comme absente : mieux vaut refaire la
+    # recherche que faire échouer le fact-check sur une ligne corrompue.
+    try:
+        entry["sources"] = json.loads(entry["sources"]) if entry.get("sources") else []
+    except (json.JSONDecodeError, TypeError):
+        return None
+    return entry
+
+
+def factcheck_cache_put(key: str, entry: dict) -> None:
+    """Mémorise (ou remplace) le verdict de ``key``."""
+    try:
+        _factcheck_cache_write(key, entry)
+    except sqlite3.OperationalError:
+        # Même raison que dans factcheck_cache_get : ne rien mémoriser vaut
+        # mieux que faire échouer la vérification.
+        logger.debug("Cache de vérification indisponible, écriture ignorée.")
+
+
+def _factcheck_cache_write(key: str, entry: dict) -> None:
+    with connect() as conn:
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO factcheck_cache
+                (key, claim_type, citation, verdict, forme_correcte, explication, sources, confiance, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                key,
+                entry.get("claim_type"),
+                entry.get("citation"),
+                entry.get("verdict"),
+                entry.get("forme_correcte"),
+                entry.get("explication"),
+                json.dumps(entry.get("sources") or [], ensure_ascii=False),
+                entry.get("confiance"),
+                _now(),
+            ),
+        )

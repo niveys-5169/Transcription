@@ -293,7 +293,13 @@ Deux niveaux, complémentaires :
 - **Une lecture par Claude**, qui repère ce qu'aucune règle ne voit : un sens
   qui glisse, une nuance perdue, une phrase ajoutée. Elle ignore délibérément
   la ponctuation, les majuscules et le retrait des hésitations, qui sont
-  précisément le travail attendu.
+  précisément le travail attendu. Elle ne porte pas sur tous les blocs : les
+  règles mécaniques, elles, couvrent 100 % du document et ne coûtent rien ;
+  Claude ne relit que les blocs qui portent un signal — une règle déjà
+  déclenchée dessus, une référence juridique repérée, ou un raccourcissement
+  net par rapport au brut. Le rapport indique combien de blocs ont
+  effectivement été lus par Claude, pour ne pas laisser croire qu'il les a
+  tous vus.
 
 C'est une vérification de **fidélité** : elle dit si le texte relu rend
 fidèlement ce qui a été dit, pas si ce qui a été dit est exact — un nom
@@ -302,9 +308,7 @@ contexte, y passera inaperçu puisque rien n'a été perdu. C'est le rôle de
 l'étape suivante.
 
 Les points relevés partent aussi dans le `.md`, le `.json` et la fiche
-Obsidian. Décochable au dépôt : la vérification par Claude double
-approximativement le temps de la relecture, puisqu'elle relit les deux
-versions.
+Obsidian. Décochable au dépôt.
 
 Une vérification automatique reste une aide, pas une garantie. Sur un passage
 décisif, l'audio fait foi — les blocs horodatés et le lecteur synchronisé sont là
@@ -317,15 +321,37 @@ transcription relue : une recherche web ciblée sur ce que la vérification de
 fidélité ne peut pas voir — un nom propre, un titre de rapport, une
 statistique, une référence juridique plausibles mais faux.
 
+Toutes les affirmations plausibles ne sont pas vérifiées : la recherche se
+concentre sur les catégories prioritaires — par défaut les références
+juridiques, les dates de textes, puis les organismes liés aux mesures de
+protection (juge des tutelles, DDETS, ARS, UDAF…). Les noms propres de
+personnes et de sociétés, les titres de rapport et les statistiques sont
+toujours **repérés**, pour rester visibles dans le panneau **Sources**, mais
+ne sont plus vérifiés par défaut : pas de note de bas de page pour eux, juste
+un repli listant ce qui a été laissé de côté.
+
 Deux passes :
 
 1. **Repérage.** Un appel identifie, dans le texte relu, ce qui se prête à
    vérification — pas les notions générales du cours, seulement les faits
-   précis.
-2. **Vérification, une affirmation à la fois.** Un appel par affirmation, avec
-   l'outil de recherche web activé. Le prompt est explicite : répondre sans
-   avoir cherché est une faute, « je n'ai pas trouvé » est une réponse
-   valable, et le modèle ne doit jamais deviner une graphie plausible.
+   précis. `app/proofread/legalref.py` repère en plus, mécaniquement et sans
+   réseau, les références juridiques et les organismes liés aux mesures.
+2. **Vérification, une affirmation à la fois.** Un appel par affirmation
+   relevant du périmètre, avec l'outil de recherche web activé. Le prompt est
+   explicite : répondre sans avoir cherché est une faute, « je n'ai pas
+   trouvé » est une réponse valable, et le modèle ne doit jamais deviner une
+   graphie plausible.
+
+Les affirmations ne sont jamais regroupées dans un même appel de verdict,
+même quand plusieurs partagent le même bloc. Le garde-fou ci-dessous raisonne
+par appel : il exige la trace d'une recherche web effective dans *cet* appel.
+Grouper cinq affirmations dans un seul appel laisserait une seule recherche
+en valider cinq sans qu'aucune des quatre autres n'ait été cherchée — c'est
+une optimisation écartée volontairement, pas un oubli. Les doublons (même
+citation, même type) sont en revanche dédupliqués avant l'appel, et les
+verdicts sont mémorisés d'un cours à l'autre pendant une durée configurable,
+pour éviter de repayer une recherche sur une référence déjà vue. Les
+vérifications restantes sont menées de front plutôt qu'en séquence.
 
 **Le garde-fou est mécanique, pas seulement prompté.** Si la réponse ne porte
 la trace d'aucune recherche web effective — aucun appel constaté, aucune
@@ -353,12 +379,13 @@ plutôt que lissée en une version fluide mais faussement définitive — utile
 pour n'importe quel usage, indispensable si le document doit servir de
 référence citable.
 
-Les points non confirmés partent aussi dans le panneau **Sources**, distinct
-du panneau **Vérification** (fidélité). Un [lexique du domaine](#le-lexique-mjpm)
-répond sans recherche pour les termes déjà vérifiés. Décochable au dépôt : le
-coût n'est pas un critère de conception ici, mais un cours d'une heure fait
-un appel par affirmation repérée, et l'abonnement Claude a ses propres
-limites d'usage.
+Les points non confirmés partent aussi dans le panneau **Sources** — qui
+liste également, dans un repli, ce qui a été repéré hors périmètre — distinct
+du panneau **Vérification** (fidélité). Un [lexique du domaine](#le-lexique-mjpm) répond sans
+recherche pour les termes déjà vérifiés. Décochable au dépôt : le coût n'est
+pas un critère de conception ici, mais le tri par périmètre, la
+déduplication et la mémorisation des verdicts limitent le nombre d'appels
+réellement effectués, et l'abonnement Claude a ses propres limites d'usage.
 
 ## Le lexique MJPM
 
@@ -368,11 +395,13 @@ prestations, textes de référence, avec leurs sigles et variantes.
 `app/lexicon/mjpm.json`.
 
 Il n'est jamais opposé comme référence sur la foi de sa seule rédaction :
-`python -m app.lexicon verify` passe chaque entrée non vérifiée par la même
-recherche web que l'étape 3, et ne la marque vérifiée que si elle est
-confirmée. Une entrée non vérifiée continue à amorcer la reconnaissance
-vocale (le pire risque y est un mot de vocabulaire inutile), mais n'est
-jamais recopiée dans une fiche d'entité du coffre tant qu'elle ne l'est pas.
+`python -m app.lexicon verify` — commande réservée aux mainteneurs — passe
+chaque entrée non vérifiée par la même recherche web que
+l'étape 3, et ne la marque vérifiée que si elle est confirmée. Une entrée non
+vérifiée continue à amorcer la reconnaissance vocale (le pire risque y est un
+mot de vocabulaire inutile), mais n'est jamais recopiée dans une fiche
+d'entité du coffre tant qu'elle ne l'est pas. Une fois vérifiée, en revanche,
+elle résout les affirmations correspondantes à l'étape 3 sans aucun appel.
 
 Cinq points d'usage : amorce de vocabulaire pour Whisper (`initial_prompt`),
 bloc de référence dans le prompt de relecture, gravité relevée dans la
@@ -883,6 +912,7 @@ tourne en quelques secondes.
 | `app/proofread/` | Relecture : par Claude, ou par règles |
 | `app/proofread/verify.py` | Vérification de fidélité : règles, puis lecture par Claude |
 | `app/proofread/factcheck.py` | Vérification externe : recherche web, affirmation par affirmation |
+| `app/proofread/legalref.py` | Repérage mécanique, sans réseau, des références juridiques et des organismes liés aux mesures |
 | `app/lexicon/` | Lexique MJPM : amorçage Whisper, résolution sans recherche, glossaire |
 | `app/obsidian/` | Publication : fiche, verbatim, entités, MOC, glossaire et index du coffre |
 | `app/notebooklm_sync.py` | Compilation du Doc maître Google après publication, pour NotebookLM |

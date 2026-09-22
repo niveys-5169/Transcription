@@ -37,7 +37,12 @@ def _isolated_data_dir(tmp_path, monkeypatch):
 
 
 def _fake_nim_result():
-    pair = TextPair(start=0.0, end=2.0, raw="Le texte brut du cours.", clean="Le texte brut du cours, relu.",
+    # La paire porte une référence juridique à dessein : depuis que verify()
+    # ne soumet à Claude que les blocs à risque (voir verify.pairs_a_risque),
+    # un passage parfaitement anodin ne lui est plus envoyé — et ce test
+    # vérifierait alors le contraire de son intention.
+    raw = "Le texte brut du cours, article 440 du code civil."
+    pair = TextPair(start=0.0, end=2.0, raw=raw, clean=f"{raw[:-1]}, relu.",
                      block_id="block-1-1", source_segment_ids=["segment-1"])
     return ProofreadResult(
         text=pair.clean, mode="nim", pairs=[pair],
@@ -71,7 +76,7 @@ def test_verify_true_appelle_claude_meme_pour_une_relecture_nim(monkeypatch):
 
     job = db.get_job(job_id)
     assert job["status"] == "done"
-    assert job["verification"]["mode"] == "claude"
+    assert job["verification"]["mode"] == "claude-cible"
     assert claude_calls, "Claude aurait dû être appelé pour vérifier la relecture NIM"
 
 

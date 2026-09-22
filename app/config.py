@@ -163,6 +163,13 @@ class Settings:
     proofread_model: str = "claude-sonnet-5"
     # Relevé par défaut : le coût n'est plus un critère de conception ici.
     proofread_effort: str = "high"
+    # Couple rapide, réservé aux passes mécaniques (repérage des affirmations
+    # à vérifier, comparaison brut/relu) : jamais pour la relecture elle-même
+    # ni pour les verdicts de fact-check, qui exigent le jugement de
+    # `proofread_model`/`proofread_effort` — notamment sur les références
+    # juridiques, où une erreur coûte plus cher que le temps économisé.
+    proofread_model_fast: str = "claude-haiku-4-5-20251001"
+    proofread_effort_fast: str = "low"
     # Taille (en caractères) d'un bloc de texte envoyé en relecture.
     proofread_chunk_chars: int = 6000
     # Ajouter titre, intertitres et résumé au texte relu.
@@ -186,6 +193,17 @@ class Settings:
     factcheck: bool = True
     # Recherches web autorisées par affirmation à vérifier.
     factcheck_max_searches: int = 8
+    # Catégories d'affirmations qui déclenchent une recherche web, séparées
+    # par des virgules — les autres (nom_propre, rapport, statistique...)
+    # sont repérées mais jamais vérifiées : c'est le juridique qui expose à
+    # un risque en cas d'erreur, pas une statistique approximative.
+    factcheck_priority_types: str = "reference_juridique,date,organisme"
+    # Verdicts menés de front : ils sont indépendants les uns des autres,
+    # rien n'empêche de paralléliser plutôt que d'attendre en séquence.
+    factcheck_workers: int = 4
+    # Durée de validité d'un verdict mémorisé, en jours — un texte de loi
+    # peut être modifié, la mémorisation ne doit pas être éternelle.
+    factcheck_cache_days: int = 90
 
     # --- Domaine et lexique ---
     domain_label: str = "MJPM"

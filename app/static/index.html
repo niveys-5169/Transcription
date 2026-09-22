@@ -430,6 +430,26 @@
           <option value="max">Maximal — le plus lent, le plus soigné</option>
         </select>
       </label>
+      <label class="field">
+        <span>Modèle des passes mécaniques</span>
+        <input type="text" id="proofread_model_fast" placeholder="claude-haiku-4-5-20251001">
+      </label>
+      <label class="field">
+        <span>Effort des passes mécaniques</span>
+        <select id="proofread_effort_fast">
+          <option value="low">Bas — le plus rapide</option>
+          <option value="medium">Moyen</option>
+          <option value="high">Élevé — recommandé</option>
+          <option value="xhigh">Très élevé</option>
+          <option value="max">Maximal — le plus lent, le plus soigné</option>
+        </select>
+      </label>
+      <p class="hint">
+        Ces deux réglages ne s'appliquent qu'au repérage des affirmations et à
+        la comparaison brut/relu, deux tâches mécaniques. La relecture
+        elle-même et les verdicts de vérification restent sur le modèle
+        principal ci-dessus.
+      </p>
     </details>
 
     <details class="settings-section"><summary>Repli NVIDIA NIM <small>secours si Claude est indisponible</small></summary>
@@ -444,11 +464,13 @@
 
     <details class="settings-section"><summary>Vérification externe <small>recherche web après relecture</small></summary>
       <p class="hint">
-        Après la relecture, une recherche web ciblée vérifie les noms
-        propres, titres de rapport, statistiques et références juridiques
-        cités — pas une simple relecture de plausibilité. Ce qui n'a pas pu
-        être confirmé reste visible dans le texte, avec un appel de note :
-        rien n'est lissé en une version fluide mais faussement définitive.
+        Après la relecture, une recherche web ciblée vérifie les références
+        juridiques, les dates de textes et les organismes liés aux mesures de
+        protection — pas une simple relecture de plausibilité. Le reste (noms
+        propres, titres de rapport, statistiques) est repéré mais pas
+        vérifié. Ce qui n'a pas pu être confirmé reste visible dans le texte,
+        avec un appel de note : rien n'est lissé en une version fluide mais
+        faussement définitive.
       </p>
       <label class="check">
         <input type="checkbox" id="factcheck_setting">
@@ -457,6 +479,19 @@
       <label class="field">
         <span>Recherches web autorisées par affirmation</span>
         <input type="number" id="factcheck_max_searches" min="1" max="30" step="1">
+      </label>
+      <label class="field">
+        <span>Catégories vérifiées par recherche web</span>
+        <input type="text" id="factcheck_priority_types" placeholder="reference_juridique,date,organisme">
+        <small>Valeurs possibles, séparées par des virgules : reference_juridique, date, organisme, nom_propre, rapport, statistique.</small>
+      </label>
+      <label class="field">
+        <span>Vérifications menées de front</span>
+        <input type="number" id="factcheck_workers" min="1" max="8" step="1">
+      </label>
+      <label class="field">
+        <span>Durée de validité d'un verdict mémorisé (jours)</span>
+        <input type="number" id="factcheck_cache_days" min="1" max="365" step="1">
       </label>
     </details>
 
