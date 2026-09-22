@@ -23,12 +23,20 @@ def _words(text: str) -> list[str]:
     ]
 
 
-def check_prefix_alignment(raw: str, candidate: str) -> dict:
+def check_prefix_alignment(
+    raw: str,
+    candidate: str,
+    *,
+    window_words: int = WINDOW_WORDS,
+    support_floor: float = WINDOW_SUPPORT_FLOOR,
+    opening_line_support_floor: float = OPENING_LINE_SUPPORT_FLOOR,
+) -> dict:
     """Vérifie qu'une sortie longue est ancrée et sans première ligne parasite."""
     raw_words = _words(raw)
     candidate_words = _words(candidate)
+    required_words = max(MIN_WORDS, window_words)
     result = {
-        "applicable": len(raw_words) >= MIN_WORDS and len(candidate_words) >= MIN_WORDS,
+        "applicable": len(raw_words) >= required_words and len(candidate_words) >= required_words,
         "accepted": True,
         "opening_support_ratio": None,
         "best_window_support_ratio": None,
@@ -38,12 +46,12 @@ def check_prefix_alignment(raw: str, candidate: str) -> dict:
 
     raw_words_set = set(raw_words)
     window_ratios = [
-        sum(word in raw_words_set for word in candidate_words[index:index + WINDOW_WORDS]) / WINDOW_WORDS
-        for index in range(len(candidate_words) - WINDOW_WORDS + 1)
+        sum(word in raw_words_set for word in candidate_words[index:index + window_words]) / window_words
+        for index in range(len(candidate_words) - window_words + 1)
     ]
     best_ratio = max(window_ratios, default=0.0)
     result["best_window_support_ratio"] = round(best_ratio, 4)
-    if best_ratio < WINDOW_SUPPORT_FLOOR:
+    if best_ratio < support_floor:
         result["accepted"] = False
 
     non_empty_lines = [line for line in (candidate or "").splitlines() if line.strip()]
@@ -52,7 +60,7 @@ def check_prefix_alignment(raw: str, candidate: str) -> dict:
         if len(opening_words) >= MIN_OPENING_WORDS:
             opening_ratio = sum(word in raw_words_set for word in opening_words) / len(opening_words)
             result["opening_support_ratio"] = round(opening_ratio, 4)
-            if opening_ratio < OPENING_LINE_SUPPORT_FLOOR:
+            if opening_ratio < opening_line_support_floor:
                 result["accepted"] = False
 
     return result

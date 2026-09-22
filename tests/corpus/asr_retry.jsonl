@@ -1,0 +1,15 @@
+{"id":"loop-removed-001","original":"la tutelle la tutelle la tutelle la tutelle la tutelle la tutelle","retry":"La tutelle est prononcée lorsque l'altération des facultés le justifie.","issue":"boucle_de_tokens","expected":"use_retry","tags":["loop"]}
+{"id":"loop-persists-001","original":"la tutelle la tutelle la tutelle la tutelle la tutelle la tutelle","retry":"la mesure la mesure la mesure la mesure la mesure la mesure","issue":"boucle_de_tokens","expected":"needs_review","tags":["loop"]}
+{"id":"unk-reduced-001","original":"le juge <unk> <unk> la mesure <unk>","retry":"Le juge renouvelle la mesure.","issue":"unk_ratio_eleve","expected":"use_retry","tags":["unk"]}
+{"id":"unk-not-improved-001","original":"le juge <unk> la mesure","retry":"le juge <unk> la mesure","issue":"unk_ratio_eleve","expected":"needs_review","tags":["unk"]}
+{"id":"retry-empty-001","original":"le juge examine la requête","retry":"","issue":"unk_ratio_eleve","expected":"keep_original","tags":["empty"]}
+{"id":"expansion-abnormal-001","original":"passage bref suspect","retry":"ce passage devient une retranscription extrêmement longue avec de très nombreux mots ajoutés sans rapport avec la durée ni avec le contenu original qui était particulièrement bref","issue":"unk_ratio_eleve","expected":"needs_review","tags":["expansion"]}
+{"id":"legal-article-divergence-001","original":"article 472 du Code civil","retry":"article 473 du Code civil","issue":"unk_ratio_eleve","expected":"needs_review","tags":["legal","number"]}
+{"id":"date-divergence-001","original":"la décision date du 12 mai 2025","retry":"la décision date du 13 mai 2025","issue":"unk_ratio_eleve","expected":"needs_review","tags":["date","number"]}
+{"id":"amount-divergence-001","original":"le montant est de 450 euros","retry":"le montant est de 950 euros","issue":"unk_ratio_eleve","expected":"needs_review","tags":["amount","number"]}
+{"id":"acronym-divergence-001","original":"le dossier est transmis à la CAF","retry":"le dossier est transmis à la MSA","issue":"unk_ratio_eleve","expected":"needs_review","tags":["acronym"]}
+{"id":"strong-text-divergence-001","original":"la personne demande une révision de la mesure","retry":"le bateau quitte le port avant le lever du soleil","issue":"unk_ratio_eleve","expected":"needs_review","tags":["divergence"]}
+{"id":"similar-no-improvement-001","original":"le juge examine la requête demain","retry":"le juge examine la requête demain","issue":"unk_ratio_eleve","expected":"needs_review","tags":["similarity","unk"]}
+{"id":"speech-recovered-001","original":"","retry":"La personne demande à être entendue.","issue":"texte_vide_plage_longue","expected":"use_retry","tags":["empty","recovery"]}
+{"id":"no-speech-recovered-001","original":"","retry":"","issue":"texte_vide_plage_longue","expected":"keep_original","tags":["empty","recovery"]}
+{"id":"unknown-policy-similar-001","original":"la personne demande une révision de la mesure","retry":"la personne demande la révision de la mesure","issue":"segment_anormalement_long","expected":"keep_original","tags":["similarity"]}

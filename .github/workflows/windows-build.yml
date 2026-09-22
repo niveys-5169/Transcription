@@ -29,7 +29,10 @@ jobs:
       - name: Installer les dépendances
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r requirements-app.txt pyinstaller
+          python -m pip install -r requirements-app.txt pyinstaller pytest
+
+      - name: Exécuter les tests Python
+        run: python -m pytest -q
 
       - name: Construire l'application
         run: |

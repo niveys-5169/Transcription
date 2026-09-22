@@ -133,6 +133,7 @@ def validate_proofread_candidate(
     *,
     contract: ProofreadAcceptanceContract = FAITHFUL_PROOFREAD_CONTRACT,
     model: str = "",
+    prefix_options: dict | None = None,
 ) -> ValidationResult:
     """Verdict mécanique, reproductible, sans appel réseau ni LLM.
 
@@ -241,7 +242,7 @@ def validate_proofread_candidate(
         reasons.append("acronyms_altered")
 
     if contract.check_prefix_alignment:
-        prefix = check_prefix_alignment(raw, candidate)
+        prefix = check_prefix_alignment(raw, candidate, **(prefix_options or {}))
         metrics["prefix_alignment"] = prefix
         if prefix["applicable"] and not prefix["accepted"] and "prefix_misaligned" not in reasons:
             reasons.append("prefix_misaligned")
