@@ -770,9 +770,13 @@ L'image du pod ne contient plus le modèle Whisper (il l'a longtemps fait,
 mais ça la rendait lourde de plusieurs Go — RunPod devait alors la tirer en
 entier à chaque pod créé sur un hôte qui ne l'avait pas déjà en cache local,
 plus de 10 minutes dans certains cas). À la place, `handler.py` et
-`pod_server.py` mettent le cache Hugging Face sur un **volume réseau**
-RunPod quand un est monté (`/runpod-volume`), pour ne payer le
-téléchargement qu'une seule fois, sans jamais alourdir l'image elle-même.
+`pod_server.py` mettent les caches de modèles sur un **volume réseau** RunPod
+quand un est monté (`/runpod-volume`). Pour le pod, cela couvre Hugging Face
+mais aussi `torch.hub`, utilisé par le modèle d'alignement français : Whisper,
+l'alignement et pyannote ne sont donc téléchargés qu'une seule fois, sans
+alourdir l'image elle-même. Tant que le pod reste actif, les pipelines
+WhisperX, d'alignement et de diarisation déjà chargés sont également réutilisés
+par le fichier suivant au lieu d'être reconstruits.
 
 Mise en place :
 

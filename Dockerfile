@@ -78,9 +78,9 @@ RUN python3 -c "import os, nvidia.cudnn, nvidia.cublas; \
 # fois qu'un pod de secours atterrit sur un hote qui ne l'a pas deja en
 # cache local — plus de 10 minutes, largement au-dela du budget prevu pour
 # tout le demarrage (voir runpod_pod_boot_timeout_seconds). L'image reste
-# donc legere ; pod_server.py met le cache Hugging Face sur le volume reseau
-# RunPod (/runpod-volume) quand un pod l'a attache, pour ne payer le
-# telechargement qu'une seule fois sans
+# donc legere ; pod_server.py met les caches Hugging Face et torch.hub sur le
+# volume reseau RunPod (/runpod-volume) quand un pod l'a attache, pour ne payer
+# qu'une fois les telechargements de Whisper, de l'alignement et de pyannote sans
 # alourdir l'image elle-meme (voir le README, section « Pod : volume
 # reseau »).
 

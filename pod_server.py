@@ -34,6 +34,26 @@ os.environ.setdefault("HF_XET_HIGH_PERFORMANCE", "1")
 VALID_MODELS = {"tiny", "base", "small", "medium", "large-v3"}
 VOLUME_ROOT = "/runpod-volume"
 _model_cache: dict[str, object] = {}
+_whisperx_model_cache: dict[tuple[str, str | None, str | None], object] = {}
+_align_model_cache: dict[str, tuple[object, object]] = {}
+_diarizer_cache: dict[tuple[str, str], object] = {}
+_model_cache_lock = threading.Lock()
+
+
+def _configure_model_cache_environment() -> None:
+    """Place tous les caches de modèles sur le volume réseau persistant."""
+    if not os.path.isdir(VOLUME_ROOT):
+        return
+    hf_home = os.path.join(VOLUME_ROOT, "huggingface-cache")
+    os.environ.setdefault("HF_HOME", hf_home)
+    os.environ.setdefault("HUGGINGFACE_HUB_CACHE", os.path.join(hf_home, "hub"))
+    os.environ.setdefault("TORCH_HOME", os.path.join(VOLUME_ROOT, "torch-cache"))
+    os.environ.setdefault("XDG_CACHE_HOME", os.path.join(VOLUME_ROOT, "cache"))
+
+
+# Les bibliothèques lisent ces variables pendant leur import : configurer les
+# caches avant le premier ``import whisperx``.
+_configure_model_cache_environment()
 
 # Sous-bibliothèques de cuDNN 9, dans l'ordre de leurs dépendances (graph ←
 # ops ← cnn/adv ; les moteurs et l'heuristique s'appuient sur les trois
@@ -145,6 +165,7 @@ def _transcribe_with_whisperx(
     initial_prompt: str | None, diarize: bool,
 ) -> dict:
     """WhisperX : transcription, alignement mot à mot et diarisation optionnelle."""
+    _configure_model_cache_environment()
     import whisperx
 
     # whisperx importe torch ; les sous-bibliothèques cuDNN doivent être
@@ -152,28 +173,62 @@ def _transcribe_with_whisperx(
     _preload_cudnn()
     if model_size not in VALID_MODELS:
         model_size = "large-v3"
-    if os.path.isdir(VOLUME_ROOT):
-        os.environ.setdefault("HF_HOME", os.path.join(VOLUME_ROOT, "huggingface-cache"))
     device = "cuda"
     language = None if language in (None, "", "auto") else language
-    model = whisperx.load_model(
-        model_size, device, compute_type="float16", language=language,
-        download_root=_model_cache_dir(),
-        # FasterWhisperPipeline.transcribe() ne reçoit pas d'options ASR
-        # personnalisées. WhisperX les fixe lors du chargement du modèle.
-        asr_options={"initial_prompt": initial_prompt or None},
-    )
+    prompt = initial_prompt or None
+    model_key = (model_size, language, prompt)
+    with _model_cache_lock:
+        model = _whisperx_model_cache.get(model_key)
+        if model is None:
+            # Ne conserver qu'un pipeline ASR pour éviter d'accumuler plusieurs
+            # modèles large-v3 en VRAM quand la langue ou le lexique change.
+            _whisperx_model_cache.clear()
+            print(f"[pod_server] Chargement WhisperX '{model_size}' sur GPU…")
+            started = time.monotonic()
+            model = whisperx.load_model(
+                model_size, device, compute_type="float16", language=language,
+                download_root=_model_cache_dir(),
+                # FasterWhisperPipeline.transcribe() ne reçoit pas d'options
+                # ASR personnalisées. WhisperX les fixe au chargement.
+                asr_options={"initial_prompt": prompt},
+            )
+            _whisperx_model_cache[model_key] = model
+            print(f"[pod_server] WhisperX prêt en {time.monotonic() - started:.1f}s.")
     result = model.transcribe(audio_path, batch_size=16, language=language)
     detected_language = result.get("language") or language or ""
-    align_model, metadata = whisperx.load_align_model(
-        language_code=detected_language, device=device,
-    )
+    with _model_cache_lock:
+        cached_alignment = _align_model_cache.get(detected_language)
+        if cached_alignment is None:
+            print(f"[pod_server] Chargement du modèle d'alignement '{detected_language}'…")
+            started = time.monotonic()
+            cached_alignment = whisperx.load_align_model(
+                language_code=detected_language, device=device,
+            )
+            _align_model_cache[detected_language] = cached_alignment
+            print(
+                f"[pod_server] Alignement '{detected_language}' prêt en "
+                f"{time.monotonic() - started:.1f}s."
+            )
+    align_model, metadata = cached_alignment
     result = whisperx.align(result["segments"], align_model, metadata, audio_path, device)
-
     token = os.environ.get("HF_TOKEN")
     speakers: list[str] = []
     if diarize and token:
-        diarizer = whisperx.DiarizationPipeline(use_auth_token=token, device=device)
+        diarizer_key = (device, token)
+        with _model_cache_lock:
+            diarizer = _diarizer_cache.get(diarizer_key)
+            if diarizer is None:
+                print("[pod_server] Chargement du modèle de diarisation…")
+                started = time.monotonic()
+                diarizer = whisperx.DiarizationPipeline(
+                    use_auth_token=token, device=device
+                )
+                _diarizer_cache.clear()
+                _diarizer_cache[diarizer_key] = diarizer
+                print(
+                    f"[pod_server] Diarisation prête en "
+                    f"{time.monotonic() - started:.1f}s."
+                )
         diarized = diarizer(audio_path)
         result = whisperx.assign_word_speakers(diarized, result)
         speakers = sorted({str(segment["speaker"]) for segment in result["segments"] if segment.get("speaker")})

@@ -233,6 +233,25 @@ def test_le_modele_utilise_le_cache_du_volume_reseau_quand_il_est_monte(
     assert charge["download_root"] == str(volume / "huggingface-cache" / "hub")
 
 
+def test_tous_les_caches_de_modeles_utilisent_le_volume_reseau(
+    worker, monkeypatch, tmp_path
+):
+    volume = tmp_path / "runpod-volume"
+    volume.mkdir()
+    monkeypatch.setattr(worker, "VOLUME_ROOT", str(volume))
+    for variable in ("HF_HOME", "HUGGINGFACE_HUB_CACHE", "TORCH_HOME", "XDG_CACHE_HOME"):
+        monkeypatch.delenv(variable, raising=False)
+
+    worker._configure_model_cache_environment()
+
+    assert worker.os.environ["HF_HOME"] == str(volume / "huggingface-cache")
+    assert worker.os.environ["HUGGINGFACE_HUB_CACHE"] == str(
+        volume / "huggingface-cache" / "hub"
+    )
+    assert worker.os.environ["TORCH_HOME"] == str(volume / "torch-cache")
+    assert worker.os.environ["XDG_CACHE_HOME"] == str(volume / "cache")
+
+
 def test_le_modele_est_garde_en_cache_entre_deux_appels(worker):
     worker.transcribe(base64.b64encode(b"RIFF____WAVE").decode(), "small", "fr")
     worker.transcribe(base64.b64encode(b"RIFF____WAVE").decode(), "small", "fr")
@@ -295,6 +314,59 @@ def test_whisperx_recoit_le_prompt_dans_les_options_du_modele(monkeypatch):
     assert output["text"] == "Bonjour."
     assert appels["load_model"]["kwargs"]["asr_options"] == {"initial_prompt": "MJPM, APL"}
     assert appels["transcribe"] == {"audio": "cours.wav", "batch_size": 16, "language": "fr"}
+
+
+def test_whisperx_reutilise_les_modeles_entre_deux_transcriptions(monkeypatch):
+    appels = {"asr": 0, "alignement": 0, "diarisation": 0}
+
+    class PipelineWhisperX:
+        def transcribe(self, audio, *, batch_size, language):
+            return {
+                "language": "fr",
+                "segments": [{"start": 0.0, "end": 1.0, "text": "Bonjour."}],
+            }
+
+    faux_whisperx = types.ModuleType("whisperx")
+
+    def load_model(*args, **kwargs):
+        appels["asr"] += 1
+        return PipelineWhisperX()
+
+    def load_align_model(**kwargs):
+        appels["alignement"] += 1
+        return object(), {"language": "fr"}
+
+    class DiarizationPipeline:
+        def __init__(self, **kwargs):
+            appels["diarisation"] += 1
+
+        def __call__(self, audio):
+            return object()
+
+    faux_whisperx.load_model = load_model
+    faux_whisperx.load_align_model = load_align_model
+    faux_whisperx.align = lambda segments, *args, **kwargs: {"segments": segments}
+    faux_whisperx.DiarizationPipeline = DiarizationPipeline
+    faux_whisperx.assign_word_speakers = lambda diarized, result: result
+    monkeypatch.setitem(sys.modules, "whisperx", faux_whisperx)
+    monkeypatch.setenv("HF_TOKEN", "<REDACTED>")
+
+    spec = importlib.util.spec_from_file_location("pod_server_cache", POD_SERVER)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    for _ in range(2):
+        output = module._transcribe_with_whisperx(
+            "cours.wav", "large-v3", "fr", "MJPM, APL", True
+        )
+        assert output["text"] == "Bonjour."
+
+    assert appels == {"asr": 1, "alignement": 1, "diarisation": 1}
+
+    module._transcribe_with_whisperx(
+        "cours.wav", "large-v3", "fr", "nouveau lexique", True
+    )
+    assert appels == {"asr": 2, "alignement": 1, "diarisation": 1}
 
 
 # ------------------------------------------------------------- routes HTTP
