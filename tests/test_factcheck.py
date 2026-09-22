@@ -8,11 +8,21 @@ mais faussement définitive.
 """
 import pytest
 
+from app import config, db
 from app.config import Settings
 from app.proofread.backends.base import BackendResult
 from app.proofread.base import ProofreadError
 from app.proofread.backends.cli import QuotaExhausted
 from app.proofread import factcheck as fc
+
+
+@pytest.fixture(autouse=True)
+def _isolated_db(tmp_path, monkeypatch):
+    # verify_claim() consulte désormais le cache de verdicts à chaque appel :
+    # une base isolée par test évite toute contamination entre eux (voir la
+    # note sur les tests de cache en tête de fichier).
+    monkeypatch.setattr(config, "DB_PATH", tmp_path / "jobs.sqlite3")
+    db.init_db()
 
 
 def claim(citation, type="nom_propre", question="", start=0.0):
@@ -321,3 +331,263 @@ def test_texte_sans_affirmation_est_inchange(monkeypatch):
     assert new_text == text
     assert report.claims_checked == 0
     assert entities == []
+
+
+# --------------------------------------------------------------- périmètre
+
+
+def test_is_in_scope_type_hors_categories_prioritaires():
+    settings = Settings(factcheck_priority_types="reference_juridique,date,organisme")
+    assert not fc.is_in_scope(claim("Jean Dupont", type="nom_propre"), settings)
+
+
+def test_is_in_scope_reference_juridique_toujours_dans_le_perimetre():
+    settings = Settings(factcheck_priority_types="reference_juridique,date,organisme")
+    assert fc.is_in_scope(claim("article 440 du code civil", type="reference_juridique"), settings)
+
+
+def test_is_in_scope_organisme_reconnu_par_le_lexique(monkeypatch):
+    term = type("T", (), {"categorie": "acteur"})()
+    monkeypatch.setattr(fc, "lexicon_lookup", lambda citation, verified_only=True: term if not verified_only else None)
+    settings = Settings(factcheck_priority_types="reference_juridique,date,organisme", lexicon_enabled=True)
+    assert fc.is_in_scope(claim("MDPH", type="organisme"), settings)
+
+
+def test_is_in_scope_organisme_quelconque_hors_lexique_et_hors_legalref(monkeypatch):
+    monkeypatch.setattr(fc, "lexicon_lookup", lambda citation, verified_only=True: None)
+    settings = Settings(factcheck_priority_types="reference_juridique,date,organisme", lexicon_enabled=True)
+    assert not fc.is_in_scope(claim("Société Dupont SARL", type="organisme"), settings)
+
+
+class _Backend:
+    """Faux back-end distinguant l'appel d'extraction (schéma CLAIMS_SCHEMA)
+    de l'appel de verdict (VERDICT_SCHEMA), pour les tests bout en bout de
+    ``factcheck()``."""
+
+    def __init__(self, claims_parsed, verdict_parsed=None, web_searches=1):
+        self.claims_parsed = claims_parsed
+        self.verdict_parsed = verdict_parsed or {
+            "verdict": "confirme",
+            "confiance": "haute",
+            "sources": [{"titre": "Source", "url": "https://example.org/ref"}],
+        }
+        self.web_searches = web_searches
+        self.calls: list[dict] = []
+
+    def is_available(self):
+        return True, "ok"
+
+    def complete(self, **kwargs):
+        self.calls.append(kwargs)
+        if kwargs.get("schema") is fc.CLAIMS_SCHEMA:
+            return BackendResult(text="", web_searches=0, sources=[], parsed=self.claims_parsed)
+        return BackendResult(text="", web_searches=self.web_searches, sources=[], parsed=self.verdict_parsed)
+
+    def verdict_calls(self):
+        return [c for c in self.calls if c.get("schema") is fc.VERDICT_SCHEMA]
+
+
+def test_nom_propre_ne_declenche_aucun_appel_et_va_dans_skipped(monkeypatch):
+    backend = _Backend(claims_parsed=[{"citation": "Jean Dupont", "type": "nom_propre"}])
+    monkeypatch.setattr(fc, "get_backend", lambda settings=None: backend)
+
+    text = "Jean Dupont est intervenu."
+    new_text, report, entities = fc.factcheck(text, settings=Settings(lexicon_enabled=False))
+    assert backend.verdict_calls() == []
+    assert report.skipped == [{"type": "nom_propre", "citation": "Jean Dupont"}]
+    assert new_text == text  # aucune note ajoutée
+    assert report.claims_checked == 0
+
+
+def test_organisme_reconnu_verifie_organisme_quelconque_non(monkeypatch):
+    def fake_lookup(citation, verified_only=True):
+        if verified_only:
+            return None
+        if "MDPH" in citation:
+            return type("T", (), {"categorie": "acteur"})()
+        return None
+
+    monkeypatch.setattr(fc, "lexicon_lookup", fake_lookup)
+    backend = _Backend(
+        claims_parsed=[
+            {"citation": "MDPH", "type": "organisme"},
+            {"citation": "Société Dupont SARL", "type": "organisme"},
+        ],
+    )
+    monkeypatch.setattr(fc, "get_backend", lambda settings=None: backend)
+
+    text = "La MDPH et la Société Dupont SARL sont intervenues."
+    new_text, report, entities = fc.factcheck(text, settings=Settings(lexicon_enabled=True))
+    assert len(backend.verdict_calls()) == 1
+    assert {"type": "organisme", "citation": "Société Dupont SARL"} in report.skipped
+    assert report.claims_checked == 1
+
+
+def test_reference_juridique_est_toujours_verifiee(monkeypatch):
+    backend = _Backend(claims_parsed=[{"citation": "article 440 du code civil", "type": "reference_juridique"}])
+    monkeypatch.setattr(fc, "get_backend", lambda settings=None: backend)
+
+    text = "L'article 440 du code civil encadre la mesure."
+    new_text, report, entities = fc.factcheck(text, settings=Settings(lexicon_enabled=False))
+    assert len(backend.verdict_calls()) == 1
+    assert report.skipped == []
+    assert report.claims_checked == 1
+
+
+def test_deux_occurrences_meme_citation_un_seul_appel_deux_notes(monkeypatch):
+    backend = _Backend(
+        claims_parsed=[
+            {"citation": "juge des tutelles", "type": "organisme"},
+            {"citation": "juge des tutelles", "type": "organisme"},
+        ],
+        verdict_parsed={
+            "verdict": "infirme",
+            "confiance": "haute",
+            "sources": [{"titre": "Source", "url": "https://example.org/ref"}],
+        },
+    )
+    monkeypatch.setattr(fc, "get_backend", lambda settings=None: backend)
+
+    text = "Le juge des tutelles a validé la mesure. Le juge des tutelles a validé aussi."
+    new_text, report, entities = fc.factcheck(text, settings=Settings(lexicon_enabled=False))
+    assert len(backend.verdict_calls()) == 1  # une seule vérification pour les deux occurrences
+    assert new_text.count("[^v1]:") == 1
+    assert new_text.count("[^v2]:") == 1  # mais bien deux notes, une par occurrence
+
+
+# --------------------------------------------------------------- cache
+
+
+def test_cache_premier_appel_reel_second_appel_depuis_le_cache(monkeypatch):
+    calls = {"n": 0}
+
+    class _CountingBackend:
+        def is_available(self):
+            return True, "ok"
+
+        def complete(self, **kwargs):
+            calls["n"] += 1
+            return BackendResult(
+                text="",
+                web_searches=1,
+                sources=[],
+                parsed={
+                    "verdict": "confirme",
+                    "confiance": "haute",
+                    "sources": [{"titre": "Source", "url": "https://example.org/ref"}],
+                },
+            )
+
+    monkeypatch.setattr(fc, "get_backend", lambda settings=None: _CountingBackend())
+    settings = Settings(lexicon_enabled=False)
+    c = claim("Code civil, article 999", type="reference_juridique")
+
+    v1 = fc.verify_claim(c, settings=settings)
+    assert v1.origine == "web"
+    assert calls["n"] == 1
+
+    v2 = fc.verify_claim(c, settings=settings)
+    assert v2.origine == "cache"
+    assert calls["n"] == 1  # pas de second appel réseau
+    assert v2.sources and v2.sources[0].url == "https://example.org/ref"
+
+
+def test_quota_et_coerce_ne_sont_jamais_mis_en_cache(monkeypatch):
+    class _QuotaBackend:
+        def is_available(self):
+            return True, "ok"
+
+        def complete(self, **kwargs):
+            raise QuotaExhausted("limite atteinte")
+
+    monkeypatch.setattr(fc, "get_backend", lambda settings=None: _QuotaBackend())
+    settings = Settings(lexicon_enabled=False)
+    c_quota = claim("Une citation en quota", type="reference_juridique")
+    v_quota = fc.verify_claim(c_quota, settings=settings)
+    assert v_quota.origine == "quota"
+    assert db.factcheck_cache_get(fc.cache_key(c_quota.type, c_quota.citation), max_age_days=90) is None
+
+    coerce_backend = _FakeBackend(
+        parsed={"verdict": "confirme", "confiance": "haute", "sources": []}, web_searches=0
+    )
+    monkeypatch.setattr(fc, "get_backend", lambda settings=None: coerce_backend)
+    c_coerce = claim("Une autre citation sans recherche", type="reference_juridique")
+    v_coerce = fc.verify_claim(c_coerce, settings=settings)
+    assert v_coerce.origine == "coerce"
+    assert db.factcheck_cache_get(fc.cache_key(c_coerce.type, c_coerce.citation), max_age_days=90) is None
+
+
+# ------------------------------------------------ court-circuit lexique (référence)
+
+
+def test_lexique_reference_court_circuite_une_reference_juridique(monkeypatch):
+    term = type(
+        "T",
+        (),
+        {
+            "terme": "Article 440 du code civil",
+            "categorie": "texte",
+            "reference": "article 440",
+            "sources": [],
+            "verifie": True,
+        },
+    )()
+    monkeypatch.setattr(fc, "lexicon_lookup", lambda citation, verified_only=True: None)
+    monkeypatch.setattr(fc, "lexicon_load_all", lambda: [term])
+
+    def explose(**kwargs):
+        raise AssertionError("le back-end n'aurait pas dû être appelé")
+
+    monkeypatch.setattr(
+        fc, "get_backend", lambda settings=None: type("B", (), {"complete": staticmethod(explose)})()
+    )
+
+    c = claim("L'article 440 du Code civil", type="reference_juridique")
+    v = fc.verify_claim(c, settings=Settings(lexicon_enabled=True))
+    assert v.verdict == "confirme"
+    assert v.origine == "lexique"
+    assert v.confiance == "haute"
+
+
+# ------------------------------------------------------ parallélisme des verdicts
+
+
+def test_numerotation_des_notes_identique_a_1_ou_4_workers(monkeypatch):
+    citations = [{"citation": f"Référence numéro {i}", "type": "reference_juridique"} for i in range(5)]
+    text = " ".join(f"Référence numéro {i} est citée dans ce cours." for i in range(5))
+    verdict_parsed = {
+        "verdict": "infirme",
+        "confiance": "haute",
+        "sources": [{"titre": "Source", "url": "https://example.org/ref"}],
+    }
+
+    monkeypatch.setattr(
+        fc, "get_backend", lambda settings=None: _Backend(claims_parsed=citations, verdict_parsed=verdict_parsed)
+    )
+    text_1, report_1, _ = fc.factcheck(text, settings=Settings(lexicon_enabled=False, factcheck_workers=1))
+
+    monkeypatch.setattr(
+        fc, "get_backend", lambda settings=None: _Backend(claims_parsed=citations, verdict_parsed=verdict_parsed)
+    )
+    text_4, report_4, _ = fc.factcheck(text, settings=Settings(lexicon_enabled=False, factcheck_workers=4))
+
+    assert text_1 == text_4
+    assert report_1.claims_checked == report_4.claims_checked == 5
+
+
+def test_annulation_pendant_les_verdicts_leve_proofread_error(monkeypatch):
+    backend = _Backend(claims_parsed=[{"citation": "Un fait cité", "type": "reference_juridique"}])
+    monkeypatch.setattr(fc, "get_backend", lambda settings=None: backend)
+
+    calls = {"n": 0}
+
+    def should_cancel():
+        calls["n"] += 1
+        return calls["n"] > 1  # laisse passer le repérage, annule à la vérification
+
+    with pytest.raises(ProofreadError, match="annulé"):
+        fc.factcheck(
+            "Un fait cité est mentionné ici.",
+            settings=Settings(lexicon_enabled=False),
+            should_cancel=should_cancel,
+        )

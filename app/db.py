@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import difflib
+import logging
 import math
 import re
 import sqlite3
@@ -17,6 +18,8 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from . import config
+
+logger = logging.getLogger(__name__)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS jobs (
@@ -922,10 +925,17 @@ def factcheck_cache_get(key: str, *, max_age_days: int) -> dict | None:
     ce jugement appartient à l'appelant (``factcheck.py``) ; ce module
     n'obéit qu'à la règle de péremption ci-dessus.
     """
-    with connect() as conn:
-        row = conn.execute(
-            "SELECT * FROM factcheck_cache WHERE key = ?", (key,)
-        ).fetchone()
+    try:
+        with connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM factcheck_cache WHERE key = ?", (key,)
+            ).fetchone()
+    except sqlite3.OperationalError:
+        # Base non initialisée (commande de mainteneur lancée hors de
+        # l'application, par exemple). Le cache accélère la vérification, il
+        # n'en est jamais une condition : on se comporte comme un défaut de
+        # cache plutôt que de faire échouer ce qu'on devait accélérer.
+        return None
     if row is None:
         return None
     entry = dict(row)
@@ -950,6 +960,15 @@ def factcheck_cache_get(key: str, *, max_age_days: int) -> dict | None:
 
 def factcheck_cache_put(key: str, entry: dict) -> None:
     """Mémorise (ou remplace) le verdict de ``key``."""
+    try:
+        _factcheck_cache_write(key, entry)
+    except sqlite3.OperationalError:
+        # Même raison que dans factcheck_cache_get : ne rien mémoriser vaut
+        # mieux que faire échouer la vérification.
+        logger.debug("Cache de vérification indisponible, écriture ignorée.")
+
+
+def _factcheck_cache_write(key: str, entry: dict) -> None:
     with connect() as conn:
         conn.execute(
             """
