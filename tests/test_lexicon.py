@@ -3,6 +3,7 @@ import json
 
 import pytest
 
+from app import config, db
 from app.config import Settings
 from app.proofread.backends.base import BackendResult
 from app import lexicon as lex
@@ -16,6 +17,17 @@ def _reset_cache():
     lex._cache = None
     yield
     lex._cache = None
+
+
+@pytest.fixture(autouse=True)
+def _isolated_db(tmp_path, monkeypatch):
+    """Base isolée par test : ``verify_claim`` mémorise ses verdicts (voir
+    ``db.factcheck_cache_put``). Sans cette isolation, un test qui confirme
+    une entrée laisserait son verdict au suivant, qui vérifie justement
+    qu'on ne marque rien sans verdict positif — et le lirait depuis le
+    cache au lieu de la doublure."""
+    monkeypatch.setattr(config, "DB_PATH", tmp_path / "jobs.sqlite3")
+    db.init_db()
 
 
 def test_le_lexique_livre_est_charge():

@@ -8,6 +8,7 @@ from app.proofread.base import ProofreadError, TextPair
 from app.proofread.verify import (
     ClaudeVerifier,
     VerificationReport,
+    pairs_a_risque,
     rule_findings,
     verify,
 )
@@ -18,11 +19,13 @@ class _FakeBackend:
 
     def __init__(self, text: str = "[]"):
         self.text = text
+        self.calls = 0
 
     def is_available(self):
         return True, "simulé"
 
     def complete(self, **kwargs):
+        self.calls += 1
         return BackendResult(text=self.text)
 
 
@@ -233,7 +236,8 @@ def test_verify_combine_regles_et_claude(monkeypatch):
     rapport = verify([pair("il y a 42 cas précis", "il y a des cas")])
     sources = {f.source for f in rapport.findings}
     assert sources == {"regles", "claude"}
-    assert rapport.mode == "claude"
+    assert rapport.mode == "claude-cible"
+    assert rapport.claude_pairs == 1
 
 
 def test_verify_trie_par_gravite(monkeypatch):
@@ -283,3 +287,124 @@ def test_les_paires_vides_sont_comptees_comme_non_verifiees():
     )
     assert rapport.skipped_pairs == 2
     assert rapport.checked_pairs == 3
+
+
+# ------------------------------------------------------------- pairs_a_risque
+
+
+def test_aucune_paire_a_risque_sur_aucune_paire():
+    assert pairs_a_risque([], []) == []
+
+
+def test_une_paire_propre_n_est_pas_a_risque():
+    propre = pair("Donc on reprend le cours de thermodynamique ici.", "Donc on reprend le cours de thermodynamique ici.")
+    assert pairs_a_risque([propre], rule_findings([propre])) == []
+
+
+def test_une_paire_avec_finding_de_regle_est_a_risque():
+    p = pair("le seuil est à 42 degrés", "le seuil est à quelques degrés")
+    findings = rule_findings([p])
+    assert findings  # un finding « chiffre » est bien produit
+    assert pairs_a_risque([p], findings) == [p]
+
+
+def test_une_reference_juridique_est_a_risque_meme_sans_finding_de_regle():
+    p = pair(
+        "cette mesure relève de l'article L. 471-1 du code de l'action sociale et des familles",
+        "cette mesure relève de l'article L. 471-1 du code de l'action sociale et des familles",
+    )
+    findings = rule_findings([p])
+    assert findings == []  # aucune règle ne se déclenche
+    assert pairs_a_risque([p], findings) == [p]
+
+
+def test_pre_alerte_de_longueur_sous_le_seuil_de_la_regle():
+    # Ratio de 0,70 : sous PRE_ALERT_RATIO (0.75) mais au-dessus de
+    # LENGTH_ALERT_RATIO (0.62), donc pas de finding « coupure ».
+    brut = "mot " * 100
+    relu = "mot " * 70
+    p = pair(brut, relu)
+    findings = rule_findings([p])
+    assert not any(f.kind == "coupure" for f in findings)
+    assert pairs_a_risque([p], findings) == [p]
+
+
+def test_l_ordre_d_origine_est_preserve():
+    propre = pair("Donc on reprend le cours de thermodynamique ici.", "Donc on reprend le cours de thermodynamique ici.", start=0.0)
+    risquee = pair("le seuil est à 42 degrés", "le seuil est à quelques degrés", start=10.0)
+    autre_propre = pair("Encore une phrase tranquille et bien relue.", "Encore une phrase tranquille et bien relue.", start=20.0)
+    pairs = [propre, risquee, autre_propre]
+    assert pairs_a_risque(pairs, rule_findings(pairs)) == [risquee]
+
+
+# --------------------------------------------------- verify : tri ciblé
+
+
+def test_une_paire_propre_n_est_pas_envoyee_a_claude(monkeypatch):
+    fake = _FakeBackend("[]")
+    monkeypatch.setattr(verify_module, "get_backend", lambda settings=None: fake)
+
+    propre = pair("Donc on reprend le cours de thermodynamique ici.", "Donc on reprend le cours de thermodynamique ici.")
+    rapport = verify([propre])
+    assert fake.calls == 0
+    assert rapport.claude_pairs == 0
+    assert rapport.mode == "regles"
+
+
+def test_une_reference_juridique_est_envoyee_a_claude_sans_finding_de_regle(monkeypatch):
+    fake = _FakeBackend("[]")
+    monkeypatch.setattr(verify_module, "get_backend", lambda settings=None: fake)
+
+    texte = "cette mesure relève de l'article L. 471-1 du code de l'action sociale et des familles"
+    rapport = verify([pair(texte, texte)])
+    assert fake.calls == 1
+    assert rapport.claude_pairs == 1
+    assert rapport.mode == "claude-cible"
+
+
+def test_une_paire_a_pre_alerte_est_envoyee_meme_sans_regle_de_coupure(monkeypatch):
+    fake = _FakeBackend("[]")
+    monkeypatch.setattr(verify_module, "get_backend", lambda settings=None: fake)
+
+    brut = "mot " * 100
+    relu = "mot " * 70  # ratio 0,70 : sous PRE_ALERT_RATIO, mais pas la règle « coupure »
+    rapport = verify([pair(brut, relu)])
+    assert fake.calls == 1
+    assert rapport.claude_pairs == 1
+
+
+def test_claude_pairs_compte_seulement_les_blocs_lus(monkeypatch):
+    fake = _FakeBackend("[]")
+    monkeypatch.setattr(verify_module, "get_backend", lambda settings=None: fake)
+
+    propre = pair("Donc on reprend le cours de thermodynamique ici.", "Donc on reprend le cours de thermodynamique ici.", start=0.0)
+    risquee = pair("le seuil est à 42 degrés", "le seuil est à quelques degrés", start=10.0)
+    rapport = verify([propre, risquee])
+    assert rapport.claude_pairs == 1
+    assert fake.calls == 1
+
+
+def test_mode_regles_quand_aucune_paire_a_risque(monkeypatch):
+    fake = _FakeBackend("[]")
+    monkeypatch.setattr(verify_module, "get_backend", lambda settings=None: fake)
+
+    propre = pair("Donc on reprend le cours de thermodynamique ici.", "Donc on reprend le cours de thermodynamique ici.")
+    rapport = verify([propre])
+    assert rapport.mode == "regles"
+
+
+def test_les_regles_couvrent_tout_le_document_meme_les_blocs_non_lus_par_claude(monkeypatch):
+    fake = _FakeBackend("[]")
+    monkeypatch.setattr(verify_module, "get_backend", lambda settings=None: fake)
+
+    # Deux paires propres, dont une avec un chiffre perdu (à risque) : les
+    # deux doivent produire leurs findings de règle, même si une seule est
+    # envoyée à Claude.
+    perd_un_chiffre = pair("il y a 42 cas précis", "il y a des cas", start=0.0)
+    propre_ailleurs = pair("mot perdu ici", "mot perdu ici", start=10.0)
+    rapport = verify([perd_un_chiffre, propre_ailleurs])
+
+    chiffres = [f for f in rapport.findings if f.kind == "chiffre"]
+    assert len(chiffres) == 1
+    assert rapport.claude_pairs == 1
+    assert fake.calls == 1

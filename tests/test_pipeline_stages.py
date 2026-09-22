@@ -42,7 +42,7 @@ class _FakeFactcheckBackend:
     def is_available(self):
         return True, "ok"
 
-    def complete(self, *, system, user, max_tokens, schema=None, web_search=False):
+    def complete(self, *, system, user, max_tokens, schema=None, web_search=False, fast=False):
         if schema and schema.get("type") == "array":
             return BackendResult(text="[]", parsed=[])
         return BackendResult(text="{}", parsed={})

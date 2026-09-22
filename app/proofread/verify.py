@@ -23,6 +23,7 @@ from dataclasses import asdict, dataclass, field
 from .. import config as config_module
 from ..lexicon import lookup as lexicon_lookup
 from ..lexicon import near_misses as lexicon_near_misses
+from . import legalref
 from . import prompts
 from . import textloc
 from .backends import get_backend
@@ -36,7 +37,16 @@ logger = logging.getLogger(__name__)
 # répétitions, ce qui fait déjà fondre le texte de 10 à 20 %.
 LENGTH_ALERT_RATIO = 0.62
 
-MAX_TOKENS_VERIFICATION = 4_000
+# Seuil de pré-alerte utilisé par le tri des paires à envoyer à Claude (voir
+# ``pairs_a_risque``), volontairement plus large que LENGTH_ALERT_RATIO
+# ci-dessus. Les deux seuils ne jouent pas le même rôle : LENGTH_ALERT_RATIO
+# déclenche un finding de règle, avec le coût d'un faux positif affiché à
+# l'utilisateur ; PRE_ALERT_RATIO ne fait qu'ouvrir la porte à une relecture
+# par Claude, qui tranchera. On peut donc se permettre d'être plus large ici
+# et d'attraper une dérive de longueur que la règle, elle, laisse passer.
+PRE_ALERT_RATIO = 0.75
+
+MAX_TOKENS_VERIFICATION = 1_500
 EXCERPT_CHARS = 120
 # Nombre de mots voisins pris de part et d'autre d'un élément manquant pour
 # retrouver son contexte dans le texte relu (voir _missing_context_excerpt).
@@ -98,6 +108,12 @@ class VerificationReport:
     # rien en dire. Rendu visible plutôt que silencieusement ignoré.
     skipped_pairs: int = 0
     mode: str = "regles"
+    # Nombre de blocs réellement lus par Claude — par opposition à
+    # ``checked_pairs``, qui compte toutes les paires soumises aux règles.
+    # Rend visible le tri opéré par ``pairs_a_risque`` : sur un document
+    # propre, ce nombre peut être très inférieur à ``checked_pairs``, voire
+    # nul.
+    claude_pairs: int = 0
 
     def to_dict(self) -> dict:
         return {
@@ -105,6 +121,7 @@ class VerificationReport:
             "checked_pairs": self.checked_pairs,
             "skipped_pairs": self.skipped_pairs,
             "mode": self.mode,
+            "claude_pairs": self.claude_pairs,
             "counts": self.counts(),
         }
 
@@ -369,6 +386,10 @@ class ClaudeVerifier:
                     brut=pair.raw, relu=pair.clean
                 ),
                 max_tokens=MAX_TOKENS_VERIFICATION,
+                # Comparer deux textes proches est une tâche mécanique : le
+                # modèle/effort rapide suffit, et c'est nettement moins cher
+                # que le modèle par défaut appelé pour chaque bloc à risque.
+                fast=True,
             ).text
             findings.extend(self._parse(reponse, pair))
 
@@ -407,6 +428,51 @@ class ClaudeVerifier:
 _ORDER = {"haute": 0, "moyenne": 1, "basse": 2}
 
 
+def pairs_a_risque(pairs: list[TextPair], findings: list[Finding]) -> list[TextPair]:
+    """Sous-ensemble des paires qui méritent une relecture par Claude.
+
+    Les règles mécaniques couvrent déjà 100 % du document, gratuitement.
+    Payer un appel Claude pour un bloc qu'elles ont déclaré sain n'apporte
+    rien la plupart du temps ; ce tri concentre la dépense sur ce qui compte
+    vraiment. Une paire part chez Claude si l'une de ces conditions est
+    vraie :
+
+    1. elle a produit au moins un ``Finding`` de règle — la règle s'est déjà
+       inquiétée, Claude tranche ;
+    2. son brut ou son relu contient une référence juridique — une loi ou un
+       article mal relu est l'erreur la plus coûteuse, donc toujours relu,
+       même sans finding de règle ;
+    3. son ratio de longueur passe sous ``PRE_ALERT_RATIO``, plus souple que
+       ``LENGTH_ALERT_RATIO`` : une pré-alerte pour attraper la dérive que la
+       règle, plus stricte, laisse passer.
+
+    L'ordre d'origine des paires est préservé.
+    """
+    if not pairs:
+        return []
+
+    # Appariement des findings à leur paire : par block_id quand il est
+    # renseigné (identifiant stable), sinon par start (repli pour les paires
+    # sans identifiant de bloc — voir TextPair dans base.py).
+    ids_en_alerte = {f.block_id for f in findings if f.block_id is not None}
+    starts_en_alerte = {f.start for f in findings if f.block_id is None}
+
+    risque = []
+    for p in pairs:
+        a_un_finding = (
+            p.block_id in ids_en_alerte if p.block_id is not None else p.start in starts_en_alerte
+        )
+        a_une_reference_juridique = legalref.has_legal_reference(
+            p.raw
+        ) or legalref.has_legal_reference(p.clean)
+        a_derive_de_longueur = bool(p.raw) and len(p.clean) < len(p.raw) * PRE_ALERT_RATIO
+
+        if a_un_finding or a_une_reference_juridique or a_derive_de_longueur:
+            risque.append(p)
+
+    return risque
+
+
 def verify(
     pairs: list[TextPair],
     *,
@@ -417,18 +483,25 @@ def verify(
 ) -> VerificationReport:
     """Vérifie une relecture. Les règles tournent toujours ; Claude si possible.
 
+    Les règles couvrent 100 % du document, gratuitement. Claude ne relit que
+    les blocs à risque (voir ``pairs_a_risque``) : un document propre peut ne
+    déclencher aucun appel, ce qui n'est pas un échec mais le cas nominal.
+
     Un échec de la vérification par Claude ne fait pas échouer le travail :
     le rapport des règles est rendu tel quel, et l'utilisateur garde son
     texte. Vérifier est un service, pas une condition.
     """
     lexicon_enabled = (settings or config_module.load_settings()).lexicon_enabled
+    findings_regles = rule_findings(pairs, lexicon_enabled=lexicon_enabled)
     report = VerificationReport(
-        findings=rule_findings(pairs, lexicon_enabled=lexicon_enabled),
+        findings=findings_regles,
         checked_pairs=len(pairs),
         skipped_pairs=sum(1 for p in pairs if not p.raw.strip() or not p.clean.strip()),
     )
 
-    if use_claude and pairs:
+    a_relire = pairs_a_risque(pairs, findings_regles) if use_claude else []
+
+    if a_relire:
         verifier = ClaudeVerifier(settings)
         available, detail = verifier.is_available()
         if not available:
@@ -437,10 +510,11 @@ def verify(
             try:
                 report.findings.extend(
                     verifier.verify(
-                        pairs, on_progress=on_progress, should_cancel=should_cancel
+                        a_relire, on_progress=on_progress, should_cancel=should_cancel
                     )
                 )
-                report.mode = "claude"
+                report.mode = "claude-cible"
+                report.claude_pairs = len(a_relire)
             except ProofreadError as exc:
                 if should_cancel is not None and should_cancel():
                     raise
