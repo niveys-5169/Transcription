@@ -55,12 +55,14 @@ class ApiBackend:
         max_tokens: int,
         schema: dict | None = None,
         web_search: bool = False,
+        fast: bool = False,
     ) -> BackendResult:
         import anthropic
 
         client = self._client()
+        model = self.settings.proofread_model_fast if fast else self.settings.proofread_model
         request: dict = {
-            "model": self.settings.proofread_model,
+            "model": model,
             "max_tokens": max_tokens,
             # Le prompt système est identique d'un bloc à l'autre : le mettre
             # en cache évite de le repayer à chaque appel sur un long cours.
@@ -81,7 +83,8 @@ class ApiBackend:
                     "max_uses": self.settings.factcheck_max_searches,
                 }
             ]
-        effort = {"output_config": {"effort": self.settings.proofread_effort}}
+        effort_value = self.settings.proofread_effort_fast if fast else self.settings.proofread_effort
+        effort = {"output_config": {"effort": effort_value}}
 
         try:
             message = self._run(client, {**request, **effort})

@@ -47,7 +47,17 @@ from .base import BackendResult
 logger = logging.getLogger(__name__)
 
 # Généreux à dessein : effort élevé et recherche web font des tours longs.
+# Nom conservé pour compatibilité (tests, appelants existants) : c'est le
+# délai par défaut, utilisé quand ni ``web_search`` ni ``fast`` ne
+# s'appliquent (relecture : les blocs sont longs, sans recherche web).
 CALL_TIMEOUT_SECONDS = 900
+# Un verdict avec recherche web peut enchaîner plusieurs tours de
+# recherche : même délai généreux que le cas par défaut.
+WEB_CALL_TIMEOUT_SECONDS = 900
+# Une extraction mécanique (repérage des affirmations, comparaison
+# brut/relu) est un texte court, sans recherche web : pas besoin d'un
+# délai pensé pour un verdict juridique qui explore le web.
+FAST_CALL_TIMEOUT_SECONDS = 180
 
 _URL_RE = re.compile(r"https?://[^\s\)\]\"'>]+")
 
@@ -141,6 +151,7 @@ class CliBackend:
         max_tokens: int,
         schema: dict | None = None,
         web_search: bool = False,
+        fast: bool = False,
     ) -> BackendResult:
         available, detail = self.is_available()
         if not available:
@@ -148,10 +159,20 @@ class CliBackend:
         exe = self._executable()
         assert exe is not None  # garanti par is_available() ci-dessus
 
-        cmd = self._build_command(exe, system=system, schema=schema, web_search=web_search)
-        return self._run(cmd, user, schema)
+        cmd = self._build_command(exe, system=system, schema=schema, web_search=web_search, fast=fast)
+        if web_search:
+            timeout = WEB_CALL_TIMEOUT_SECONDS
+        elif fast:
+            timeout = FAST_CALL_TIMEOUT_SECONDS
+        else:
+            timeout = CALL_TIMEOUT_SECONDS
+        return self._run(cmd, user, schema, timeout=timeout, web_search=web_search)
 
-    def _build_command(self, exe: str, *, system: str, schema: dict | None, web_search: bool) -> list[str]:
+    def _build_command(
+        self, exe: str, *, system: str, schema: dict | None, web_search: bool, fast: bool = False
+    ) -> list[str]:
+        model = self.settings.proofread_model_fast if fast else self.settings.proofread_model
+        effort = self.settings.proofread_effort_fast if fast else self.settings.proofread_effort
         cmd = [
             exe,
             "--print",
@@ -159,9 +180,9 @@ class CliBackend:
             "stream-json",
             "--verbose",
             "--model",
-            self.settings.proofread_model,
+            model,
             "--effort",
-            self.settings.proofread_effort,
+            effort,
             "--system-prompt",
             system,
             # "" désactive tous les outils (documenté par --help) ; un seul
@@ -199,7 +220,15 @@ class CliBackend:
 
     # ------------------------------------------------------------- exécution
 
-    def _run(self, cmd: list[str], user_prompt: str, schema: dict | None) -> BackendResult:
+    def _run(
+        self,
+        cmd: list[str],
+        user_prompt: str,
+        schema: dict | None,
+        *,
+        timeout: int = CALL_TIMEOUT_SECONDS,
+        web_search: bool = False,
+    ) -> BackendResult:
         process = subprocess.Popen(
             cmd,
             stdin=subprocess.PIPE,
@@ -213,9 +242,20 @@ class CliBackend:
         assert process.stdin is not None and process.stdout is not None
 
         timed_out = threading.Event()
-        watchdog = threading.Timer(CALL_TIMEOUT_SECONDS, lambda: (timed_out.set(), process.kill()))
+        watchdog = threading.Timer(timeout, lambda: (timed_out.set(), process.kill()))
         watchdog.daemon = True
         watchdog.start()
+
+        # Plafond de recherches (chantier 7) : sur le CLI, rien d'autre ne
+        # borne le nombre de recherches web qu'une affirmation ambiguë peut
+        # déclencher — contrairement au back-end API, où
+        # ``factcheck_max_searches`` est un ``max_uses`` transmis au modèle
+        # (voir ``api.py``). Même mécanique que le chien de garde de délai
+        # ci-dessus (``threading.Event`` + ``process.kill()``) : chaque
+        # recherche web constatée dans le flux incrémente le compteur, et le
+        # dépassement du plafond tue le processus sur-le-champ.
+        search_cap = self.settings.factcheck_max_searches
+        capped = threading.Event()
 
         try:
             process.stdin.write(user_prompt)
@@ -247,6 +287,12 @@ class CliBackend:
                     for tool_id in ids:
                         websearch_tool_ids.add(tool_id)
                         web_searches += 1
+                    if web_search and search_cap and web_searches > search_cap:
+                        # Le plafond est franchi : tuer le processus tout de
+                        # suite plutôt que d'attendre une recherche de plus,
+                        # potentiellement longue.
+                        capped.set()
+                        process.kill()
                 elif event_type == "user":
                     sources.extend(_scan_tool_results(event, websearch_tool_ids))
                 elif event_type == "result":
@@ -259,7 +305,17 @@ class CliBackend:
                 process.stderr.close()
             process.wait()
 
-        if timed_out.is_set():
+        if capped.is_set():
+            # Un arrêt sur plafond n'est pas une erreur, c'est une borne :
+            # le texte déjà reçu est exploité normalement. S'il n'y a rien
+            # d'exploitable, le comportement d'erreur habituel s'applique
+            # plus bas (result_event est None et last_assistant_text vide).
+            logger.info(
+                "Plafond de recherches web atteint (%d), arrêt du CLI « claude ».",
+                search_cap,
+            )
+
+        if timed_out.is_set() and not capped.is_set():
             raise ProofreadError(
                 "Le CLI « claude » n'a pas répondu dans le délai imparti."
             )

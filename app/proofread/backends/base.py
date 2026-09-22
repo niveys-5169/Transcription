@@ -42,8 +42,15 @@ class ClaudeBackend(Protocol):
         max_tokens: int,
         schema: dict | None = None,
         web_search: bool = False,
+        fast: bool = False,
     ) -> BackendResult:
-        """Un appel, une réponse. Lève ``ProofreadError`` en cas d'échec."""
+        """Un appel, une réponse. Lève ``ProofreadError`` en cas d'échec.
+
+        ``fast=True`` demande le couple modèle/effort rapide des réglages
+        (``proofread_model_fast``/``proofread_effort_fast``), réservé aux
+        passes mécaniques (repérage des affirmations, comparaison
+        brut/relu) — jamais à la relecture ni aux verdicts de fact-check.
+        """
         ...
 
 
