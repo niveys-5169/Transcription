@@ -8,10 +8,10 @@ demande jamais à un LLM de « reconstruire » un passage suspect : un
 segment marqué ici a besoin d'une nouvelle transcription (moteur ou
 paramètres différents), pas d'une invention.
 
-La retranscription automatique d'un segment flagué n'est pas implémentée
-ici (limitation connue, documentée dans le README) : elle suppose une API
-de re-transcription ciblée par segment que les moteurs actuels n'exposent
-pas encore.
+Seuls certains signaux textuels déclenchent une seconde passe ASR ciblée.
+Un segment seulement long reste un problème de découpage : sans autre
+indice textuel, le réécouter avec le même moteur n'apporte pas de signal
+exploitable et ne doit donc pas consommer un appel GPU.
 """
 from __future__ import annotations
 
@@ -41,6 +41,31 @@ def _unk_ratio(text: str) -> float:
         return 0.0
     unk_count = len(_UNK_RE.findall(text))
     return unk_count / len(words)
+
+
+def unk_ratio(text: str) -> float:
+    """Part de tokens inconnus, exposée pour comparer un retry à l'original."""
+    return _unk_ratio(text)
+
+
+def has_repeated_tokens(text: str) -> bool:
+    """Vrai pour la même boucle massive que celle signalée par le contrôle."""
+    return bool(_REPEAT_RE.search(text.strip()))
+
+
+def repeat_score(text: str) -> float:
+    """Score mécanique minimal : 1 pour une boucle manifeste, 0 sinon."""
+    return 1.0 if has_repeated_tokens(text) else 0.0
+
+
+def should_retry_asr(issue: str | dict) -> bool:
+    """Indique si un finding justifie une seconde passe du même moteur ASR."""
+    code = str(issue.get("issue") if isinstance(issue, dict) else issue)
+    return code in {
+        "boucle_de_tokens",
+        "unk_ratio_eleve",
+        "texte_vide_plage_longue",
+    }
 
 
 def check_segments(segments: list[dict]) -> list[dict]:

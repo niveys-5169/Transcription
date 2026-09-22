@@ -36,6 +36,7 @@ from .engines import get_engine
 from .engines.base import TranscriptionError
 from .proofread import ProofreadError, ProofreadResult, basic_proofread
 from .proofread import asr_quality
+from .proofread import asr_retry
 from .proofread import factcheck as factcheck_module
 from .proofread.base import TextPair
 from .proofread.basic import split_paragraph_spans
@@ -421,14 +422,36 @@ def run_transcription(job_id: str) -> None:
                 "Aucune parole n'a été détectée dans ce fichier. Vérifiez que "
                 "la piste audio n'est pas muette (le WAV extrait est téléchargeable pour contrôle)."
             )
-        # Contrôle qualité ASR : un rapport, jamais une réécriture des
-        # segments. Un segment suspect reste tel quel ; il n'est jamais
-        # « reconstruit » par un LLM.
+        # Le contrôle garde la première passe immuable. Une seconde passe du
+        # même moteur/configuration ne vise que les signaux ASR retryables.
         quality_issues = asr_quality.check_segments(segments)
+        asr_retry.apply_asr_retries(
+            segments, quality_issues, audio_path=wav_path,
+            media_duration=duration, engine=engine, model=job["model"],
+            language=job["language"], initial_prompt=initial_prompt,
+            workdir=config.MEDIA_DIR / job_id,
+            on_progress=lambda _fraction, _stage: progress(
+                0.99, "Retranscription ASR ciblée…"
+            ),
+            should_cancel=lambda: is_cancelled(job_id),
+        )
+        effective_segments = asr_retry.effective_asr_segments(segments)
+        review_blocks = db.review_blocks_from_segments(effective_segments)
+        # La vue courante utilise l'ASR effectif, mais « Brut » conserve la
+        # première passe, y compris quand plusieurs segments sont regroupés.
+        for block in review_blocks:
+            source_indexes = [
+                int(source_id.removeprefix("segment-")) - 1
+                for source_id in block.get("source_segment_ids") or []
+            ]
+            block["raw_text"] = " ".join(
+                str(segments[index].get("text") or "").strip()
+                for index in source_indexes if 0 <= index < len(segments)
+            ).strip()
 
         db.mark_finished(
             job_id, status="transcribed", stage="Transcrit", progress=1.0, task=None,
-            segments=segments, review_blocks=db.review_blocks_from_segments(segments),
+            segments=segments, review_blocks=review_blocks,
             raw_text=segments_to_text(segments),
             asr_quality=json.dumps(quality_issues, ensure_ascii=False) if quality_issues else None,
         )
@@ -491,7 +514,7 @@ def run_proofread(job_id: str) -> None:
 
         result = _proofread(
             job,
-            segments,
+            asr_retry.effective_asr_segments(segments),
             on_progress=progress.scaled(0.0, PROOFREAD_SHARE, "Relecture…"),
             should_cancel=lambda: is_cancelled(job_id),
         )

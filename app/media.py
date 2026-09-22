@@ -207,6 +207,47 @@ def extract_wav(
     return dst
 
 
+def extract_wav_clip(
+    src: Path,
+    dst: Path,
+    *,
+    start: float,
+    end: float,
+    should_cancel: Callable[[], bool] | None = None,
+) -> Path:
+    """Extrait une plage avec le format Whisper existant : mono, 16 kHz PCM."""
+    if end <= start:
+        raise MediaError("La plage audio à extraire est vide.")
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        ffmpeg_exe(), "-hide_banner", "-nostdin", "-loglevel", "error", "-y",
+        "-ss", f"{start:.3f}", "-i", str(src), "-t", f"{end - start:.3f}",
+        "-vn", "-ac", str(CHANNELS), "-ar", str(SAMPLE_RATE),
+        "-c:a", "pcm_s16le", "-progress", "pipe:1", str(dst),
+    ]
+    process = subprocess.Popen(
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        errors="replace", **_ffmpeg_process_options(),
+    )
+    assert process.stdout is not None
+    try:
+        for _line in process.stdout:
+            if should_cancel is not None and should_cancel():
+                process.kill()
+                raise MediaError("Extraction annulée.")
+    finally:
+        process.stdout.close()
+        stderr = process.stderr.read() if process.stderr else ""
+        if process.stderr:
+            process.stderr.close()
+        returncode = process.wait()
+    if returncode != 0:
+        raise MediaError(f"ffmpeg n'a pas pu extraire le clip audio.\n{stderr.strip()[:800]}")
+    if not dst.exists() or dst.stat().st_size <= 44:
+        raise MediaError("Le clip audio extrait est vide.")
+    return dst
+
+
 def open_wav(path: Path) -> wave.Wave_read:
     """Ouvre un WAV en vérifiant qu'il est au format attendu."""
     handle = wave.open(str(path), "rb")
