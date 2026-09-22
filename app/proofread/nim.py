@@ -29,6 +29,7 @@ from .base import ProofreadError, ProofreadResult, TextPair
 from .basic import clean_line, split_paragraph_spans
 from .chunking import TextChunk, tail
 from .claude import CONTEXT_CHARS, MAX_TOKENS_RELECTURE, MAX_TOKENS_STRUCTURE, STRUCTURE_INPUT_LIMIT
+from .contracts import FAITHFUL_PROOFREAD_CONTRACT
 from .envelope import extract_candidate
 from .grounding import grounding_hints
 from .nim_profiles import NimModelProfile, build_messages, profile_for
@@ -244,7 +245,12 @@ class NimProofreader:
             outcome["candidate_word_count"] = len(text.split())
             return text, outcome
 
-        validation = validate_proofread_candidate(chunk_text, candidate, model=completion.model)
+        validation = validate_proofread_candidate(
+            chunk_text,
+            candidate,
+            contract=FAITHFUL_PROOFREAD_CONTRACT,
+            model=completion.model,
+        )
         outcome["candidate_word_count"] = validation.metrics.get("words_candidate", len(candidate.split()))
         outcome["added_word_ratio"] = validation.metrics.get("added_word_ratio")
 

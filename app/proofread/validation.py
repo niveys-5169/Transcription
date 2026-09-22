@@ -19,6 +19,10 @@ import re
 from dataclasses import dataclass, field
 
 from . import textloc
+from .contracts import FAITHFUL_PROOFREAD_CONTRACT, ProofreadAcceptanceContract
+from .entity_grounding import check_grounded_lexicon_entities
+from .language_guardrail import check_language_consistency
+from .prefix_alignment import check_prefix_alignment
 
 # ----------------------------------------------------------------- seuils
 #
@@ -26,31 +30,6 @@ from . import textloc
 # passer (une relecture légitime) et ce qu'il doit bloquer (l'incident
 # constaté). Ce sont des points de départ raisonnables, pas des constantes
 # gravées dans le marbre — à ajuster si l'expérience montre un biais.
-
-# En dessous de ce ratio de longueur, le modèle a résumé au lieu de relire.
-# Même seuil que ``claude.MIN_LENGTH_RATIO`` : une relecture légitime retire
-# hésitations et répétitions, ce qui fait déjà fondre le texte de 10-20 %,
-# mais pas plus de 45 %.
-MIN_LENGTH_RATIO = 0.55
-
-# Une relecture ne fait que ponctuer, corriger l'orthographe et retirer le
-# bruit de l'oral : le nombre de mots ne devrait pas grossir de plus de 60 %.
-# La marge absolue protège les blocs courts, où un ratio seul serait trop
-# sévère (un brut de 8 mots devenant 14 mots reste une relecture plausible).
-MAX_EXPANSION_RATIO = 1.6
-MAX_EXPANSION_ABSOLUTE_MARGIN = 40
-
-# Proportion de mots du candidat qui n'existent pas (au sens de l'alignement
-# mot à mot) dans le brut. Une relecture corrige, elle n'ajoute pas près de
-# la moitié du texte.
-MAX_ADDED_WORD_RATIO = 0.40
-
-# Longueur, en mots, du plus grand passage continu ajouté/remplacé. C'est le
-# contrôle qui détecte un bloc de raisonnement inséré d'un bloc, quelle que
-# soit la langue : « 150 mots ajoutés dont une séquence continue de 80 mots
-# absente du brut » est rejeté par CE seuil, indépendamment des marqueurs de
-# méta-discours.
-MAX_ADDED_SPAN_WORDS = 25
 
 # Marqueurs de méta-discours caractéristiques d'un raisonnement de modèle,
 # français et anglais. Signal complémentaire seulement — voir plus bas les
@@ -152,6 +131,7 @@ def validate_proofread_candidate(
     raw: str,
     candidate: str,
     *,
+    contract: ProofreadAcceptanceContract = FAITHFUL_PROOFREAD_CONTRACT,
     model: str = "",
 ) -> ValidationResult:
     """Verdict mécanique, reproductible, sans appel réseau ni LLM.
@@ -189,33 +169,44 @@ def validate_proofread_candidate(
     # A. Réponse vide ou trop courte.
     if not candidate.strip():
         reasons.append("empty")
-    elif raw.strip() and len(candidate) < len(raw) * MIN_LENGTH_RATIO:
+    elif raw.strip() and len(candidate) < len(raw) * contract.min_length_ratio:
         reasons.append("too_short")
 
     # B. Réponse anormalement longue (le cœur du bug observé : le
     # raisonnement du modèle est généralement bien plus long que le passage
     # source, jamais plus court).
-    expansion_ceiling = max(words_raw * MAX_EXPANSION_RATIO, words_raw + MAX_EXPANSION_ABSOLUTE_MARGIN)
+    expansion_ceiling = max(
+        words_raw * contract.max_expansion_ratio,
+        words_raw + contract.max_expansion_absolute_margin,
+    )
     if words_raw and words_candidate > expansion_ceiling:
         reasons.append("too_long")
 
     # C. Ratio de mots ajoutés.
-    if words_raw and added_ratio > MAX_ADDED_WORD_RATIO:
+    if words_raw and added_ratio > contract.max_added_word_ratio:
         reasons.append("added_word_ratio")
 
     # D. Longue séquence continue de mots absents du brut.
-    if longest_added_span > MAX_ADDED_SPAN_WORDS:
+    if longest_added_span > contract.max_added_span_words:
         reasons.append("long_added_span")
 
     # E. Changement important des nombres prononcés.
     raw_numbers, candidate_numbers = _numbers(raw), _numbers(candidate)
     metrics["altered_number_ratio"] = round(_missing_ratio(raw_numbers, candidate_numbers), 4)
-    numbers_altered = bool(raw_numbers) and metrics["altered_number_ratio"] > MAX_ALTERED_NUMBER_RATIO
+    numbers_altered = (
+        contract.preserve_numbers
+        and bool(raw_numbers)
+        and metrics["altered_number_ratio"] > MAX_ALTERED_NUMBER_RATIO
+    )
 
     # F. Changement important des sigles.
     raw_acronyms, candidate_acronyms = _acronyms(raw), _acronyms(candidate)
     metrics["altered_acronym_ratio"] = round(_missing_ratio(raw_acronyms, candidate_acronyms), 4)
-    acronyms_altered = bool(raw_acronyms) and metrics["altered_acronym_ratio"] > MAX_ALTERED_ACRONYM_RATIO
+    acronyms_altered = (
+        contract.preserve_acronyms
+        and bool(raw_acronyms)
+        and metrics["altered_acronym_ratio"] > MAX_ALTERED_ACRONYM_RATIO
+    )
 
     # G. Artefacts de modèle : signal fort, jamais besoin de corroboration.
     artifacts = detect_model_artifacts(candidate)
@@ -248,6 +239,24 @@ def validate_proofread_candidate(
         reasons.append("numbers_altered")
     if acronyms_altered and (reasoning_leak or "too_long" in reasons or "long_added_span" in reasons):
         reasons.append("acronyms_altered")
+
+    if contract.check_prefix_alignment:
+        prefix = check_prefix_alignment(raw, candidate)
+        metrics["prefix_alignment"] = prefix
+        if prefix["applicable"] and not prefix["accepted"] and "prefix_misaligned" not in reasons:
+            reasons.append("prefix_misaligned")
+
+    if contract.check_language:
+        language = check_language_consistency(raw, candidate)
+        metrics["language"] = language
+        if language["applicable"] and not language["accepted"] and "language_mismatch" not in reasons:
+            reasons.append("language_mismatch")
+
+    if contract.check_entity_grounding:
+        entity_grounding = check_grounded_lexicon_entities(raw, candidate)
+        metrics["entity_grounding"] = entity_grounding
+        if not entity_grounding["accepted"] and "ungrounded_entity" not in reasons:
+            reasons.append("ungrounded_entity")
 
     if model:
         metrics["model"] = model

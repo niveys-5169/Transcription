@@ -106,3 +106,69 @@ def test_metrics_toujours_peuples():
     result = validate_proofread_candidate(RAW, "La mesure de protection concerne une requête.")
     for key in ("words_raw", "words_candidate", "added_words", "longest_added_span", "ratio"):
         assert key in result.metrics
+
+
+def test_accepte_relecture_normale_article_code_civil():
+    raw = "alors aujourd'hui on va parler de l'article 440 du code civil"
+    candidate = "Aujourd'hui, on va parler de l'article 440 du Code civil."
+
+    assert validate_proofread_candidate(raw, candidate).valid is True
+
+
+def test_rejette_preambule_chatbot_sur_premiere_ligne():
+    raw = "alors aujourd'hui on va parler de l'article 440 du code civil"
+    candidate = (
+        "Bien sûr, voici le texte corrigé :\n\n"
+        "Aujourd'hui, on va parler de l'article 440 du Code civil."
+    )
+
+    result = validate_proofread_candidate(raw, candidate)
+    assert result.valid is False
+    assert "prefix_misaligned" in result.reasons
+
+
+def test_rejette_reponse_anglaise_totalement_hors_sujet():
+    raw = "Aujourd'hui nous étudions la mesure de tutelle."
+    candidate = "I need to analyse the user's request and determine how best to rewrite the passage."
+
+    result = validate_proofread_candidate(raw, candidate)
+    assert result.valid is False
+    assert set(result.reasons) & {"prefix_misaligned", "language_mismatch", "reasoning_leak"}
+
+
+def test_accepte_anglicismes_techniques_isoles():
+    raw = "Nous utilisons GitHub Actions pour lancer le workflow, faire un commit et appeler une API."
+    candidate = "Nous utilisons GitHub Actions pour lancer le workflow, faire un commit et appeler une API."
+
+    assert validate_proofread_candidate(raw, candidate).valid is True
+
+
+def test_accepte_entite_du_lexique_normalisee_depuis_une_variante():
+    raw = "Le dossier est transmis à l'U.D.A.F. pour assurer le suivi de la mesure."
+    candidate = "Le dossier est transmis à l'UDAF pour assurer le suivi de la mesure."
+
+    assert validate_proofread_candidate(raw, candidate).valid is True
+
+
+def test_rejette_entite_metier_reellement_introduite():
+    raw = "Le dossier est transmis au service compétent pour assurer le suivi de la mesure."
+    candidate = "Le dossier est transmis à l'ARS compétente pour assurer le suivi de la mesure."
+
+    result = validate_proofread_candidate(raw, candidate)
+    assert result.valid is False
+    assert "ungrounded_entity" in result.reasons
+    assert "Agence régionale de santé" in result.metrics["entity_grounding"]["introduced_entities"]
+
+
+def test_non_regression_corrections_locales_acceptees():
+    cases = [
+        ("bonjour comment allez vous aujourd hui", "Bonjour, comment allez-vous aujourd'hui ?"),
+        ("euh nous allons euh commencer la mesure", "Nous allons commencer la mesure."),
+        ("je je dois transmettre le dossier demain", "Je dois transmettre le dossier demain."),
+        ("le délai est de 20 jours pour répondre", "Le délai est de vingt jours pour répondre."),
+        ("le document DIPEM est remis au majeur protégé", "Le document DIPM est remis au majeur protégé."),
+    ]
+
+    for raw, candidate in cases:
+        result = validate_proofread_candidate(raw, candidate)
+        assert result.valid is True, (raw, candidate, result.reasons)
