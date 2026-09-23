@@ -142,3 +142,76 @@ def test_complete_applique_le_profil_propre_a_chaque_modele_de_secours(monkeypat
         {"role": "system", "content": "RELECTURE"},
         {"role": "user", "content": "Bloc"},
     ]
+
+
+def _http_error(code, retry_after=None):
+    from email.message import Message
+    from urllib.error import HTTPError
+
+    headers = Message()
+    if retry_after is not None:
+        headers["Retry-After"] = str(retry_after)
+    return HTTPError("https://nim.test", code, "saturé", headers, None)
+
+
+def _ok(content):
+    return _Response({"choices": [{"message": {"content": content}}]})
+
+
+def test_complete_patiente_sur_le_meme_modele_apres_un_429(monkeypatch):
+    essais = []
+    attentes = []
+
+    def fake_urlopen(request, timeout):
+        essais.append(json.loads(request.data.decode("utf-8"))["model"])
+        if len(essais) == 1:
+            raise _http_error(429, retry_after=1)
+        return _ok("réponse complète")
+
+    monkeypatch.setattr("app.proofread.nim.urlopen", fake_urlopen)
+    monkeypatch.setattr(nim_module, "_sleep", attentes.append)
+    proofreader = NimProofreader(Settings(nim_api_key="k", nim_model="nvidia/principal", nim_fallback_model_1="nvidia/secours"))
+
+    completion = proofreader.complete(system="s", user="u", max_tokens=10)
+
+    assert completion.model == "nvidia/principal"
+    assert essais == ["nvidia/principal", "nvidia/principal"]
+    assert attentes == [1.0]
+
+
+def test_complete_passe_au_secours_apres_saturation_persistante(monkeypatch):
+    essais = []
+
+    def fake_urlopen(request, timeout):
+        model = json.loads(request.data.decode("utf-8"))["model"]
+        essais.append(model)
+        if model == "nvidia/principal":
+            raise _http_error(503)
+        return _ok("réponse complète")
+
+    monkeypatch.setattr("app.proofread.nim.urlopen", fake_urlopen)
+    monkeypatch.setattr(nim_module, "_sleep", lambda _delay: None)
+    proofreader = NimProofreader(Settings(nim_api_key="k", nim_model="nvidia/principal", nim_fallback_model_1="nvidia/secours"))
+
+    assert proofreader.complete(system="s", user="u", max_tokens=10).model == "nvidia/secours"
+    assert essais == ["nvidia/principal"] * 3 + ["nvidia/secours"]
+
+
+def test_complete_rapide_essaie_le_modele_leger_puis_la_chaine_principale(monkeypatch):
+    essais = []
+
+    def fake_urlopen(request, timeout):
+        model = json.loads(request.data.decode("utf-8"))["model"]
+        essais.append(model)
+        if model == "meta/leger":
+            raise URLError("indisponible")
+        return _ok("réponse complète")
+
+    monkeypatch.setattr("app.proofread.nim.urlopen", fake_urlopen)
+    proofreader = NimProofreader(Settings(nim_api_key="k", nim_model="nvidia/principal", nim_model_fast="meta/leger"))
+
+    assert proofreader.complete(system="s", user="u", max_tokens=10, fast=True).model == "nvidia/principal"
+    assert essais == ["meta/leger", "nvidia/principal"]
+    essais.clear()
+    proofreader.complete(system="s", user="u", max_tokens=10)
+    assert essais == ["nvidia/principal"]

@@ -6,6 +6,8 @@ garde-fou anti-résumé, sommaire — pas le back-end lui-même (voir
 ``test_cli_backend.py`` et ``test_api_backend.py`` pour ça).
 """
 import json
+import re
+import threading
 
 import pytest
 
@@ -42,9 +44,12 @@ def test_relecture_assemble_les_blocs(relecteur, monkeypatch):
 
     def faux_complete(*, system, user, max_tokens, schema=None, web_search=False):
         appels.append(user)
+        # Les blocs partent de front : le numéro vient du prompt, pas de
+        # l'ordre d'arrivée des appels.
+        numero = re.search(r"partie (\d+) sur", user).group(1)
         # Réponse de longueur comparable à l'entrée, sinon le garde-fou
         # anti-résumé la remplace par le nettoyage mécanique.
-        text = f"BLOC{len(appels)}. " + "Une phrase relue de bonne longueur. " * 30
+        text = f"BLOC{numero}. " + "Une phrase relue de bonne longueur. " * 30
         return BackendResult(text=text)
 
     monkeypatch.setattr(relecteur.backend, "complete", faux_complete)
@@ -190,3 +195,67 @@ def test_reprend_les_blocs_checkpointes_sans_rappeler_le_modele(relecteur, monke
     assert result.pairs[0] == checkpoint
     assert result.text.startswith("Bloc déjà archivé.")
     assert len(calls) == 1
+
+
+def test_le_contexte_vient_du_brut_precedent_pas_du_relu(relecteur, monkeypatch):
+    recus = []
+
+    def faux_complete(*, system, user, max_tokens, schema=None, web_search=False, fast=False):
+        recus.append(user)
+        return BackendResult(text="HALLUCINATION du bloc relu, assez longue pour passer. " * 6)
+
+    monkeypatch.setattr(relecteur.backend, "complete", faux_complete)
+    relecteur.proofread(_segments(), structure=False)
+
+    avec_contexte = [u for u in recus if "[CONTEXTE" in u]
+    assert avec_contexte
+    for user in avec_contexte:
+        contexte = user.split("[FIN DU CONTEXTE]")[0]
+        assert "HALLUCINATION" not in contexte
+        assert "thermodynamique" in contexte
+
+
+def test_les_blocs_partent_de_front(relecteur, monkeypatch):
+    relecteur.settings.proofread_workers = 2
+    # Deux appels doivent être en vol en même temps pour franchir la barrière ;
+    # en séquentiel, le premier attendrait seul jusqu'au délai et échouerait.
+    barriere = threading.Barrier(2, timeout=5)
+
+    def faux_complete(*, system, user, max_tokens, schema=None, web_search=False, fast=False):
+        if "partie 1 sur" in user or "partie 2 sur" in user:
+            barriere.wait()
+        return BackendResult(text="Une phrase relue de bonne longueur. " * 30)
+
+    monkeypatch.setattr(relecteur.backend, "complete", faux_complete)
+    resultat = relecteur.proofread(_segments(), structure=False)
+    assert len(resultat.pairs) >= 2
+
+
+def test_un_echec_de_bloc_garde_les_blocs_finis_au_checkpoint(relecteur, monkeypatch):
+    relecteur.settings.proofread_workers = 1
+
+    def faux_complete(*, system, user, max_tokens, schema=None, web_search=False, fast=False):
+        if "partie 2 sur" in user:
+            raise ProofreadError("quota")
+        return BackendResult(text="Une phrase relue de bonne longueur. " * 30)
+
+    sauvegardes = []
+    monkeypatch.setattr(relecteur.backend, "complete", faux_complete)
+    with pytest.raises(ProofreadError):
+        relecteur.proofread(_segments(), structure=False, on_checkpoint=sauvegardes.append)
+    assert [len(pairs) for pairs in sauvegardes] == [1]
+
+
+def test_le_sommaire_utilise_le_couple_rapide(relecteur, monkeypatch):
+    rapides = []
+
+    def faux_complete(*, system, user, max_tokens, schema=None, web_search=False, fast=False):
+        if "partie" in user:
+            return BackendResult(text="Une phrase relue de bonne longueur. " * 30)
+        rapides.append(fast)
+        return BackendResult(text=json.dumps({"title": "Titre", "summary": ["Point"]}))
+
+    monkeypatch.setattr(relecteur.backend, "complete", faux_complete)
+    resultat = relecteur.proofread(_segments(), structure=True)
+    assert rapides == [True]
+    assert resultat.title == "Titre"

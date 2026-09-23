@@ -30,8 +30,8 @@ transcription) :
 {body}"""
 
 RELECTURE_CONTEXT = """\
-[CONTEXTE — fin du passage précédent, déjà relu. Il est là pour la continuité \
-des phrases : ne le reprends pas dans ta réponse.]
+[CONTEXTE — fin du passage précédent, tel que transcrit (non relu). Il est là \
+pour la continuité des phrases : ne le reprends pas dans ta réponse.]
 {context}
 [FIN DU CONTEXTE]
 
