@@ -247,6 +247,26 @@ def test_texte_final_vient_du_result(backend, monkeypatch):
     assert result.text == "texte final"
 
 
+def test_texte_utf8_francais_reste_intact(backend, monkeypatch):
+    _make_available(monkeypatch)
+    phrase = "Élève, très âgé, à côté du cœur."
+    monkeypatch.setattr(
+        "subprocess.Popen",
+        lambda cmd, **k: _FakeProcess(_stream(_result(phrase))),
+    )
+    assert backend.complete(system="s", user="u", max_tokens=100).text == phrase
+
+
+def test_caractere_de_remplacement_refuse(backend, monkeypatch):
+    _make_available(monkeypatch)
+    monkeypatch.setattr(
+        "subprocess.Popen",
+        lambda cmd, **k: _FakeProcess(_stream(_result("texte \ufffd corrompu"))),
+    )
+    with pytest.raises(ProofreadError, match="U\\+FFFD"):
+        backend.complete(system="s", user="u", max_tokens=100)
+
+
 def test_repli_sur_le_dernier_texte_assistant_si_pas_de_result(backend, monkeypatch):
     _make_available(monkeypatch)
     monkeypatch.setattr(

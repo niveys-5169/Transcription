@@ -236,7 +236,7 @@ class CliBackend:
             stderr=subprocess.PIPE,
             text=True,
             encoding="utf-8",
-            errors="replace",
+            errors="strict",
             creationflags=hidden_console_flags(),
         )
         assert process.stdin is not None and process.stdout is not None
@@ -297,6 +297,11 @@ class CliBackend:
                     sources.extend(_scan_tool_results(event, websearch_tool_ids))
                 elif event_type == "result":
                     result_event = event
+        except UnicodeDecodeError as exc:
+            raise ProofreadError(
+                "La sortie du CLI « claude » n'est pas un texte UTF-8 valide. "
+                "La relecture est interrompue pour préserver la transcription précédente."
+            ) from exc
         finally:
             watchdog.cancel()
             process.stdout.close()
@@ -344,6 +349,13 @@ class CliBackend:
                     f"Le CLI « claude » a échoué : {message.strip() or 'erreur inconnue'}"
                 )
             text = str(result_event.get("result") or "")
+
+        if "\ufffd" in text:
+            raise ProofreadError(
+                "Le CLI « claude » a produit un texte contenant le caractère "
+                "de remplacement Unicode (U+FFFD). La relecture est interrompue "
+                "pour préserver la transcription précédente."
+            )
 
         parsed = _parse_schema(text, schema) if schema is not None else None
 
