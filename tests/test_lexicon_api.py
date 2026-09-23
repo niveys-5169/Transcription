@@ -104,6 +104,19 @@ def test_validation_marque_verifie_et_preserve_les_champs_livres(client):
     assert verification.find_proposal(original.terme)["status"] == "validee"
 
 
+def test_ajout_confirme_conserve_source_et_date(client):
+    response = client.post("/api/lexicon", json={
+        "terme": "Institution vérifiée",
+        "verifie": True,
+        "sources": [{"titre": "Source officielle", "url": "https://example.org/institution"}],
+    })
+    assert response.status_code == 200
+    term = next(item for item in response.json()["terms"] if item["terme"] == "Institution vérifiée")
+    assert term["verifie"] is True
+    assert term["sources"][0]["url"] == "https://example.org/institution"
+    assert term["verifie_le"]
+
+
 def test_proposition_deja_traitee_est_refusee(client):
     _proposal(status="rejetee")
     assert client.post(f"/api/lexicon/{_term().terme}/valider").status_code == 409

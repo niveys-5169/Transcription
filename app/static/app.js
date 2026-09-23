@@ -642,6 +642,8 @@ function renderLexicon() {
   const verification = state.lexiconVerification || {};
   const proposals = new Map((verification.propositions || []).map((item) => [item.terme, item]));
   const nonVerified = terms.filter((term) => !term.verifie).length;
+  const verifiedOpen = Boolean(panel.querySelector(".lexicon-verified[open]"))
+    || terms.some((term) => term.verifie && state.lexiconEditingTerm === term.terme);
   const progress = $("lexicon-verification-progress");
   const progressBar = $("lexicon-progress-bar");
   const progressLabel = $("lexicon-progress-label");
@@ -656,9 +658,10 @@ function renderLexicon() {
   progressLabel.textContent = verification.en_cours
     ? `${verification.faits || 0} / ${verification.total || 0}${verification.terme_courant ? ` — ${verification.terme_courant}` : ""}`
     : "";
-  panel.innerHTML = terms.length
-    ? `<div class="lexicon-list">${terms.map((term) => {
-        const proposal = proposals.get(term.terme);
+  const renderTerm = (term) => {
+        // Une entrée devenue fiable ne doit plus afficher une ancienne
+        // proposition issue de sa vérification initiale.
+        const proposal = term.verifie ? null : proposals.get(term.terme);
         const sources = (term.sources || []).filter((source) => /^https?:\/\//i.test(source.url || ""));
         const proposalSources = (proposal?.sources || []).filter((source) => /^https?:\/\//i.test(source.url || ""));
         const editing = state.lexiconEditingTerm === term.terme;
@@ -688,7 +691,13 @@ function renderLexicon() {
             ${proposal.status === "attente" ? `<div class="pending-actions"><button class="btn btn-primary btn-mini" type="button" data-lexicon-action="validate">Valider</button><button class="btn btn-ghost btn-mini" type="button" data-lexicon-action="reject">Rejeter</button></div>` : `<p class="meta">Proposition ${proposal.status === "validee" ? "validée" : "rejetée"}.</p>`}
           </div>` : ""}
         </article>`;
-      }).join("")}</div>`
+  };
+  const verified = terms.filter((term) => term.verifie);
+  panel.innerHTML = terms.length
+    ? `<div class="lexicon-list">
+        ${terms.filter((term) => !term.verifie).map(renderTerm).join("")}
+        ${verified.length ? `<details class="skipped-claims lexicon-verified"${verifiedOpen ? " open" : ""}><summary>✓ Vérifications automatiques (${verified.length})</summary>${verified.map(renderTerm).join("")}</details>` : ""}
+      </div>`
     : "<p class=\"meta\">Aucun terme dans le lexique.</p>";
 }
 
@@ -748,7 +757,7 @@ function renderPendingCard(item) {
       <div class="finding-head">
         <time>${clock(item.start)}</time>
         <span class="finding-kind">${escapeHtml(CLAIM_TYPE_LABELS[item.claim_type] || item.claim_type)}</span>
-        <span class="finding-kind">confiance ${escapeHtml(item.confiance)}</span>
+        <span class="finding-kind">Validation humaine</span>
       </div>
       <p class="finding-message">« ${escapeHtml(item.citation)} » → proposé : <b>${escapeHtml(item.proposition)}</b></p>
       ${item.explication ? `<p class="meta">${escapeHtml(item.explication)}</p>` : ""}
@@ -915,11 +924,16 @@ function renderVerification(job) {
 function renderSources(job) {
   const rapport = job.verification || {};
   const allPoints = Array.isArray(rapport.findings) ? rapport.findings : [];
-  const points = allPoints.filter((p) => SOURCE_KINDS.has(p.kind));
+  const sourcePoints = allPoints.filter((p) => SOURCE_KINDS.has(p.kind));
   const report = job.factcheck_report;
   const enAttente = (report && Array.isArray(report.pending) ? report.pending : [])
     .filter((p) => p.status === "attente");
+  // Une proposition en attente possède aussi un finding pour le surlignage.
+  // La carte de décision porte déjà cette information : ne pas la doubler.
+  const points = sourcePoints.filter((point) => !enAttente.some((item) =>
+    point.raw_excerpt === item.citation && point.message?.includes("en attente de validation")));
   const skipped = report && Array.isArray(report.skipped) ? report.skipped : [];
+  const recognized = report && Array.isArray(report.recognized) ? report.recognized : [];
 
   const badge = $("sources-count");
   const badgeCount = points.length + enAttente.length;
@@ -944,6 +958,7 @@ function renderSources(job) {
   const entete = `
     <div class="verify-summary">
       <span class="badge">${report.claims_checked || 0} affirmation${report.claims_checked > 1 ? "s" : ""} vérifiée${report.claims_checked > 1 ? "s" : ""}</span>
+      ${recognized.length ? `<span class="verify-ok">✓ ${recognized.length} terme${recognized.length > 1 ? "s" : ""} reconnu${recognized.length > 1 ? "s" : ""} par le lexique</span>` : ""}
       <span class="badge">${report.corrections || 0} correction${report.corrections > 1 ? "s" : ""} appliquée${report.corrections > 1 ? "s" : ""}</span>
       ${skipped.length ? `<span class="badge">${skipped.length} repérée${skipped.length > 1 ? "s" : ""} hors périmètre</span>` : ""}
       ${enAttente.length ? `<span class="badge warn">${enAttente.length} en attente de validation</span>` : ""}
@@ -972,13 +987,19 @@ function renderSources(job) {
       </ul>
     </details>` : "";
 
+  const recognizedSection = recognized.length ? `
+    <details class="skipped-claims">
+      <summary>Vérifications automatiques (${recognized.length})</summary>
+      <ul>${recognized.map((item) => `<li>✓ Lexique validé : ${escapeHtml(item.terme)}</li>`).join("")}</ul>
+    </details>` : "";
+
   if (!points.length && !enAttente.length) {
     panel.innerHTML = `${entete}
       <p class="meta">
         Les notes de bas de page du texte relu détaillent les sources. Une
         vérification automatique reste une aide, pas une garantie.
       </p>
-      ${skippedSection}`;
+      ${recognizedSection}${skippedSection}`;
     return;
   }
 
@@ -988,7 +1009,7 @@ function renderSources(job) {
       ces points ; les sources consultées y sont citées.
     </p>` + points.map(renderFindingCard).join("") : "";
 
-  panel.innerHTML = entete + pendingSection + pointsSection + skippedSection;
+  panel.innerHTML = entete + pendingSection + pointsSection + recognizedSection + skippedSection;
 }
 
 /* ------------------------------------------------------- annotations */
@@ -2824,15 +2845,22 @@ function initActions() {
     if (!card || !job) return;
     const correctionId = card.dataset.correctionId;
     const action = button.dataset.pendingAction;
+    const candidate = (job.factcheck_report?.pending || []).find((item) => item.id === correctionId);
     card.querySelectorAll("button").forEach((b) => { b.disabled = true; });
     try {
+      if (action === "valider-lexique" && (!candidate?.proposition || !candidate.sources?.some((source) => source.url))) {
+        throw new Error("Cette proposition n'a pas de source permettant de la mémoriser comme vérifiée.");
+      }
       const endpointAction = action === "valider-lexique" ? "valider" : action;
       await api(`/api/jobs/${job.id}/corrections/${correctionId}/${endpointAction}`, { method: "POST" });
       if (action === "valider-lexique") {
-        const term = card.querySelector(".finding-message b")?.textContent || "";
+        const term = candidate?.proposition || "";
         const response = await api("/api/lexicon", {
           method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ terme: term, verifie: true }),
+          body: JSON.stringify({
+            terme: term, categorie: candidate?.claim_type || "autre",
+            sources: candidate?.sources || [], verifie: true,
+          }),
         });
         state.lexiconTerms = response.terms || [];
         renderLexicon();

@@ -51,6 +51,7 @@ from .. import db
 from ..lexicon import Term
 from ..lexicon import load_lexicon as lexicon_load_all
 from ..lexicon import lookup as lexicon_lookup
+from ..lexicon.resolver import normalize as normalize_lexicon, resolve as resolve_trusted, shield_trusted
 from . import legalref
 from . import prompts
 from .backends import get_backend
@@ -187,6 +188,7 @@ class FactCheckReport:
     # pour que l'interface puisse les montrer sans laisser croire qu'elles
     # ont été vérifiées.
     skipped: list[dict] = field(default_factory=list)
+    recognized: list[dict] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
@@ -195,6 +197,7 @@ class FactCheckReport:
             "findings": [f.to_dict() for f in self.findings],
             "pending": [p.to_dict() for p in self.pending],
             "skipped": self.skipped,
+            "recognized": self.recognized,
         }
 
 
@@ -260,7 +263,7 @@ def extract_claims(
 ) -> list[Claim]:
     """Repère les affirmations vérifiables du texte relu, bloc par bloc."""
     settings = settings or config_module.load_settings()
-    if not text.strip():
+    if not any(char.isalnum() for char in text):
         return []
 
     backend = get_backend(settings)
@@ -412,7 +415,17 @@ def verify_claim(claim: Claim, *, settings=None) -> Verdict:
     settings = settings or config_module.load_settings()
 
     if settings.lexicon_enabled:
-        term = lexicon_lookup(claim.citation, verified_only=True)
+        term = resolve_trusted(claim.citation)
+        if term is None:
+            # Un déterminant devant un sigle ne change pas son identité.
+            # La validation exige toutefois l'égalité avec la graphie du
+            # terme : « ARS doit financer… » reste une affirmation à vérifier.
+            bare = re.sub(r"^(?:l['’]|le\s+|la\s+|les\s+|un\s+|une\s+)", "", claim.citation.strip(), flags=re.IGNORECASE)
+            candidate = lexicon_lookup(claim.citation, verified_only=True)
+            if candidate is not None and normalize_lexicon(bare) in {
+                normalize_lexicon(name) for name in getattr(candidate, "noms", lambda: [candidate.terme])()
+            }:
+                term = candidate
         if term is not None:
             return Verdict(
                 claim=claim,
@@ -821,8 +834,11 @@ def factcheck(
     """Fait tout : repère les affirmations, les vérifie, applique les verdicts."""
     settings = settings or config_module.load_settings()
 
+    extraction_text, recognized = (
+        shield_trusted(clean_text) if settings.lexicon_enabled else (clean_text, [])
+    )
     claims = extract_claims(
-        clean_text,
+        extraction_text,
         review_blocks=review_blocks,
         settings=settings,
         on_progress=_scaled(on_progress, 0.0, 0.3, "Repérage des affirmations…"),
@@ -831,7 +847,7 @@ def factcheck(
     if not claims:
         if on_progress:
             on_progress(1.0, "Aucune affirmation à vérifier.")
-        return clean_text, FactCheckReport(claims_checked=0), []
+        return clean_text, FactCheckReport(claims_checked=0, recognized=recognized), []
 
     # Périmètre : seules les catégories coûteuses en cas d'erreur (voir
     # is_in_scope) déclenchent une vérification. Le reste est repéré mais
@@ -885,6 +901,7 @@ def factcheck(
         findings=findings,
         pending=pending,
         skipped=skipped,
+        recognized=recognized,
     )
 
     if on_progress:

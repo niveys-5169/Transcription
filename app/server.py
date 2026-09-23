@@ -225,7 +225,8 @@ async def post_lexicon(payload: dict = Body(...)) -> dict:
         wikilink=str(payload.get("wikilink") or terme),
         sources=list(payload.get("sources") or []),
         verifie=bool(payload.get("verifie", False) and payload.get("sources")),
-        verifie_le=payload.get("verifie_le"),
+        verifie_le=(payload.get("verifie_le") or date.today().isoformat())
+        if payload.get("verifie") and payload.get("sources") else None,
     )
     lexicon.save_user_term(term)
     return _lexicon_response()
