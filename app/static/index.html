@@ -432,11 +432,16 @@
         <span>Niveau d'effort</span>
         <select id="proofread_effort">
           <option value="low">Bas — le plus rapide</option>
-          <option value="medium">Moyen</option>
-          <option value="high">Élevé — recommandé</option>
+          <option value="medium">Moyen — recommandé</option>
+          <option value="high">Élevé</option>
           <option value="xhigh">Très élevé</option>
           <option value="max">Maximal — le plus lent, le plus soigné</option>
         </select>
+      </label>
+      <label class="field">
+        <span>Blocs relus en parallèle</span>
+        <input type="number" id="proofread_workers" min="1" max="8" step="1">
+        <small>Claude comme NVIDIA NIM. Baissez si l'abonnement ou l'API signale une limite de débit.</small>
       </label>
       <label class="field">
         <span>Modèle des passes mécaniques</span>
@@ -453,8 +458,9 @@
         </select>
       </label>
       <p class="hint">
-        Ces deux réglages ne s'appliquent qu'au repérage des affirmations et à
-        la comparaison brut/relu, deux tâches mécaniques. La relecture
+        Ces deux réglages ne s'appliquent qu'au repérage des affirmations, à
+        la comparaison brut/relu et au sommaire (titre, résumé, intertitres),
+        qui ne touchent pas au texte relu. La relecture
         elle-même et les verdicts de vérification restent sur le modèle
         principal ci-dessus.
       </p>
@@ -467,6 +473,7 @@
       <label class="field"><span>Modèle NIM principal</span><select id="nim_model"></select><small id="nim-model-detail"></small></label>
       <label class="field"><span>1er modèle de secours NIM</span><select id="nim_fallback_model_1"></select></label>
       <label class="field"><span>2e modèle de secours NIM</span><select id="nim_fallback_model_2"></select><small>Utilisés seulement si le modèle précédent est saturé ou répond mal.</small></label>
+      <label class="field"><span>Modèle NIM des passes légères</span><select id="nim_model_fast"></select><small>Sommaire et vérification ciblée. La relecture reste sur le modèle principal.</small></label>
       <label class="field"><span>URL API NIM</span><input type="url" id="nim_base_url" placeholder="https://integrate.api.nvidia.com/v1/chat/completions"></label>
     </details>
 

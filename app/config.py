@@ -161,8 +161,10 @@ class Settings:
     # vérification, extraction des affirmations, fact-check) : un seul
     # réglage, pas de modèle différent par étape.
     proofread_model: str = "claude-sonnet-5"
-    # Relevé par défaut : le coût n'est plus un critère de conception ici.
-    proofread_effort: str = "high"
+    # « medium » : une relecture fidèle corrige et ponctue, elle ne raisonne
+    # pas ; l'effort élevé allonge chaque bloc sans gain mesurable, alors que
+    # les garde-fous (anti-résumé, règles, vérification ciblée) restent actifs.
+    proofread_effort: str = "medium"
     # Couple rapide, réservé aux passes mécaniques (repérage des affirmations
     # à vérifier, comparaison brut/relu) : jamais pour la relecture elle-même
     # ni pour les verdicts de fact-check, qui exigent le jugement de
@@ -172,6 +174,9 @@ class Settings:
     proofread_effort_fast: str = "low"
     # Taille (en caractères) d'un bloc de texte envoyé en relecture.
     proofread_chunk_chars: int = 6000
+    # Blocs relus (et vérifiés) de front, Claude comme NIM : chaque bloc est
+    # un appel indépendant, le temps est surtout de l'attente réseau.
+    proofread_workers: int = 4
     # Ajouter titre, intertitres et résumé au texte relu.
     structure_output: bool = True
 
@@ -187,6 +192,10 @@ class Settings:
     # saturé, indisponible ou rend une réponse inutilisable.
     nim_fallback_model_1: str = ""
     nim_fallback_model_2: str = ""
+    # Modèle des passes légères NIM (sommaire, vérification ciblée) ; la
+    # relecture reste sur ``nim_model``. En cas d'échec, la chaîne principale
+    # prend le relais. Vide : ``nim_model`` partout.
+    nim_model_fast: str = "meta/llama-3.1-8b-instruct"
     nim_timeout: int = 300
 
     # --- Vérification externe (recherche web) ---
@@ -289,6 +298,7 @@ def _from_env(settings: Settings) -> Settings:
         "nim_model": "NIM_MODEL",
         "nim_fallback_model_1": "NIM_FALLBACK_MODEL_1",
         "nim_fallback_model_2": "NIM_FALLBACK_MODEL_2",
+        "nim_model_fast": "NIM_MODEL_FAST",
         "nim_timeout": "NIM_TIMEOUT",
         "proofread_model": "TRANSCRIPTION_PROOFREAD_MODEL",
         "default_engine": "TRANSCRIPTION_ENGINE",

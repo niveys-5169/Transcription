@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import logging
 import threading
+import time
 from dataclasses import dataclass
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -33,6 +34,7 @@ from .contracts import FAITHFUL_PROOFREAD_CONTRACT
 from .envelope import extract_candidate
 from .grounding import grounding_hints
 from .nim_profiles import NimModelProfile, build_messages, profile_for
+from .parallel import run_in_parallel
 from .structure import insert_headings, insert_wikilinks, parse_json_object
 from .validation import validate_proofread_candidate
 
@@ -42,6 +44,23 @@ logger = logging.getLogger(__name__)
 # Cela évite de refaire une requête réseau à chaque rafraîchissement de l'UI.
 _MODELS_CACHE_LOCK = threading.Lock()
 _MODELS_CACHE: dict[tuple[str, str], tuple[list[str], str]] = {}
+
+# Saturation passagère (429 limite de débit, 503 surcharge) : fréquente sur
+# l'API hébergée dès que plusieurs blocs partent de front. On patiente sur le
+# même modèle avant de passer au secours, plutôt que de dégrader un bloc au
+# nettoyage mécanique pour un simple pic de charge.
+_TRANSIENT_CODES = (429, 503)
+_TRANSIENT_DELAYS = (2.0, 6.0)
+_MAX_RETRY_AFTER = 30.0
+_sleep = time.sleep
+
+
+def _retry_delay(exc: HTTPError, default: float) -> float:
+    try:
+        value = float(exc.headers.get("Retry-After", "")) if exc.headers else default
+    except (TypeError, ValueError):
+        value = default
+    return max(0.0, min(value, _MAX_RETRY_AFTER))
 
 
 @dataclass
@@ -56,6 +75,10 @@ class NimCompletion:
 
     text: str
     model: str
+
+
+def _block_id(paragraph) -> str:
+    return f"block-{paragraph.first_segment_index}-{paragraph.last_segment_index}"
 
 
 class NimProofreader:
@@ -140,8 +163,13 @@ class NimProofreader:
             ) if model.strip()
         ))
 
+    def _fast_models_to_try(self) -> list[str]:
+        """Modèle des passes légères (sommaire, vérification), puis la chaîne principale."""
+        fast = self.settings.nim_model_fast.strip()
+        return list(dict.fromkeys(([fast] if fast else []) + self._models_to_try()))
+
     def complete(self, *, system: str, user: str, max_tokens: int,
-                 minimum_length: int = 0) -> NimCompletion:
+                 minimum_length: int = 0, fast: bool = False) -> NimCompletion:
         """Appelle jusqu'à trois modèles NIM, dans l'ordre configuré.
 
         Chaque modèle essayé — principal ou de secours — reçoit les messages
@@ -150,7 +178,7 @@ class NimProofreader:
         à tous, un modèle de secours n'est jamais envoyé « nu ».
         """
         last_exc: Exception | None = None
-        models = self._models_to_try()
+        models = self._fast_models_to_try() if fast else self._models_to_try()
         if not models:
             raise ProofreadError("Aucun modèle NVIDIA NIM n'est configuré.")
 
@@ -168,21 +196,28 @@ class NimProofreader:
                 headers={"Authorization": f"Bearer {self.settings.nim_api_key}", "Content-Type": "application/json"},
                 method="POST",
             )
-            try:
-                with urlopen(request, timeout=self.settings.nim_timeout) as response:
-                    data = json.loads(response.read().decode("utf-8"))
-                text = str(data["choices"][0]["message"]["content"]).strip()
-                if len(text) < minimum_length:
-                    raise ValueError("réponse trop courte")
-                return NimCompletion(text=text, model=model)
-            except HTTPError as exc:
-                # Ne jamais inclure le corps de réponse : certains proxys le
-                # réinjectent dans les logs et une clé ne doit jamais y transiter.
-                last_exc = exc
-                if exc.code in (401, 403):
-                    raise ProofreadError(f"NVIDIA NIM a refusé la clé ({exc.code}).") from exc
-            except (URLError, TimeoutError, json.JSONDecodeError, KeyError, IndexError, TypeError, ValueError) as exc:
-                last_exc = exc
+            for attempt in range(len(_TRANSIENT_DELAYS) + 1):
+                try:
+                    with urlopen(request, timeout=self.settings.nim_timeout) as response:
+                        data = json.loads(response.read().decode("utf-8"))
+                    text = str(data["choices"][0]["message"]["content"]).strip()
+                    if len(text) < minimum_length:
+                        raise ValueError("réponse trop courte")
+                    return NimCompletion(text=text, model=model)
+                except HTTPError as exc:
+                    # Ne jamais inclure le corps de réponse : certains proxys le
+                    # réinjectent dans les logs et une clé ne doit jamais y transiter.
+                    last_exc = exc
+                    if exc.code in (401, 403):
+                        raise ProofreadError(f"NVIDIA NIM a refusé la clé ({exc.code}).") from exc
+                    if exc.code in _TRANSIENT_CODES and attempt < len(_TRANSIENT_DELAYS):
+                        delay = _retry_delay(exc, _TRANSIENT_DELAYS[attempt])
+                        logger.info("Modèle NIM %s saturé (%d) ; nouvel essai dans %.0f s.", model, exc.code, delay)
+                        _sleep(delay)
+                        continue
+                except (URLError, TimeoutError, json.JSONDecodeError, KeyError, IndexError, TypeError, ValueError) as exc:
+                    last_exc = exc
+                break
             logger.warning(
                 "Modèle NIM %s en échec (%d/%d — %s) ; essai du suivant.",
                 model, model_index, len(models), type(last_exc).__name__,
@@ -278,39 +313,51 @@ class NimProofreader:
         if not chunks:
             return ProofreadResult(text="", mode="nim")
         saved = {pair.block_id: pair for pair in (completed_pairs or [])}
-        cleaned, pairs, rejections, block_log = [], [], [], []
+        total = len(chunks)
+        by_index: dict[int, TextPair] = {}
+        logs: dict[int, dict] = {}
+        todo: list[TextChunk] = []
         for chunk in chunks:
-            if should_cancel and should_cancel():
-                raise ProofreadError("Relecture annulée.")
-            if on_progress:
-                on_progress(chunk.index / len(chunks), f"Relecture NVIDIA NIM {chunk.index + 1}/{len(chunks)}…")
             paragraph = paragraphs[chunk.index]
-            block_id = f"block-{paragraph.first_segment_index}-{paragraph.last_segment_index}"
-            cached = saved.get(block_id)
+            cached = saved.get(_block_id(paragraph))
             if cached and cached.raw == chunk.text:
-                pairs.append(cached)
-                cleaned.append(cached.clean)
-                continue
+                by_index[chunk.index] = cached
+            else:
+                todo.append(chunk)
 
+        def work(chunk: TextChunk) -> tuple[TextPair, dict]:
+            paragraph = paragraphs[chunk.index]
             # Le contexte inter-blocs vient TOUJOURS du paragraphe brut
             # précédent, jamais d'une génération NIM antérieure : une
             # hallucination du bloc N ne doit pas pouvoir contaminer le
             # prompt du bloc N+1 (voir tests/test_nim_models.py).
             raw_context = tail(paragraphs[chunk.index - 1].text, CONTEXT_CHARS) if chunk.index > 0 else ""
+            text, outcome = self._proofread_block(chunk.text, raw_context=raw_context, index=chunk.index, total=total)
+            pair = TextPair(start=chunk.start, end=chunk.end, raw=chunk.text, clean=text,
+                            block_id=_block_id(paragraph),
+                            source_segment_ids=[f"segment-{i}" for i in range(paragraph.first_segment_index, paragraph.last_segment_index + 1)])
+            return pair, {"block_id": pair.block_id, **outcome}
 
-            text, outcome = self._proofread_block(chunk.text, raw_context=raw_context, index=chunk.index, total=len(chunks))
-            logged_outcome = {"block_id": block_id, **outcome}
+        def done(position: int, produced: tuple[TextPair, dict]) -> None:
+            pair, logged_outcome = produced
+            index = todo[position].index
+            by_index[index] = pair
+            logs[index] = logged_outcome
             logger.info("relecture_nim_bloc %s", json.dumps({k: v for k, v in logged_outcome.items() if k != "validation_metrics"}, ensure_ascii=False))
-            block_log.append(logged_outcome)
-            if outcome["validation_status"] != "valid":
-                rejections.append(logged_outcome)
-
-            cleaned.append(text)
-            pairs.append(TextPair(start=chunk.start, end=chunk.end, raw=chunk.text, clean=text,
-                                  block_id=block_id,
-                                  source_segment_ids=[f"segment-{i}" for i in range(paragraph.first_segment_index, paragraph.last_segment_index + 1)]))
+            if on_progress:
+                on_progress(len(by_index) / total, f"Relecture NVIDIA NIM : {len(by_index)}/{total} blocs…")
             if on_checkpoint:
-                on_checkpoint(pairs)
+                on_checkpoint([by_index[i] for i in sorted(by_index)])
+
+        if on_progress:
+            on_progress(len(by_index) / total, f"Relecture NVIDIA NIM : {len(by_index)}/{total} blocs…")
+        run_in_parallel(todo, work, workers=self.settings.proofread_workers,
+                        should_cancel=should_cancel, on_done=done)
+
+        pairs = [by_index[i] for i in range(total)]
+        cleaned = [pair.clean for pair in pairs]
+        block_log = [logs[i] for i in sorted(logs)]
+        rejections = [entry for entry in block_log if entry["validation_status"] != "valid"]
         result = ProofreadResult(text="\n\n".join(part for part in cleaned if part).strip(), mode="nim", pairs=pairs, rejections=rejections, block_log=block_log)
         if structure and result.text:
             try:
@@ -320,7 +367,7 @@ class NimProofreader:
                     body = f"{body[:half]}\n\n[…]\n\n{body[-half:]}"
                 notes = vault_index.search(self.settings, limit=80) if self.settings.obsidian_vault_path else []
                 titles = {str(note.get("title") or "").strip() for note in notes}
-                completion = self.complete(system=prompts.STRUCTURE_SYSTEM, user=prompts.STRUCTURE_USER.format(body=body, vault_notes="\n".join(f"- {title}" for title in sorted(titles)) or "(aucune note)"), max_tokens=MAX_TOKENS_STRUCTURE)
+                completion = self.complete(system=prompts.STRUCTURE_SYSTEM, user=prompts.STRUCTURE_USER.format(body=body, vault_notes="\n".join(f"- {title}" for title in sorted(titles)) or "(aucune note)"), max_tokens=MAX_TOKENS_STRUCTURE, fast=True)
                 data = parse_json_object(completion.text)
                 if data:
                     result.title = str(data.get("title") or "").strip()[:120]

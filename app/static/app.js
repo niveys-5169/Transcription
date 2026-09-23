@@ -865,12 +865,13 @@ function openPassage(point) {
    l'ont tous été. */
 function lectureClaudeLabel(rapport) {
   const mode = rapport.mode || "";
-  if (mode !== "claude" && mode !== "claude-cible") return "règles seules";
+  if (mode !== "claude" && mode !== "claude-cible" && mode !== "nim-cible") return "règles seules";
+  const lecteur = mode === "nim-cible" ? "NVIDIA NIM" : "Claude";
   const lus = Number(rapport.claude_pairs || 0);
-  if (mode === "claude-cible" && lus) {
-    return `règles + lecture par Claude sur ${lus} bloc${lus > 1 ? "s" : ""}`;
+  if (mode !== "claude" && lus) {
+    return `règles + lecture par ${lecteur} sur ${lus} bloc${lus > 1 ? "s" : ""}`;
   }
-  return "règles + lecture par Claude";
+  return `règles + lecture par ${lecteur}`;
 }
 
 function renderVerification(job) {
@@ -2258,11 +2259,12 @@ function openSettings() {
   $("claude_backend").value = settings.claude_backend || "cli";
   $("claude_cli_path").value = settings.claude_cli_path || "";
   $("proofread_model").value = settings.proofread_model || "";
-  $("proofread_effort").value = settings.proofread_effort || "high";
+  $("proofread_effort").value = settings.proofread_effort || "medium";
   $("proofread_model_fast").value = settings.proofread_model_fast || "claude-haiku-4-5-20251001";
   $("proofread_effort_fast").value = settings.proofread_effort_fast || "low";
+  $("proofread_workers").value = settings.proofread_workers || 4;
   $("nim_fallback_enabled").checked = Boolean(settings.nim_fallback_enabled);
-  populateNimModels(settings.nim_model || "", settings.nim_fallback_model_1 || "", settings.nim_fallback_model_2 || "");
+  populateNimModels(settings.nim_model || "", settings.nim_fallback_model_1 || "", settings.nim_fallback_model_2 || "", settings.nim_model_fast || "");
   $("nim_base_url").value = settings.nim_base_url || "";
   $("runpod_chunk_seconds").value = settings.runpod_chunk_seconds || 180;
   $("runpod_pod_image").value = settings.runpod_pod_image || "";
@@ -2337,10 +2339,12 @@ async function saveSettings() {
     proofread_effort: $("proofread_effort").value,
     proofread_model_fast: $("proofread_model_fast").value.trim(),
     proofread_effort_fast: $("proofread_effort_fast").value,
+    proofread_workers: Number($("proofread_workers").value) || 4,
     nim_fallback_enabled: $("nim_fallback_enabled").checked,
     nim_model: $("nim_model").value.trim(),
     nim_fallback_model_1: $("nim_fallback_model_1").value.trim(),
     nim_fallback_model_2: $("nim_fallback_model_2").value.trim(),
+    nim_model_fast: $("nim_model_fast").value.trim(),
     nim_base_url: $("nim_base_url").value.trim(),
     runpod_chunk_seconds: Number($("runpod_chunk_seconds").value) || 180,
     runpod_pod_image: $("runpod_pod_image").value.trim(),
@@ -2957,8 +2961,8 @@ function initActions() {
   });
 }
 
-function populateNimModels(primary, fallback1, fallback2) {
-  [["nim_model", primary, false], ["nim_fallback_model_1", fallback1, true], ["nim_fallback_model_2", fallback2, true]].forEach(([id, selectedModel, optional]) => {
+function populateNimModels(primary, fallback1, fallback2, fast) {
+  [["nim_model", primary, false], ["nim_fallback_model_1", fallback1, true], ["nim_fallback_model_2", fallback2, true], ["nim_model_fast", fast, true]].forEach(([id, selectedModel, optional]) => {
     const select = $(id);
     const models = [...state.nimModels];
     if (selectedModel && !models.includes(selectedModel)) models.unshift(selectedModel);

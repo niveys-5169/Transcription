@@ -408,3 +408,25 @@ def test_les_regles_couvrent_tout_le_document_meme_les_blocs_non_lus_par_claude(
     assert len(chiffres) == 1
     assert rapport.claude_pairs == 1
     assert fake.calls == 1
+
+
+def test_sans_claude_la_lecture_ciblee_passe_par_nim(monkeypatch):
+    from app.config import Settings
+    from app.proofread.nim import NimCompletion, NimProofreader
+
+    monkeypatch.setattr(ClaudeVerifier, "is_available", lambda self: (False, "Claude absent"))
+    appels = []
+
+    def faux_complete(self, *, system, user, max_tokens, minimum_length=0, fast=False):
+        appels.append(fast)
+        return NimCompletion(text='[{"type": "sens", "gravite": "haute", "commentaire": "Sens inversé."}]', model="meta/leger")
+
+    monkeypatch.setattr(NimProofreader, "complete", faux_complete)
+    settings = Settings(nim_api_key="k", nim_fallback_enabled=True, lexicon_enabled=False)
+
+    rapport = verify([pair("il y a 42 cas", "il y a des cas")], settings=settings)
+
+    assert rapport.mode == "nim-cible"
+    assert rapport.claude_pairs == 1
+    assert appels == [True]
+    assert any(f.message == "Sens inversé." for f in rapport.findings)

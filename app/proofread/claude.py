@@ -12,6 +12,7 @@ from .base import ProofreadError, ProofreadResult, TextPair
 from .basic import clean_line, split_paragraph_spans
 from .grounding import grounding_hints
 from .chunking import TextChunk, tail
+from .parallel import run_in_parallel
 from .structure import insert_headings, insert_wikilinks, parse_json_object
 
 logger = logging.getLogger(__name__)
@@ -26,6 +27,10 @@ MAX_TOKENS_STRUCTURE = 4_000
 # Au-delà, on ne soumet que le début et la fin au sommaire : largement assez
 # pour un plan, et inutile de payer le texte entier une seconde fois.
 STRUCTURE_INPUT_LIMIT = 200_000
+
+
+def _block_id(paragraph) -> str:
+    return f"block-{paragraph.first_segment_index}-{paragraph.last_segment_index}"
 
 
 class ClaudeProofreader:
@@ -67,39 +72,49 @@ class ClaudeProofreader:
         # reprise avec NIM après Claude (ou l'inverse), sans jamais réemployer
         # un texte qui ne correspondrait plus à la transcription source.
         saved = {pair.block_id: pair for pair in (completed_pairs or [])}
-        cleaned: list[str] = []
-        pairs: list[TextPair] = []
-
+        total = len(chunks)
+        by_index: dict[int, TextPair] = {}
+        todo: list[TextChunk] = []
         for chunk in chunks:
-            if should_cancel is not None and should_cancel():
-                raise ProofreadError("Relecture annulée.")
-            if on_progress:
-                on_progress(
-                    chunk.index / len(chunks),
-                    f"Relecture du bloc {chunk.index + 1}/{len(chunks)}…",
-                )
-
             paragraph = paragraphs[chunk.index]
-            block_id = f"block-{paragraph.first_segment_index}-{paragraph.last_segment_index}"
-            cached = saved.get(block_id)
+            cached = saved.get(_block_id(paragraph))
             if cached and cached.raw == chunk.text:
-                pairs.append(cached)
-                cleaned.append(cached.clean)
-                continue
+                by_index[chunk.index] = cached
+            else:
+                todo.append(chunk)
 
-            context = tail(cleaned[-1], CONTEXT_CHARS) if cleaned else ""
-            text = self._proofread_chunk(chunk, len(chunks), context)
-            pair = TextPair(
+        def work(chunk: TextChunk) -> TextPair:
+            paragraph = paragraphs[chunk.index]
+            # Contexte tiré du brut précédent, jamais de sa version relue :
+            # les blocs deviennent indépendants (donc parallélisables) et une
+            # dérive du bloc N ne contamine pas le prompt du bloc N+1 — même
+            # règle que la relecture NIM.
+            context = tail(paragraphs[chunk.index - 1].text, CONTEXT_CHARS) if chunk.index > 0 else ""
+            text = self._proofread_chunk(chunk, total, context)
+            return TextPair(
                 start=chunk.start, end=chunk.end, raw=chunk.text, clean=text,
-                block_id=block_id,
+                block_id=_block_id(paragraph),
                 source_segment_ids=[f"segment-{i}" for i in range(paragraph.first_segment_index, paragraph.last_segment_index + 1)],
             )
-            pairs.append(pair)
-            cleaned.append(text)
-            if on_checkpoint:
-                on_checkpoint(pairs)
 
-        body = "\n\n".join(part for part in cleaned if part).strip()
+        def done(position: int, pair: TextPair) -> None:
+            by_index[todo[position].index] = pair
+            if on_progress:
+                on_progress(len(by_index) / total, f"Relecture : {len(by_index)}/{total} blocs…")
+            if on_checkpoint:
+                on_checkpoint([by_index[i] for i in sorted(by_index)])
+
+        if on_progress:
+            on_progress(len(by_index) / total, f"Relecture : {len(by_index)}/{total} blocs…")
+        run_in_parallel(
+            todo, work,
+            workers=self.settings.proofread_workers,
+            should_cancel=should_cancel,
+            on_done=done,
+        )
+
+        pairs = [by_index[i] for i in range(total)]
+        body = "\n\n".join(pair.clean for pair in pairs if pair.clean).strip()
         result = ProofreadResult(text=body, mode="claude", pairs=pairs)
 
         if structure and body:
@@ -167,6 +182,9 @@ class ClaudeProofreader:
                 vault_notes="\n".join(f"- {title}" for title in sorted(titles)) or "(aucune note)",
             ),
             max_tokens=MAX_TOKENS_STRUCTURE,
+            # Titre, résumé et intertitres ne touchent pas au texte relu : le
+            # couple rapide suffit, et évite un long appel en fin de relecture.
+            fast=True,
         ).text
         data = parse_json_object(raw)
         if not data:
