@@ -213,6 +213,8 @@ def _transcribe_with_whisperx(
     result = whisperx.align(result["segments"], align_model, metadata, audio_path, device)
     token = os.environ.get("HF_TOKEN")
     speakers: list[str] = []
+    if diarize and not token:
+        print("[pod_server] Diarisation demandée mais HF_TOKEN absent : pas de locuteurs.")
     if diarize and token:
         diarizer_key = (device, token)
         with _model_cache_lock:
@@ -349,31 +351,22 @@ def _parse_transcription_request(content_type: str, raw: bytes) -> tuple:
             }
             audio = fields["audio"].get_payload(decode=True) or b""
 
-            def text_field(name: str) -> str | None:
-                # ``get_content()`` décode une partie sans ``charset`` en
-                # ASCII avec remplacement : « médical » devenait
-                # « m\ufffd\ufffddical » dans l'amorce du lexique, et Whisper
-                # recrachait ensuite cette amorce corrompue en boucle. Les
-                # clients (httpx, navigateurs) envoient les champs en UTF-8 :
-                # on décode strictement, une erreur rejette la requête.
+            def texte(name: str, default):
+                # ``get_content()`` lit un champ sans charset en ASCII et
+                # remplace silencieusement les accents par U+FFFD : on décode
+                # nous-mêmes, en UTF-8 strict (une erreur donne un 400).
                 part = fields.get(name)
                 if part is None:
-                    return None
+                    return default
                 return (part.get_payload(decode=True) or b"").decode("utf-8")
 
-            model = text_field("model")
-            language = text_field("language")
-            prompt = text_field("initial_prompt")
-            diarize = text_field("diarize")
             return (
                 base64.b64encode(audio).decode("ascii"),
-                model if model is not None else "large-v3",
-                language if language is not None else "auto",
-                prompt or None,
-                (diarize.strip().lower() == "true") if diarize is not None else False,
+                texte("model", "large-v3"),
+                texte("language", "auto"),
+                texte("initial_prompt", None) or None,
+                texte("diarize", "false").strip().lower() == "true",
             )
-        except UnicodeDecodeError as exc:
-            raise _RequeteInvalide(f"champ multipart non UTF-8 : {exc}") from exc
         except (KeyError, ValueError, TypeError) as exc:
             raise _RequeteInvalide(f"multipart invalide : {exc}") from exc
     try:

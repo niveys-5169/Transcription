@@ -106,6 +106,24 @@ def _hf_token_env(settings=None) -> dict[str, str] | None:
     return {"HF_TOKEN": token} if token else None
 
 
+def _multipart_fields(audio_bytes: bytes, **fields: str) -> dict:
+    """Parties du multipart envoyé au pod, texte déclaré en UTF-8.
+
+    Un champ de formulaire ordinaire part sans ``Content-Type`` : le
+    parseur ``email`` du pod le lit alors en ASCII et remplace chaque octet
+    accentué par U+FFFD. L'amorce du lexique (« Stéphane », « peut-être »…)
+    arrivait ainsi truffée de « � », et Whisper recopiait ce caractère dans
+    la transcription. Le charset explicite suffit, y compris pour une image
+    de pod antérieure à la correction du parseur.
+    """
+    parts: dict = {
+        name: (None, value.encode("utf-8"), "text/plain; charset=utf-8")
+        for name, value in fields.items()
+    }
+    parts["audio"] = ("audio.wav", audio_bytes, "audio/wav")
+    return parts
+
+
 class RunPodPodClient:
     """Fine couche autour de l'API GraphQL RunPod pour les pods à la demande."""
 
@@ -353,11 +371,12 @@ class PodFallbackSession:
             try:
                 response = self._http.post(
                     url,
-                    data={
-                        "model": model, "language": language or "auto",
-                        "initial_prompt": initial_prompt or "", "diarize": str(bool(diarize)).lower(),
-                    },
-                    files={"audio": ("audio.wav", audio_bytes, "audio/wav")},
+                    files=_multipart_fields(
+                        audio_bytes,
+                        model=model, language=language or "auto",
+                        initial_prompt=initial_prompt or "",
+                        diarize=str(bool(diarize)).lower(),
+                    ),
                     timeout=httpx.Timeout(120.0, read=read_timeout),
                 )
             except httpx.HTTPError as exc:

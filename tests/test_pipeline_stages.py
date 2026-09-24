@@ -161,42 +161,6 @@ def test_sans_chain_s_arrete_a_transcribed(client):
     assert job["status"] == "transcribed"
 
 
-PHRASE_ACCENTUEE = "Œuvre à côté : la tutelle prévoit un certificat médical, ça reste prêt et très sûr."
-
-
-def _transcrire_sans_chaine(client):
-    reponse = client.post(
-        "/api/jobs",
-        files={"file": ("cours.mp4", b"\x00" * 2048, "video/mp4")},
-        data={
-            "engine": "local", "model": "tiny", "language": "fr",
-            "proofread": "basic", "structure": "false", "chain": "false",
-        },
-    )
-    return _attendre_statut(client, reponse.json()["id"], {"transcribed", "error", "canceled"})
-
-
-def test_transcription_conserve_les_caracteres_accentues(client, monkeypatch):
-    monkeypatch.setitem(globals(), "FAUX_SEGMENTS", [Segment(0.0, 5.0, PHRASE_ACCENTUEE)])
-    job = _transcrire_sans_chaine(client)
-    assert job["status"] == "transcribed", job.get("error")
-    blocs = client.get(f"/api/jobs/{job['id']}/review-blocks").json()["blocks"]
-    assert [bloc["text"] for bloc in blocs] == [PHRASE_ACCENTUEE]
-    assert "\ufffd" not in job["raw_text"]
-
-
-def test_transcription_avec_u_fffd_echoue_sans_rien_enregistrer(client, monkeypatch):
-    monkeypatch.setitem(globals(), "FAUX_SEGMENTS", [
-        Segment(0.0, 3.0, "Certificat médical"),
-        Segment(65.0, 70.0, "Certificate m\ufffd\ufffddicale de protection des majeurs"),
-    ])
-    job = _transcrire_sans_chaine(client)
-    assert job["status"] == "error"
-    assert "U+FFFD" in job["error"] and "1:05" in job["error"]
-    assert not job.get("segments")
-    assert not job.get("raw_text")
-
-
 def test_publish_refuse_un_travail_pas_encore_relu(client):
     reponse = client.post(
         "/api/jobs",
@@ -368,3 +332,63 @@ def test_republier_manuellement_ne_duplique_pas_la_fiche(client, vault):
     assert r.status_code == 200
     job2 = _attendre_statut(client, job_id, {"published"})
     assert job2["obsidian_path"] == first_path
+
+
+PHRASE_ACCENTUEE = "Stéphane, très âgé, peut-être à côté ; garçon, cœur."
+
+
+def _lancer_transcription(client):
+    reponse = client.post(
+        "/api/jobs",
+        files={"file": ("cours.mp4", b"\x00" * 2048, "video/mp4")},
+        data={
+            "engine": "local", "model": "tiny", "language": "fr",
+            "proofread": "basic", "structure": "false", "chain": "true",
+            "factcheck": "false", "publish": "false",
+        },
+    )
+    return reponse.json()["id"]
+
+
+def test_les_accents_francais_survivent_transcription_et_relecture(client, monkeypatch):
+    monkeypatch.setattr(FauxMoteur, "transcribe", lambda self, *a, **k: iter(
+        [Segment(0.0, 3.0, PHRASE_ACCENTUEE)]
+    ))
+    job = _attendre_statut(client, _lancer_transcription(client), {"done", "error", "canceled"})
+    assert job["status"] == "done", job.get("error")
+    assert job["segments"][0]["text"] == PHRASE_ACCENTUEE
+    assert PHRASE_ACCENTUEE in job["clean_text"]
+    assert "�" not in job["clean_text"]
+
+
+def test_une_transcription_avec_u_fffd_n_est_pas_enregistree(client, monkeypatch):
+    monkeypatch.setattr(FauxMoteur, "transcribe", lambda self, *a, **k: iter(
+        [Segment(0.0, 3.0, "Bonjour."), Segment(65.0, 68.0, "C'est peut-�tre St�phane.")]
+    ))
+    job = _attendre_statut(client, _lancer_transcription(client), {"error", "transcribed", "done", "canceled"})
+    assert job["status"] == "error"
+    assert "U+FFFD" in job["error"] and "1:05" in job["error"]
+    assert not job.get("segments")
+
+
+def test_une_relecture_qui_produit_u_fffd_garde_le_texte_precedent(client, monkeypatch):
+    from app import pipeline
+    from app.proofread import ProofreadResult
+
+    job_id = _lancer_transcription(client)
+    job = _attendre_statut(client, job_id, {"done", "error", "canceled"})
+    assert job["status"] == "done", job.get("error")
+    texte_precedent = job["clean_text"]
+
+    def relecture_corrompue(job, segments, **kwargs):
+        resultat = pipeline.basic_proofread(segments)
+        return ProofreadResult(
+            text="St�phane", mode=resultat.mode,
+            pairs=[type(p)(**{**p.to_dict(), "clean": "St�phane"}) for p in resultat.pairs],
+        )
+
+    monkeypatch.setattr(pipeline, "_proofread", relecture_corrompue)
+    pipeline.run_proofread(job_id)
+    job = client.get(f"/api/jobs/{job_id}").json()
+    assert "U+FFFD" in job["error"]
+    assert job["clean_text"] == texte_precedent

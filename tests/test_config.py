@@ -17,6 +17,8 @@ from app import config
 @pytest.fixture(autouse=True)
 def _isolated_settings(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "CONFIG_PATH", tmp_path / "config.json")
+    monkeypatch.setattr(config, "SECRETS_PATH", tmp_path / "partage" / "secrets.json")
+    monkeypatch.setattr(sys, "platform", "linux")
     config._settings = None
     yield
     config._settings = None
@@ -65,3 +67,69 @@ def test_domain_label_updates_only_default_obsidian_paths():
     settings = config.save_settings({"domain_label": "Droit social"})
     assert settings.obsidian_entities_folder == "Formation/Droit social/Entités"
     assert settings.obsidian_glossary_note == "Formation/Droit social/Glossaire Droit social.md"
+
+
+# ------------------------------------------------ clés partagées exe / lancer.bat
+
+
+def _changer_d_installation(monkeypatch, tmp_path, nom):
+    """Simule l'autre lanceur : autre config.json, même fichier de clés."""
+    monkeypatch.setattr(config, "CONFIG_PATH", tmp_path / nom / "config.json")
+    config._settings = None
+
+
+def test_une_cle_saisie_dans_l_exe_est_vue_par_lancer_bat(monkeypatch, tmp_path):
+    _changer_d_installation(monkeypatch, tmp_path, "exe")
+    config.save_settings({"hf_token": "hf-partage", "default_model": "tiny"})
+
+    _changer_d_installation(monkeypatch, tmp_path, "source")
+    settings = config.load_settings()
+    assert settings.hf_token == "hf-partage"
+    # Seules les clés sont communes, pas les autres réglages.
+    assert settings.default_model == config.Settings().default_model != "tiny"
+
+
+def test_les_cles_deja_saisies_sont_reprises_des_deux_installations(monkeypatch, tmp_path):
+    import json
+
+    (tmp_path / "exe").mkdir()
+    (tmp_path / "exe" / "config.json").write_text(
+        json.dumps({"runpod_api_key": "rp-exe"}), encoding="utf-8")
+    (tmp_path / "source").mkdir()
+    (tmp_path / "source" / "config.json").write_text(
+        json.dumps({"hf_token": "hf-source"}), encoding="utf-8")
+
+    _changer_d_installation(monkeypatch, tmp_path, "exe")
+    assert config.load_settings().runpod_api_key == "rp-exe"
+    # Un enregistrement depuis l'exe, sans jeton HF, ne bloque pas sa reprise.
+    config.save_settings({"default_model": "large-v3"})
+
+    _changer_d_installation(monkeypatch, tmp_path, "source")
+    settings = config.load_settings()
+    assert (settings.runpod_api_key, settings.hf_token) == ("rp-exe", "hf-source")
+
+    _changer_d_installation(monkeypatch, tmp_path, "exe")
+    assert config.load_settings().hf_token == "hf-source"
+
+
+def test_une_cle_effacee_n_est_pas_reimportee(monkeypatch, tmp_path):
+    _changer_d_installation(monkeypatch, tmp_path, "exe")
+    config.save_settings({"hf_token": "hf-ancien"})
+    config.save_settings({"hf_token": "__clear__"})
+
+    _changer_d_installation(monkeypatch, tmp_path, "exe")
+    assert config.load_settings().hf_token == ""
+
+
+def test_sous_windows_lancer_bat_reprend_les_cles_de_l_exe(monkeypatch, tmp_path):
+    import json
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    assert config._default_secrets_path() == tmp_path / "Transcription" / "secrets.json"
+    (tmp_path / "Transcription").mkdir()
+    (tmp_path / "Transcription" / "config.json").write_text(
+        json.dumps({"hf_token": "hf-exe"}), encoding="utf-8")
+
+    _changer_d_installation(monkeypatch, tmp_path, "source")
+    assert config.load_settings().hf_token == "hf-exe"
