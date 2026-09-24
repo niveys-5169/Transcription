@@ -641,7 +641,10 @@ function renderLexicon() {
   const terms = state.lexiconTerms || [];
   const verification = state.lexiconVerification || {};
   const proposals = new Map((verification.propositions || []).map((item) => [item.terme, item]));
-  const nonVerified = terms.filter((term) => !term.verifie).length;
+  const queued = new Set(verification.en_file || []);
+  const running = new Set(verification.en_verification || []);
+  const nonVerified = terms.filter((term) => !term.verifie && !queued.has(term.terme)).length;
+  const bulkValidable = terms.filter((term) => !term.verifie && isBulkValidable(proposals.get(term.terme))).length;
   const verifiedOpen = Boolean(panel.querySelector(".lexicon-verified[open]"))
     || terms.some((term) => term.verifie && state.lexiconEditingTerm === term.terme);
   const progress = $("lexicon-verification-progress");
@@ -650,13 +653,18 @@ function renderLexicon() {
   const globalButton = $("verify-lexicon-all");
   const cancelButton = $("cancel-lexicon-verification");
   globalButton.textContent = `Vérifier les entrées non vérifiées (${nonVerified} appel${nonVerified > 1 ? "s" : ""} maximum)`;
-  globalButton.disabled = verification.en_cours || nonVerified === 0;
+  // Une vérification en cours n'empêche pas d'en ajouter : les termes
+  // rejoignent la file et les propositions s'accumulent pour validation.
+  globalButton.disabled = nonVerified === 0;
+  const bulkButton = $("validate-lexicon-confirmed");
+  bulkButton.hidden = bulkValidable === 0;
+  bulkButton.textContent = `Valider les propositions confirmées (${bulkValidable})`;
   cancelButton.hidden = !verification.en_cours;
   progress.hidden = !verification.en_cours;
   progressBar.max = Math.max(1, Number(verification.total) || 0);
   progressBar.value = Number(verification.faits) || 0;
   progressLabel.textContent = verification.en_cours
-    ? `${verification.faits || 0} / ${verification.total || 0}${verification.terme_courant ? ` — ${verification.terme_courant}` : ""}`
+    ? `${verification.faits || 0} / ${verification.total || 0}${running.size ? ` — ${running.size} en cours` : ""}`
     : "";
   const renderTerm = (term) => {
         // Une entrée devenue fiable ne doit plus afficher une ancienne
@@ -676,7 +684,9 @@ function renderLexicon() {
           ${sources.length ? `<div class="finding-sources">${sources.map((source) => `<a href="${escapeHtml(source.url)}" target="_blank" rel="noopener">${escapeHtml(source.titre || source.url)}</a>`).join("")}</div>` : ""}
           ${term.verifie_le ? `<p class="meta">Vérifié le ${escapeHtml(term.verifie_le)}</p>` : ""}
           <div class="pending-actions">
-            ${!term.verifie ? `<button type="button" class="btn btn-mini btn-ghost" data-lexicon-action="verify">Vérifier</button>` : ""}
+            ${!term.verifie ? (queued.has(term.terme)
+              ? `<span class="meta">${running.has(term.terme) ? "Vérification en cours…" : "En file d'attente…"}</span>`
+              : `<button type="button" class="btn btn-mini btn-ghost" data-lexicon-action="verify">Vérifier</button>`) : ""}
             <button type="button" class="btn btn-mini btn-ghost" data-lexicon-action="edit">Corriger</button>
             ${proposal?.status === "attente" && !proposalFailed ? `<button type="button" class="btn btn-mini btn-ghost" data-lexicon-action="reject">Rejeter</button>` : ""}
             ${term.user_editable ? `<button type="button" class="btn btn-mini btn-ghost" data-lexicon-action="delete">Supprimer</button>` : ""}
@@ -707,6 +717,16 @@ function renderLexicon() {
         ${verified.length ? `<details class="skipped-claims lexicon-verified"${verifiedOpen ? " open" : ""}><summary>✓ Vérifications automatiques (${verified.length})</summary>${verified.map(renderTerm).join("")}</details>` : ""}
       </div>`
     : "<p class=\"meta\">Aucun terme dans le lexique.</p>";
+}
+
+// Même règle que ``_bulk_validable`` côté serveur : seule une confirmation
+// sourcée, de confiance haute ou moyenne, se valide en lot sans relecture.
+function isBulkValidable(proposal) {
+  return Boolean(proposal)
+    && proposal.status === "attente"
+    && proposal.verdict === "confirme"
+    && ["haute", "moyenne"].includes(proposal.confiance)
+    && (proposal.sources || []).some((source) => source?.url);
 }
 
 async function pollLexiconVerification() {
@@ -2902,12 +2922,26 @@ function initActions() {
   });
 
   $("verify-lexicon-all").addEventListener("click", async () => {
-    const count = state.lexiconTerms.filter((term) => !term.verifie).length;
+    const queued = new Set(state.lexiconVerification?.en_file || []);
+    const count = state.lexiconTerms.filter((term) => !term.verifie && !queued.has(term.terme)).length;
     if (!count || !window.confirm(`Cette opération peut effectuer jusqu'à ${count} recherches web et entamer votre quota d'abonnement. Continuer ?`)) return;
     try {
       await api("/api/lexicon/verification", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
       await pollLexiconVerification();
     } catch (error) { toast(error.message, true); }
+  });
+
+  $("validate-lexicon-confirmed").addEventListener("click", async () => {
+    const button = $("validate-lexicon-confirmed");
+    if (!window.confirm(`${button.textContent} : ces entrées seront marquées vérifiées avec leurs sources. Continuer ?`)) return;
+    button.disabled = true;
+    try {
+      const response = await api("/api/lexicon/verification/valider", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+      state.lexiconTerms = response.terms || [];
+      await pollLexiconVerification();
+      toast(`${response.valides || 0} terme${response.valides > 1 ? "s" : ""} validé${response.valides > 1 ? "s" : ""}.`);
+    } catch (error) { toast(error.message, true); }
+    finally { button.disabled = false; }
   });
 
   $("cancel-lexicon-verification").addEventListener("click", async () => {
@@ -2930,6 +2964,7 @@ function initActions() {
       if (action === "verify") {
         await api("/api/lexicon/verification", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ termes: [term] }) });
         await pollLexiconVerification();
+        toast(`« ${term} » ajouté à la file de vérification.`);
         return;
       }
       const response = action === "delete"
