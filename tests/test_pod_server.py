@@ -417,6 +417,37 @@ def test_transcribe_via_multipart_accepte_un_fichier_entier(serveur):
     assert reponse.json()["text"] == "Bonjour à tous. On commence le cours."
 
 
+PHRASE_ACCENTUEE = "Œuvre à côté : la tutelle prévoit un certificat médical, ça reste prêt et très sûr."
+
+
+def _requete_multipart(champs: dict) -> tuple[str, bytes]:
+    requete = httpx.Request(
+        "POST", "http://pod/jobs", data=champs,
+        files={"audio": ("cours.wav", b"RIFF____WAVE", "audio/wav")},
+    )
+    return requete.headers["content-type"], requete.read()
+
+
+def test_multipart_decode_l_amorce_en_utf8_sans_perte(worker):
+    """Régression : l'amorce du lexique arrivait « m\ufffd\ufffddical » et
+    Whisper la recrachait en boucle dans la transcription."""
+    content_type, corps = _requete_multipart(
+        {"model": "large-v3", "language": "fr", "initial_prompt": PHRASE_ACCENTUEE}
+    )
+    _audio, _modele, _langue, amorce, _diarize = worker._parse_transcription_request(content_type, corps)
+    assert amorce == PHRASE_ACCENTUEE
+    assert "\ufffd" not in amorce
+    for caractere in "éèêàçœ":
+        assert amorce.lower().count(caractere) == PHRASE_ACCENTUEE.lower().count(caractere)
+
+
+def test_multipart_non_utf8_est_refuse(worker):
+    content_type, corps = _requete_multipart({"initial_prompt": "PLACEHOLDER"})
+    corps = corps.replace(b"PLACEHOLDER", "médical".encode("latin-1"))
+    with pytest.raises(worker._RequeteInvalide, match="UTF-8"):
+        worker._parse_transcription_request(content_type, corps)
+
+
 def test_route_inconnue_rend_404(serveur):
     assert httpx.get(f"{serveur}/autre-chose", timeout=5.0).status_code == 404
 

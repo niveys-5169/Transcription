@@ -161,6 +161,42 @@ def test_sans_chain_s_arrete_a_transcribed(client):
     assert job["status"] == "transcribed"
 
 
+PHRASE_ACCENTUEE = "Œuvre à côté : la tutelle prévoit un certificat médical, ça reste prêt et très sûr."
+
+
+def _transcrire_sans_chaine(client):
+    reponse = client.post(
+        "/api/jobs",
+        files={"file": ("cours.mp4", b"\x00" * 2048, "video/mp4")},
+        data={
+            "engine": "local", "model": "tiny", "language": "fr",
+            "proofread": "basic", "structure": "false", "chain": "false",
+        },
+    )
+    return _attendre_statut(client, reponse.json()["id"], {"transcribed", "error", "canceled"})
+
+
+def test_transcription_conserve_les_caracteres_accentues(client, monkeypatch):
+    monkeypatch.setitem(globals(), "FAUX_SEGMENTS", [Segment(0.0, 5.0, PHRASE_ACCENTUEE)])
+    job = _transcrire_sans_chaine(client)
+    assert job["status"] == "transcribed", job.get("error")
+    blocs = client.get(f"/api/jobs/{job['id']}/review-blocks").json()["blocks"]
+    assert [bloc["text"] for bloc in blocs] == [PHRASE_ACCENTUEE]
+    assert "\ufffd" not in job["raw_text"]
+
+
+def test_transcription_avec_u_fffd_echoue_sans_rien_enregistrer(client, monkeypatch):
+    monkeypatch.setitem(globals(), "FAUX_SEGMENTS", [
+        Segment(0.0, 3.0, "Certificat médical"),
+        Segment(65.0, 70.0, "Certificate m\ufffd\ufffddicale de protection des majeurs"),
+    ])
+    job = _transcrire_sans_chaine(client)
+    assert job["status"] == "error"
+    assert "U+FFFD" in job["error"] and "1:05" in job["error"]
+    assert not job.get("segments")
+    assert not job.get("raw_text")
+
+
 def test_publish_refuse_un_travail_pas_encore_relu(client):
     reponse = client.post(
         "/api/jobs",

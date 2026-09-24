@@ -117,6 +117,27 @@ def live_state(job_id: str) -> dict | None:
 _RUNNERS = {}  # peuplé plus bas, une fois les fonctions run_* définies
 
 
+def _reject_replacement_characters(segments: list[dict]) -> None:
+    """Refuse une transcription contenant U+FFFD, avant toute persistance.
+
+    Ce caractère signale un texte déjà corrompu en amont (décodage non UTF-8
+    du moteur ou de l'amorce du lexique) : l'original n'est plus
+    récupérable, et le persister ferait passer la corruption pour du texte.
+    """
+    for index, segment in enumerate(segments, start=1):
+        texts = [str(segment.get("text") or "")]
+        texts += [str(word.get("text") or "") for word in segment.get("words") or [] if isinstance(word, dict)]
+        if any("\ufffd" in text for text in texts):
+            start = float(segment.get("start") or 0.0)
+            raise TranscriptionError(
+                "La transcription contient le caractère de remplacement Unicode "
+                f"(U+FFFD) dès le segment {index} ({int(start // 60)}:{int(start % 60):02d}) : "
+                "des caractères accentués ont été perdus par le moteur. Rien "
+                "n'a été enregistré. Si le moteur est le pod RunPod, "
+                "reconstruisez son image puis relancez le travail."
+            )
+
+
 def _loop() -> None:
     while True:
         job_id, task = _queue.get()
@@ -422,6 +443,7 @@ def run_transcription(job_id: str) -> None:
                 "Aucune parole n'a été détectée dans ce fichier. Vérifiez que "
                 "la piste audio n'est pas muette (le WAV extrait est téléchargeable pour contrôle)."
             )
+        _reject_replacement_characters(segments)
         # Le contrôle garde la première passe immuable. Une seconde passe du
         # même moteur/configuration ne vise que les signaux ASR retryables.
         quality_issues = asr_quality.check_segments(segments)
@@ -436,6 +458,7 @@ def run_transcription(job_id: str) -> None:
             should_cancel=lambda: is_cancelled(job_id),
         )
         effective_segments = asr_retry.effective_asr_segments(segments)
+        _reject_replacement_characters(effective_segments)
         review_blocks = db.review_blocks_from_segments(effective_segments)
         # La vue courante utilise l'ASR effectif, mais « Brut » conserve la
         # première passe, y compris quand plusieurs segments sont regroupés.

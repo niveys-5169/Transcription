@@ -1,7 +1,7 @@
 """Contrôle qualité ASR : signalement pur, jamais de réécriture des segments."""
 import copy
 
-from app.proofread.asr_quality import check_segments
+from app.proofread.asr_quality import check_segments, has_repeated_tokens
 
 
 def test_segment_propre_ne_declenche_rien():
@@ -38,3 +38,24 @@ def test_ne_modifie_jamais_les_segments():
     before = copy.deepcopy(segments)
     check_segments(segments)
     assert segments == before
+
+
+def test_boucle_de_phrase_longue_avec_ponctuation_est_signalee():
+    """Forme réelle : l'amorce du lexique recrachée en boucle par Whisper."""
+    boucle = "CRG, Certificat médical de protection des majeurs, " * 4
+    segments = [{"start": 0.0, "end": 20.0, "text": "Exemple que je vous citais ce matin. " + boucle}]
+    assert any(i["issue"] == "boucle_de_tokens" for i in check_segments(segments))
+
+
+def test_boucle_de_groupe_de_quatre_mots_est_signalee():
+    texte = "De protection des majeurs de protection des majeurs de protection des majeurs"
+    assert has_repeated_tokens(texte)
+
+
+def test_reprises_naturelles_ne_sont_pas_des_boucles():
+    for texte in (
+        "Parfois, on l'a. Parfois, on l'a. Et on a vu depuis que le code civil disait que même si la décision",
+        "je pense que oui, je pense que oui, et vous ?",
+        "Œuvre à côté : la tutelle prévoit un certificat médical, ça reste prêt et très sûr.",
+    ):
+        assert not has_repeated_tokens(texte), texte

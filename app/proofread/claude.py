@@ -9,6 +9,7 @@ from ..obsidian import index as vault_index
 from . import prompts
 from .backends import get_backend
 from .base import ProofreadError, ProofreadResult, TextPair
+from .asr_quality import has_repeated_tokens
 from .basic import clean_line, split_paragraph_spans
 from .grounding import grounding_hints
 from .chunking import TextChunk, tail
@@ -153,6 +154,20 @@ class ClaudeProofreader:
             max_tokens=MAX_TOKENS_RELECTURE,
         ).text.strip()
 
+        if "\ufffd" in text:
+            raise ProofreadError(
+                f"Le bloc {chunk.index + 1} relu contient le caractère de "
+                "remplacement Unicode (U+FFFD) : relecture interrompue, la "
+                "transcription précédente est conservée."
+            )
+        # Garde-fou : une boucle de répétition absente du brut signifie que le
+        # modèle a dégénéré ; le nettoyage mécanique, lui, n'invente rien.
+        if has_repeated_tokens(text) and not has_repeated_tokens(chunk.text):
+            logger.warning(
+                "Bloc %s relu en boucle de répétition : repli sur le nettoyage mécanique.",
+                chunk.index + 1,
+            )
+            return clean_line(chunk.text)
         # Garde-fou : une réponse nettement plus courte que l'entrée signifie
         # que le passage a été résumé. On préfère alors le nettoyage mécanique,
         # qui ne perd rien.

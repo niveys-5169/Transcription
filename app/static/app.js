@@ -1526,6 +1526,44 @@ function confidenceClass(score) {
   return score >= 0.6 ? "conf-mid" : "conf-low";
 }
 
+// Même règle que asr_quality.has_repeated_tokens (app/proofread/asr_quality.py) :
+// un groupe de 1 à 3 mots répété 6 fois d'affilée, ou une phrase de 4 à 20
+// mots répétée 3 fois, ponctuation ignorée.
+function repetitionLoop(text) {
+  const words = (String(text || "").toLowerCase().match(/[^\s.,;:!?…«»"()[\]{}]+/g)) || [];
+  for (let size = 1; size <= 20; size += 1) {
+    const repeats = size < 4 ? 6 : 3;
+    if (size * repeats > words.length) continue;
+    let run = 0;
+    for (let i = 0; i + size < words.length; i += 1) {
+      if (words[i] === words[i + size]) {
+        run += 1;
+        if (run >= size * (repeats - 1)) return true;
+      } else {
+        run = 0;
+      }
+    }
+  }
+  return false;
+}
+
+function blockQualityWarnings(text) {
+  const warnings = [];
+  if (String(text || "").includes("\uFFFD")) {
+    warnings.push("Caractères perdus (U+FFFD) : ce passage doit être retranscrit, il ne peut pas être réparé à la main de façon fiable.");
+  }
+  if (repetitionLoop(text)) {
+    warnings.push("Boucle de répétition : le moteur de transcription a probablement bouclé sur ce passage. Réécoutez l'audio et corrigez.");
+  }
+  return warnings;
+}
+
+function renderBlockWarnings(block) {
+  const warnings = blockQualityWarnings(block.text);
+  if (!warnings.length) return "";
+  return `<div class="block-quality-warning" role="alert">${warnings.map((warning) => `<span>⚠ ${escapeHtml(warning)}</span>`).join("")}</div>`;
+}
+
 function renderBlockText(block, index, segments) {
   const edited = isBlockEdited(block, index, segments);
   const cls = edited ? "" : confidenceClass(block.confidence);
@@ -1661,7 +1699,8 @@ function renderBlocks() {
            </div>`
         : renderBlockText(block, index, segments);
       const confidence = confidenceClass(block.confidence);
-      const needsReview = reviewBlockIds.has(block.id);
+      const warnings = renderBlockWarnings(block);
+      const needsReview = reviewBlockIds.has(block.id) || Boolean(warnings);
       const speakerControls = renderSpeakerControls(block);
       const confidenceLabel = block.confidence == null ? "" : `<span class="confidence-badge ${confidence}">${Math.round(block.confidence * 100)} % ${block.confidence < .6 ? "— confiance faible" : block.confidence < .8 ? "— à confirmer" : "— confiance élevée"}</span>`;
       const raw = block.raw_text || (block.source_segment_ids || []).map((id) => {
@@ -1675,7 +1714,7 @@ function renderBlocks() {
         ? `<div class="speaker-turn ${speakerColorClass(block.speaker)}"><span class="speaker-dot"></span><b>${escapeHtml(block.speaker)}</b><span>tour de parole</span></div>` : "";
       return `${groupHeader}<div class="block ${speakerColorClass(block.speaker)} ${confidence}${needsReview ? " needs-review" : ""}${isActive ? " is-active-block" : ""}" data-block-id="${block.id}">
         <time class="block-time${needsReview ? " needs-review" : ""}" data-action="seek" data-id="${block.id}" title="${needsReview ? "Passage à vérifier" : "Aller à cet horodatage"}">${clock(block.start)}</time>
-        <div class="block-body">${speakerControls}${body}${confidenceLabel}${editTools}${rawControl}</div>
+        <div class="block-body">${speakerControls}${body}${warnings}${confidenceLabel}${editTools}${rawControl}</div>
       </div>`;
     }).join("");
   }

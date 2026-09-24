@@ -671,6 +671,7 @@ audio#audio-player { display: block; }
 .word.conf-low { color: var(--danger); }
 .block-edit { width: 100%; min-height: 60px; font: inherit; resize: vertical; }
 .block-edited-badge { font-size: 10.5px; color: var(--ok); margin-left: 6px; font-weight: 600; }
+.block-quality-warning { display: flex; flex-direction: column; gap: 2px; margin: 4px 0 6px; padding: 6px 10px; border-left: 3px solid var(--danger); background: color-mix(in srgb, var(--danger) 12%, transparent); border-radius: 4px; font-size: 12px; color: var(--danger); font-weight: 600; }
 .block-actions { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
 .block-save-status { font-size: 11.5px; color: var(--text-soft); }
 .block-save-status.is-saving { color: var(--warn); }

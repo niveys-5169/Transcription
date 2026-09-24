@@ -348,13 +348,32 @@ def _parse_transcription_request(content_type: str, raw: bytes) -> tuple:
                 for part in message.iter_parts()
             }
             audio = fields["audio"].get_payload(decode=True) or b""
+
+            def text_field(name: str) -> str | None:
+                # ``get_content()`` décode une partie sans ``charset`` en
+                # ASCII avec remplacement : « médical » devenait
+                # « m\ufffd\ufffddical » dans l'amorce du lexique, et Whisper
+                # recrachait ensuite cette amorce corrompue en boucle. Les
+                # clients (httpx, navigateurs) envoient les champs en UTF-8 :
+                # on décode strictement, une erreur rejette la requête.
+                part = fields.get(name)
+                if part is None:
+                    return None
+                return (part.get_payload(decode=True) or b"").decode("utf-8")
+
+            model = text_field("model")
+            language = text_field("language")
+            prompt = text_field("initial_prompt")
+            diarize = text_field("diarize")
             return (
                 base64.b64encode(audio).decode("ascii"),
-                fields.get("model").get_content() if fields.get("model") else "large-v3",
-                fields.get("language").get_content() if fields.get("language") else "auto",
-                fields.get("initial_prompt").get_content() if fields.get("initial_prompt") else None,
-                (fields.get("diarize").get_content().strip().lower() == "true") if fields.get("diarize") else False,
+                model if model is not None else "large-v3",
+                language if language is not None else "auto",
+                prompt or None,
+                (diarize.strip().lower() == "true") if diarize is not None else False,
             )
+        except UnicodeDecodeError as exc:
+            raise _RequeteInvalide(f"champ multipart non UTF-8 : {exc}") from exc
         except (KeyError, ValueError, TypeError) as exc:
             raise _RequeteInvalide(f"multipart invalide : {exc}") from exc
     try:
