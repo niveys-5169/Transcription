@@ -19,6 +19,7 @@ import re
 from dataclasses import dataclass, field
 
 from . import textloc
+from .asr_quality import has_repeated_tokens
 from .contracts import FAITHFUL_PROOFREAD_CONTRACT, ProofreadAcceptanceContract
 from .entity_grounding import check_grounded_lexicon_entities
 from .language_guardrail import check_language_consistency
@@ -210,6 +211,19 @@ def validate_proofread_candidate(
         and bool(raw_acronyms)
         and metrics["altered_acronym_ratio"] > MAX_ALTERED_ACRONYM_RATIO
     )
+
+    # E'. Caractère de remplacement Unicode : un texte déjà corrompu ne doit
+    # jamais remplacer la version précédente (voir AGENTS.md).
+    if "\ufffd" in candidate:
+        reasons.append("replacement_char")
+
+    # E''. Boucle de répétition absente du brut : le modèle a dégénéré. Une
+    # boucle déjà présente dans le brut est un défaut ASR, signalé ailleurs
+    # (asr_quality) et jamais « reconstruit » par la relecture.
+    loop_introduced = has_repeated_tokens(candidate) and not has_repeated_tokens(raw)
+    metrics["repetition_loop_introduced"] = loop_introduced
+    if loop_introduced:
+        reasons.append("repetition_loop")
 
     # G. Artefacts de modèle : signal fort, jamais besoin de corroboration.
     artifacts = detect_model_artifacts(candidate)

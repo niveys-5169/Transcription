@@ -259,3 +259,23 @@ def test_le_sommaire_utilise_le_couple_rapide(relecteur, monkeypatch):
     resultat = relecteur.proofread(_segments(), structure=True)
     assert rapides == [True]
     assert resultat.title == "Titre"
+
+
+def test_un_bloc_relu_avec_u_fffd_interrompt_la_relecture(relecteur, monkeypatch):
+    def faux_complete(*, system, user, max_tokens, schema=None, web_search=False):
+        return BackendResult(text="Le premier principe de la thermodynamique \ufffdnonce la conservation. " * 3)
+
+    monkeypatch.setattr(relecteur.backend, "complete", faux_complete)
+    with pytest.raises(ProofreadError, match="U\\+FFFD"):
+        relecteur.proofread(_segments(1), structure=False)
+
+
+def test_une_boucle_introduite_par_le_modele_declenche_le_repli_mecanique(relecteur, monkeypatch):
+    def faux_complete(*, system, user, max_tokens, schema=None, web_search=False):
+        return BackendResult(text="Certificat médical de protection des majeurs, " * 12)
+
+    monkeypatch.setattr(relecteur.backend, "complete", faux_complete)
+    brut = "Le compte rendu de gestion est remis chaque année au juge des contentieux de la protection."
+    resultat = relecteur.proofread([segment(0, 10, brut)], structure=False)
+    assert "Certificat" not in resultat.text
+    assert "compte rendu de gestion est remis" in resultat.text

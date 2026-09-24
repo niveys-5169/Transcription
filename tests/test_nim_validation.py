@@ -240,3 +240,26 @@ def test_accepte_analyser_une_situation_juridique_sans_metadiscours_editorial():
     )
 
     assert validate_proofread_candidate(raw, candidate).valid is True
+
+
+def test_rejette_un_candidat_contenant_u_fffd():
+    raw = "La tutelle prévoit un certificat médical."
+    result = validate_proofread_candidate(raw, "La tutelle pr\ufffdvoit un certificat m\ufffd\ufffddical.")
+    assert result.valid is False
+    assert "replacement_char" in result.reasons
+
+
+def test_rejette_une_boucle_introduite_par_le_modele():
+    raw = "Le compte rendu de gestion, le CRG, est remis chaque année au juge."
+    candidate = raw + " " + "Le compte rendu de gestion, le CRG, " * 4
+    result = validate_proofread_candidate(raw, candidate)
+    assert result.valid is False
+    assert "repetition_loop" in result.reasons
+
+
+def test_accepte_une_relecture_accentuee_fidele():
+    raw = "oeuvre a cote la tutelle prevoit un certificat medical ca reste pret et tres sur"
+    candidate = "Œuvre à côté : la tutelle prévoit un certificat médical, ça reste prêt et très sûr."
+    result = validate_proofread_candidate(raw, candidate)
+    assert "replacement_char" not in result.reasons
+    assert "repetition_loop" not in result.reasons

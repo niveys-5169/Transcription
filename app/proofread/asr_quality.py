@@ -31,8 +31,46 @@ LONG_SEGMENT_DURATION_THRESHOLD = 45.0
 # d'occurrences consécutives est caractéristique d'une boucle de tokens.
 REPEAT_THRESHOLD = 6
 
+# Une boucle peut aussi porter sur une phrase entière, ponctuation comprise
+# (« CRG, Certificat médical de protection des majeurs, CRG, Certificat… »,
+# typiquement l'amorce ``initial_prompt`` recrachée par Whisper). À partir de
+# LONG_PHRASE_MIN_WORDS mots, trois occurrences consécutives suffisent : une
+# phrase aussi longue répétée trois fois d'affilée n'est jamais du discours
+# naturel, contrairement à « oui oui » ou « non, non, non ». Même règle côté
+# interface (``repetitionLoop`` dans app/static/app.js).
+LONG_PHRASE_MIN_WORDS = 4
+LONG_PHRASE_MAX_WORDS = 20
+LONG_PHRASE_REPEAT_THRESHOLD = 3
+
 _UNK_RE = re.compile(r"<unk>|\[unk\]|\bunk\b", re.IGNORECASE)
-_REPEAT_RE = re.compile(r"\b(\w+(?:\s+\w+){0,2})\b(?:\s+\1\b){" + str(REPEAT_THRESHOLD - 1) + r",}", re.IGNORECASE)
+# Un « mot » pour la détection de boucle : toute suite hors espaces et hors
+# ponctuation courante. U+FFFD y reste un caractère de mot, pour qu'un texte
+# déjà corrompu (« m\ufffd\ufffddicale ») soit encore reconnu comme bouclant.
+_LOOP_WORD_RE = re.compile(r"[^\s.,;:!?…«»\"()\[\]{}]+")
+
+
+def _loop_words(text: str) -> list[str]:
+    return [word.lower() for word in _LOOP_WORD_RE.findall(text or "")]
+
+
+def _has_repetition_loop(text: str) -> bool:
+    words = _loop_words(text)
+    total = len(words)
+    for size in range(1, LONG_PHRASE_MAX_WORDS + 1):
+        repeats = REPEAT_THRESHOLD if size < LONG_PHRASE_MIN_WORDS else LONG_PHRASE_REPEAT_THRESHOLD
+        if size * repeats > total:
+            continue
+        # Plus longue suite où words[i] == words[i + size] : size·(n-1)
+        # égalités d'affilée = n occurrences consécutives du même groupe.
+        run = 0
+        for index in range(total - size):
+            if words[index] == words[index + size]:
+                run += 1
+                if run >= size * (repeats - 1):
+                    return True
+            else:
+                run = 0
+    return False
 
 
 def _unk_ratio(text: str) -> float:
@@ -50,7 +88,7 @@ def unk_ratio(text: str) -> float:
 
 def has_repeated_tokens(text: str) -> bool:
     """Vrai pour la même boucle massive que celle signalée par le contrôle."""
-    return bool(_REPEAT_RE.search(text.strip()))
+    return _has_repetition_loop(text)
 
 
 def repeat_score(text: str) -> float:
@@ -95,7 +133,7 @@ def check_segments(segments: list[dict]) -> list[dict]:
                 "detail": f"{unk_ratio:.0%} de tokens <unk> sur ce segment.",
             })
 
-        if _REPEAT_RE.search(stripped):
+        if has_repeated_tokens(stripped):
             issues.append({
                 "segment_index": index, "start": start, "end": end,
                 "issue": "boucle_de_tokens",
