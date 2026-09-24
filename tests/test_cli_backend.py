@@ -571,6 +571,49 @@ def test_sans_recherche_web_pas_de_budget_annonce(backend, monkeypatch):
     assert captured["cmd"][captured["cmd"].index("--system-prompt") + 1] == "s"
 
 
+def test_recherches_paralleles_vont_a_leur_terme_puis_synthese_sans_outil(monkeypatch):
+    # Cas réel : plafond 1, deux recherches lancées d'un coup, puis une
+    # troisième. Avant, le processus était tué dès la deuxième, sans aucun
+    # résultat, et chaque relance échouait à l'identique.
+    monkeypatch.setattr("shutil.which", lambda name: "/usr/local/bin/claude")
+    instance = CliBackend(Settings(claude_backend="cli", factcheck_max_searches=1))
+    _make_available(monkeypatch)
+    phrase = "Le curateur a vérifié : élève, fenêtre, à côté, garçon, cœur."
+    first = _FakeProcess(_stream(
+        _assistant(tool_use={"id": "tool_1", "name": "WebSearch"}),
+        _assistant(tool_use={"id": "tool_2", "name": "WebSearch"}),
+        _tool_result("tool_1", "Légifrance https://example.org/a élève"),
+        _tool_result("tool_2", "https://example.org/b cœur"),
+        _assistant("Je cherche encore…", tool_use={"id": "tool_3", "name": "WebSearch"}),
+        _result("jamais lu : le processus est tué avant"),
+    ))
+    answer = json.dumps({"verdict": "confirme", "explication": phrase}, ensure_ascii=False)
+    second = _FakeProcess(_stream(_result(answer)))
+    sent = []
+    second.stdin.close = lambda: sent.append(second.stdin.getvalue())
+    calls = []
+
+    def fake_popen(cmd, **kwargs):
+        calls.append(cmd)
+        return [first, second][len(calls) - 1]
+
+    monkeypatch.setattr("subprocess.Popen", fake_popen)
+    result = instance.complete(
+        system="s", user="u", max_tokens=100, web_search=True, schema={"type": "object"}
+    )
+
+    assert first.killed
+    assert len(calls) == 2
+    # Le second passage n'a aucun outil et reçoit les résultats obtenus.
+    assert calls[1][calls[1].index("--tools") + 1] == ""
+    assert "--allowedTools" not in calls[1]
+    assert "élève" in sent[0] and "cœur" in sent[0]
+    assert result.parsed["explication"] == phrase
+    assert "�" not in result.text
+    assert result.web_searches == 3
+    assert result.sources == ["https://example.org/a", "https://example.org/b"]
+
+
 def test_un_appel_repete_dans_le_flux_n_est_compte_qu_une_fois(monkeypatch):
     monkeypatch.setattr("shutil.which", lambda name: "/usr/local/bin/claude")
     instance = CliBackend(Settings(claude_backend="cli", factcheck_max_searches=1))
