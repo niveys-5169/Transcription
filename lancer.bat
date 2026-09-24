@@ -33,6 +33,37 @@ if not defined PYTHON (
 )
 echo   Python detecte : !PYTHON!
 
+rem --- Mise a jour du code -----------------------------------------------
+rem  Si ce dossier est un clone git, on recupere la derniere version avant
+rem  de demarrer : plus besoin de recompiler l'exe a chaque changement.
+rem  Un echec (hors ligne, modifications locales en conflit) n'empeche pas
+rem  le lancement : on demarre simplement la version deja presente.
+if exist ".git" (
+  where git >nul 2>&1
+  if errorlevel 1 (
+    echo   [i] git introuvable : mise a jour automatique ignoree.
+  ) else (
+    echo   Recherche de mises a jour...
+    git pull --ff-only
+    if errorlevel 1 (
+      echo   [~] Mise a jour impossible, lancement de la version actuelle.
+    )
+  )
+)
+
+rem --- Dossier de donnees -------------------------------------------------
+rem  L'exe range ses donnees dans %LOCALAPPDATA%\Transcription, le mode
+rem  source dans .\data. Si seul l'exe a deja servi sur cette machine, on
+rem  reutilise ses donnees pour retrouver la meme bibliotheque.
+if not defined TRANSCRIPTION_DATA_DIR (
+  if not exist "data\transcription.db" (
+    if exist "%LOCALAPPDATA%\Transcription\transcription.db" (
+      set "TRANSCRIPTION_DATA_DIR=%LOCALAPPDATA%\Transcription"
+      echo   Donnees de l'application Windows : %LOCALAPPDATA%\Transcription
+    )
+  )
+)
+
 rem --- Environnement isole ----------------------------------------------
 set "VENV_PY=.venv\Scripts\python.exe"
 if not exist "%VENV_PY%" (
@@ -46,7 +77,17 @@ if not exist "%VENV_PY%" (
 )
 
 rem --- Dependances -------------------------------------------------------
-if not exist ".venv\.dependances-ok" (
+rem  On garde une copie du requirements-app.txt installe : si une mise a
+rem  jour le modifie, les dependances sont reinstallees automatiquement.
+set "DEPS_MARKER=.venv\.requirements-installees.txt"
+set "DEPS_TO_INSTALL="
+if not exist "%DEPS_MARKER%" (
+  set "DEPS_TO_INSTALL=1"
+) else (
+  fc /b requirements-app.txt "%DEPS_MARKER%" >nul 2>&1
+  if errorlevel 1 set "DEPS_TO_INSTALL=1"
+)
+if defined DEPS_TO_INSTALL (
   echo   Installation des dependances ^(quelques minutes la premiere fois^)...
   "%VENV_PY%" -m pip install --upgrade pip --quiet
   "%VENV_PY%" -m pip install -r requirements-app.txt
@@ -56,13 +97,37 @@ if not exist ".venv\.dependances-ok" (
     pause
     exit /b 1
   )
-  echo ok> ".venv\.dependances-ok"
+  copy /y requirements-app.txt "%DEPS_MARKER%" >nul
 )
 
 rem --- Lancement ---------------------------------------------------------
+rem  Sans argument : comme l'exe, icone dans la barre systeme et pas de
+rem  console (desktop.py sous pythonw). Avec des arguments, ou --console :
+rem  serveur dans cette fenetre (run.py), pour le developpement.
+if "%~1"=="" goto desktop
+if /i "%~1"=="--console" shift
+goto console
+
+:desktop
+rem  pythonw n'affiche aucune erreur : on verifie d'abord ici que
+rem  l'application s'importe, pour qu'un probleme reste visible.
+"%VENV_PY%" -c "import app.desktop"
+if errorlevel 1 (
+  echo.
+  echo   [X] L'application ne peut pas demarrer ^(voir l'erreur ci-dessus^).
+  pause
+  exit /b 1
+)
+echo   Demarrage : l'application s'ouvre dans le navigateur,
+echo   l'icone "Transcription de cours" est dans la barre systeme.
+start "" ".venv\Scripts\pythonw.exe" desktop.py
+endlocal
+exit /b 0
+
+:console
 echo   Demarrage du serveur...
 echo.
-"%VENV_PY%" run.py %*
+"%VENV_PY%" run.py %1 %2 %3 %4 %5 %6 %7 %8 %9
 if errorlevel 1 (
   echo.
   echo   [X] L'application s'est arretee sur une erreur.

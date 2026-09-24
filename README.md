@@ -74,6 +74,13 @@ Le premier lancement crée un environnement Python isolé et installe les
 dépendances (quelques minutes). Les suivants démarrent en quelques secondes.
 Le navigateur s'ouvre sur <http://127.0.0.1:8765>.
 
+Sous Windows, `lancer.bat` démarre l'application comme l'exe : la fenêtre
+de lancement se ferme, et l'icône **Transcription de cours** dans la barre
+système permet de rouvrir l'application, de voir les logs ou de quitter.
+`lancer.bat --console` (ou toute autre option de `run.py`, par exemple
+`lancer.bat --port 9000`) garde au contraire le serveur dans la console, pour
+le développement.
+
 Il faut Python 3.10 ou plus récent. Rien d'autre : **ffmpeg est installé
 automatiquement** avec les dépendances, il n'y a pas d'installation système à
 faire.
@@ -92,6 +99,29 @@ Options : `--port 9000`, `--host 0.0.0.0` (accès depuis le réseau local),
 le lanceur choisit automatiquement le premier port libre suivant et affiche
 l'URL réellement utilisée.
 </details>
+
+### Toujours à jour, sans recompiler
+
+Sur votre propre PC, le plus rapide est de lancer l'application depuis un
+clone git plutôt que depuis l'exe :
+
+```bash
+git clone https://github.com/niveys-5169/Transcription.git
+```
+
+puis de double-cliquer sur `lancer.bat` (ou `./lancer.sh`). À chaque
+lancement, le script exécute `git pull --ff-only` : un changement poussé sur
+la branche en cours est disponible au démarrage suivant, sans attendre la
+compilation de l'exe. Si `requirements-app.txt` a changé, les dépendances sont
+réinstallées automatiquement. Hors ligne, ou si des modifications locales
+bloquent la mise à jour, l'application démarre simplement sur la version
+présente.
+
+Si l'exe a déjà servi sur cette machine et qu'aucun `data\transcription.db`
+n'existe à côté du script, `lancer.bat` reprend les données de l'exe
+(`%LOCALAPPDATA%\Transcription`) : bibliothèque, réglages et clés API sont
+conservés. La variable `TRANSCRIPTION_DATA_DIR` permet de choisir un autre
+dossier.
 
 ## Application Windows (sans installer Python)
 
