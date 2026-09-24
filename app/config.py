@@ -6,8 +6,10 @@ Les réglages viennent de trois sources, par priorité décroissante :
 2. le fichier ``data/config.json`` (écrit par l'écran Réglages de l'app) ;
 3. les valeurs par défaut ci-dessous.
 
-Les clés API (RunPod, Anthropic) ne quittent jamais la machine : elles sont
-stockées dans ``data/config.json``, qui est exclu du dépôt par ``.gitignore``.
+Les clés API (RunPod, Anthropic, NVIDIA, Hugging Face) ne quittent jamais la
+machine : elles sont stockées dans ``secrets.json`` (voir ``SECRETS_PATH``),
+commun à l'exe et à ``lancer.bat`` sous Windows, avec une copie dans
+``config.json`` ; ni l'un ni l'autre n'est versionné.
 """
 from __future__ import annotations
 
@@ -29,15 +31,35 @@ def _default_data_dir() -> Path:
     (développement), on garde ``./data`` à côté du dépôt.
     """
     if getattr(sys, "frozen", False):
-        local_app_data = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
-        return Path(local_app_data) / "Transcription"
+        return Path(_localappdata_root()) / "Transcription"
     return Path.cwd() / "data"
+
+
+def _localappdata_root() -> str:
+    return os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
 
 
 # Racine des données : médias extraits, base SQLite, config.
 DATA_DIR = Path(os.environ.get("TRANSCRIPTION_DATA_DIR", _default_data_dir())).resolve()
 MEDIA_DIR = DATA_DIR / "media"
 CONFIG_PATH = DATA_DIR / "config.json"
+
+
+def _default_secrets_path() -> Path:
+    """Fichier des clés API, commun à l'exe et au lancement depuis le code.
+
+    L'exe range ses données dans ``%LOCALAPPDATA%\\Transcription`` et
+    ``lancer.bat`` dans ``data\\`` : deux ``config.json`` distincts. Les clés,
+    elles, doivent être saisies une seule fois pour la machine — d'où un
+    fichier à part, toujours au même endroit sous Windows, quel que soit le
+    dossier de données. Ailleurs (pas d'exe), il reste dans ce dossier.
+    """
+    if sys.platform == "win32":
+        return Path(_localappdata_root()) / "Transcription" / "secrets.json"
+    return DATA_DIR / "secrets.json"
+
+
+SECRETS_PATH = Path(os.environ.get("TRANSCRIPTION_SECRETS_PATH") or _default_secrets_path()).resolve()
 DB_PATH = DATA_DIR / "transcription.db"
 # Un .md finalisé par cours (relu, vérifié ou publié) : la matière première du
 # Doc maître NotebookLM (voir app/notebooklm_sync.py). Indépendant du coffre
@@ -343,6 +365,11 @@ def load_settings(refresh: bool = False) -> Settings:
                 if key in known and value is not None:
                     setattr(settings, key, value)
 
+        # Les clés partagées priment : c'est la dernière saisie, où qu'elle
+        # ait été faite (exe ou lancer.bat).
+        for key, value in _load_shared_secrets().items():
+            setattr(settings, key, value)
+
         _settings = _from_env(settings)
         return _settings
 
@@ -365,12 +392,14 @@ def save_settings(updates: dict) -> Settings:
             for key, old_value in old_defaults.items():
                 if updates.get(key, getattr(settings, key)) == old_value:
                     updates = {**updates, key: new_defaults[key]}
+        cleared: set[str] = set()
         for key, value in updates.items():
             if key not in known:
                 continue
             if key in SECRET_FIELDS:
                 if value == "__clear__":
                     setattr(settings, key, "")
+                    cleared.add(key)
                 elif value:
                     setattr(settings, key, str(value).strip())
                 continue
@@ -385,19 +414,69 @@ def save_settings(updates: dict) -> Settings:
             else:
                 setattr(settings, key, value)
 
-        CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-        tmp = CONFIG_PATH.with_suffix(".json.tmp")
-        tmp.write_text(
-            json.dumps(asdict(settings), indent=2, ensure_ascii=False), encoding="utf-8"
-        )
-        tmp.replace(CONFIG_PATH)
-        # Restreindre les permissions : le fichier contient des clés API.
-        try:
-            CONFIG_PATH.chmod(0o600)
-        except OSError:
-            pass  # Sans effet sur Windows, sans conséquence.
+        # config.json garde aussi une copie des clés, pour qu'une ancienne
+        # version de l'exe les retrouve ; le fichier partagé fait foi.
+        _write_private_json(CONFIG_PATH, asdict(settings))
+        # Une clé vide n'est écrite que si elle a été effacée : un simple
+        # enregistrement sans cette clé ne doit pas bloquer sa reprise depuis
+        # l'autre installation (voir _load_shared_secrets).
+        shared = {key: value for key, value in _read_json(SECRETS_PATH).items() if key in SECRET_FIELDS}
+        for key in SECRET_FIELDS:
+            if getattr(settings, key) or key in cleared:
+                shared[key] = getattr(settings, key)
+        _write_private_json(SECRETS_PATH, dict(sorted(shared.items())))
 
     return settings
+
+
+def _write_private_json(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    tmp.replace(path)
+    # Restreindre les permissions : le fichier contient des clés API.
+    try:
+        path.chmod(0o600)
+    except OSError:
+        pass  # Sans effet sur Windows, sans conséquence.
+
+
+def _read_json(path: Path) -> dict:
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return {}
+    return raw if isinstance(raw, dict) else {}
+
+
+def _load_shared_secrets() -> dict[str, str]:
+    """Clés du fichier partagé, complétées une fois depuis les anciens emplacements.
+
+    Une clé absente du fichier partagé est reprise du ``config.json`` du
+    dossier de données courant, sinon de celui de l'exe — là où elle avait
+    été saisie avant ce fichier commun. Une clé présente mais vide (effacée
+    volontairement) n'est jamais réimportée.
+    """
+    shared = _read_json(SECRETS_PATH)
+    secrets = {key: str(value) for key, value in shared.items()
+               if key in SECRET_FIELDS and value is not None}
+    legacy_sources = [CONFIG_PATH]
+    if sys.platform == "win32":
+        legacy_sources.append(Path(_localappdata_root()) / "Transcription" / "config.json")
+    imported = False
+    for source in legacy_sources:
+        raw = _read_json(source)
+        for key in SECRET_FIELDS - secrets.keys():
+            value = str(raw.get(key) or "").strip()
+            if value:
+                secrets[key] = value
+                imported = True
+    if imported:
+        try:
+            _write_private_json(SECRETS_PATH, dict(sorted(secrets.items())))
+        except OSError:
+            pass  # Relu depuis config.json au prochain démarrage.
+    return secrets
 
 
 def ensure_dirs() -> None:

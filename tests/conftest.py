@@ -16,6 +16,9 @@ import pytest
 
 _TMP_DATA = Path(tempfile.mkdtemp(prefix="transcription-tests-"))
 os.environ["TRANSCRIPTION_DATA_DIR"] = str(_TMP_DATA)
+# Les clés partagées vivent hors du dossier de données sous Windows : ne
+# jamais lire ni écrire celles de la machine qui lance la suite.
+os.environ["TRANSCRIPTION_SECRETS_PATH"] = str(_TMP_DATA / "secrets.json")
 # Ne pas laisser une vraie clé de l'environnement déclencher des appels réseau.
 os.environ.pop("ANTHROPIC_API_KEY", None)
 os.environ.pop("RUNPOD_API_KEY", None)
