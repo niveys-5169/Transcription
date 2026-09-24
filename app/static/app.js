@@ -2924,7 +2924,8 @@ function initActions() {
   $("verify-lexicon-all").addEventListener("click", async () => {
     const queued = new Set(state.lexiconVerification?.en_file || []);
     const count = state.lexiconTerms.filter((term) => !term.verifie && !queued.has(term.terme)).length;
-    if (!count || !window.confirm(`Cette opération peut effectuer jusqu'à ${count} recherches web et entamer votre quota d'abonnement. Continuer ?`)) return;
+    const perTerm = Number(state.settings?.factcheck_max_searches) || 8;
+    if (!count || !window.confirm(`Cette opération vérifie ${count} terme(s), avec jusqu'à ${perTerm} recherche(s) web chacun (${count * perTerm} au plus), et peut entamer votre quota d'abonnement. Continuer ?`)) return;
     try {
       await api("/api/lexicon/verification", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
       await pollLexiconVerification();

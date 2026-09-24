@@ -535,3 +535,55 @@ def test_sous_le_plafond_rien_ne_change(backend, monkeypatch):
     result = backend.complete(system="s", user="u", max_tokens=100, web_search=True)
     assert result.text == "réponse finale"
     assert result.web_searches == 1
+
+
+def test_le_plafond_est_annonce_au_modele(monkeypatch):
+    # Sans cette annonce, le modèle ignore le plafond, lance plusieurs
+    # recherches d'un coup et se fait tuer avant toute réponse.
+    monkeypatch.setattr("shutil.which", lambda name: "/usr/local/bin/claude")
+    instance = CliBackend(Settings(claude_backend="cli", factcheck_max_searches=1))
+    _make_available(monkeypatch)
+    captured = {}
+
+    def fake_popen(cmd, **kwargs):
+        captured["cmd"] = cmd
+        return _FakeProcess(_stream(_result("ok")))
+
+    monkeypatch.setattr("subprocess.Popen", fake_popen)
+    instance.complete(system="Vérifie l'élève, très à cœur ça.", user="u", max_tokens=100, web_search=True)
+
+    system = captured["cmd"][captured["cmd"].index("--system-prompt") + 1]
+    assert system.startswith("Vérifie l'élève, très à cœur ça.")
+    assert "au plus 1 recherche(s) web" in system
+    assert "�" not in system
+
+
+def test_sans_recherche_web_pas_de_budget_annonce(backend, monkeypatch):
+    _make_available(monkeypatch)
+    captured = {}
+
+    def fake_popen(cmd, **kwargs):
+        captured["cmd"] = cmd
+        return _FakeProcess(_stream(_result("ok")))
+
+    monkeypatch.setattr("subprocess.Popen", fake_popen)
+    backend.complete(system="s", user="u", max_tokens=100)
+    assert captured["cmd"][captured["cmd"].index("--system-prompt") + 1] == "s"
+
+
+def test_un_appel_repete_dans_le_flux_n_est_compte_qu_une_fois(monkeypatch):
+    monkeypatch.setattr("shutil.which", lambda name: "/usr/local/bin/claude")
+    instance = CliBackend(Settings(claude_backend="cli", factcheck_max_searches=1))
+    _make_available(monkeypatch)
+    events = _stream(
+        _assistant(tool_use={"id": "tool_1", "name": "WebSearch"}),
+        _assistant(tool_use={"id": "tool_1", "name": "WebSearch"}),
+        _tool_result("tool_1", "https://example.org/a"),
+        _assistant("À vérifier : élève, fenêtre, à côté, garçon, cœur."),
+        _result("À vérifier : élève, fenêtre, à côté, garçon, cœur."),
+    )
+    monkeypatch.setattr("subprocess.Popen", lambda cmd, **k: _FakeProcess(events))
+
+    result = instance.complete(system="s", user="u", max_tokens=100, web_search=True)
+    assert result.web_searches == 1
+    assert result.text == "À vérifier : élève, fenêtre, à côté, garçon, cœur."
