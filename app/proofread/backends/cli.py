@@ -173,6 +173,19 @@ class CliBackend:
     ) -> list[str]:
         model = self.settings.proofread_model_fast if fast else self.settings.proofread_model
         effort = self.settings.proofread_effort_fast if fast else self.settings.proofread_effort
+        search_cap = self.settings.factcheck_max_searches
+        if web_search and search_cap:
+            # Le plafond est appliqué en tuant le processus (voir ``_run``) :
+            # sans l'annoncer, le modèle lance volontiers plusieurs
+            # recherches, parfois en parallèle, et se fait couper avant toute
+            # réponse. Côté API, ``max_uses`` joue ce rôle d'avertissement.
+            system = (
+                f"{system}\n\nBudget : au plus {search_cap} recherche(s) web "
+                "au total pour cette réponse, jamais plusieurs à la fois. "
+                "Une fois ce budget épuisé, réponds avec ce que tu as trouvé : "
+                "toute recherche supplémentaire interrompt la vérification "
+                "sans résultat."
+            )
         cmd = [
             exe,
             "--print",
@@ -285,8 +298,11 @@ class CliBackend:
                     if text:
                         last_assistant_text = text
                     for tool_id in ids:
-                        websearch_tool_ids.add(tool_id)
-                        web_searches += 1
+                        # Un même appel peut réapparaître dans le flux : ne
+                        # compter que les identifiants nouveaux.
+                        if tool_id not in websearch_tool_ids:
+                            websearch_tool_ids.add(tool_id)
+                            web_searches += 1
                     if web_search and search_cap and web_searches > search_cap:
                         # Le plafond est franchi : tuer le processus tout de
                         # suite plutôt que d'attendre une recherche de plus,
