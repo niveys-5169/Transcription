@@ -74,6 +74,13 @@ Le premier lancement crée un environnement Python isolé et installe les
 dépendances (quelques minutes). Les suivants démarrent en quelques secondes.
 Le navigateur s'ouvre sur <http://127.0.0.1:8765>.
 
+Sous Windows, `lancer.bat` démarre l'application comme l'exe : la fenêtre
+de lancement se ferme, et l'icône **Transcription de cours** dans la barre
+système permet de rouvrir l'application, de voir les logs ou de quitter.
+`lancer.bat --console` (ou toute autre option de `run.py`, par exemple
+`lancer.bat --port 9000`) garde au contraire le serveur dans la console, pour
+le développement.
+
 Il faut Python 3.10 ou plus récent. Rien d'autre : **ffmpeg est installé
 automatiquement** avec les dépendances, il n'y a pas d'installation système à
 faire.

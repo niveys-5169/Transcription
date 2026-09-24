@@ -101,9 +101,33 @@ if defined DEPS_TO_INSTALL (
 )
 
 rem --- Lancement ---------------------------------------------------------
+rem  Sans argument : comme l'exe, icone dans la barre systeme et pas de
+rem  console (desktop.py sous pythonw). Avec des arguments, ou --console :
+rem  serveur dans cette fenetre (run.py), pour le developpement.
+if "%~1"=="" goto desktop
+if /i "%~1"=="--console" shift
+goto console
+
+:desktop
+rem  pythonw n'affiche aucune erreur : on verifie d'abord ici que
+rem  l'application s'importe, pour qu'un probleme reste visible.
+"%VENV_PY%" -c "import app.desktop"
+if errorlevel 1 (
+  echo.
+  echo   [X] L'application ne peut pas demarrer ^(voir l'erreur ci-dessus^).
+  pause
+  exit /b 1
+)
+echo   Demarrage : l'application s'ouvre dans le navigateur,
+echo   l'icone "Transcription de cours" est dans la barre systeme.
+start "" ".venv\Scripts\pythonw.exe" desktop.py
+endlocal
+exit /b 0
+
+:console
 echo   Demarrage du serveur...
 echo.
-"%VENV_PY%" run.py %*
+"%VENV_PY%" run.py %1 %2 %3 %4 %5 %6 %7 %8 %9
 if errorlevel 1 (
   echo.
   echo   [X] L'application s'est arretee sur une erreur.
