@@ -669,9 +669,12 @@ function renderLexicon() {
   const renderTerm = (term) => {
         // Une entrée devenue fiable ne doit plus afficher une ancienne
         // proposition issue de sa vérification initiale.
-        const proposal = term.verifie ? null : proposals.get(term.terme);
+        const stored = term.verifie ? null : proposals.get(term.terme);
         // Un verdict « erreur » est un échec technique (CLI muet, quota,
         // délai…), pas une proposition : rien à valider, seulement à relancer.
+        // Pendant la relance, l'ancien échec n'est plus d'actualité : le
+        // laisser affiché ferait croire que la relance n'a rien changé.
+        const proposal = stored?.verdict === "erreur" && queued.has(term.terme) ? null : stored;
         const proposalFailed = proposal?.verdict === "erreur";
         const sources = (term.sources || []).filter((source) => /^https?:\/\//i.test(source.url || ""));
         const proposalSources = (proposal?.sources || []).filter((source) => /^https?:\/\//i.test(source.url || ""));

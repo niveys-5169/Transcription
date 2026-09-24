@@ -61,6 +61,11 @@ FAST_CALL_TIMEOUT_SECONDS = 180
 
 _URL_RE = re.compile(r"https?://[^\s\)\]\"'>]+")
 
+# Bornes des résultats de recherche repassés au second passage (voir
+# ``CliBackend._synthesize``) : de quoi conclure, sans gonfler l'invite.
+_SYNTHESIS_EXCERPT_CHARS = 6000
+_SYNTHESIS_TOTAL_CHARS = 24000
+
 # Motifs qui trahissent une limite d'usage de l'abonnement atteinte, à
 # distinguer de toute autre erreur : voir QuotaExhausted plus bas.
 _QUOTA_PATTERNS = (
@@ -79,6 +84,20 @@ class QuotaExhausted(ProofreadError):
     premier lieu — ne confondent jamais « je n'ai pas pu vérifier » avec
     « c'est vérifié ». Voir ``factcheck.py:apply_verdicts``.
     """
+
+
+class _CappedWithoutAnswer(Exception):
+    """Plafond de recherches atteint avant toute réponse exploitable.
+
+    Porte les résultats de recherche déjà reçus, que ``CliBackend.complete``
+    fait synthétiser par un second passage sans outil.
+    """
+
+    def __init__(self, results: list[str], web_searches: int, sources: list[str]):
+        super().__init__("plafond de recherches web atteint sans réponse")
+        self.results = results
+        self.web_searches = web_searches
+        self.sources = sources
 
 
 class CliBackend:
@@ -166,7 +185,44 @@ class CliBackend:
             timeout = FAST_CALL_TIMEOUT_SECONDS
         else:
             timeout = CALL_TIMEOUT_SECONDS
-        return self._run(cmd, user, schema, timeout=timeout, web_search=web_search)
+        try:
+            return self._run(cmd, user, schema, timeout=timeout, web_search=web_search)
+        except _CappedWithoutAnswer as capped:
+            return self._synthesize(exe, system=system, user=user, schema=schema, capped=capped)
+
+    def _synthesize(
+        self, exe: str, *, system: str, user: str, schema: dict | None, capped: "_CappedWithoutAnswer"
+    ) -> BackendResult:
+        """Second passage, sans outil, sur les résultats déjà obtenus.
+
+        Le processus tué au plafond ne peut pas être repris (aucune
+        persistance de session) : sans ce passage, la même affirmation
+        échouerait de la même façon à chaque relance. Les recherches ont
+        bien eu lieu — leur nombre et leurs URL sont reportés tels quels,
+        le garde-fou de ``factcheck._coerce_verdict`` reste donc fondé.
+        """
+        logger.info(
+            "Synthèse sans outil sur %d résultat(s) de recherche web après le plafond.",
+            len(capped.results),
+        )
+        excerpts = "\n\n".join(
+            f"[Résultat {i}]\n{text[:_SYNTHESIS_EXCERPT_CHARS]}"
+            for i, text in enumerate(capped.results, 1)
+        )[:_SYNTHESIS_TOTAL_CHARS]
+        synthesis_system = (
+            f"{system}\n\nLe budget de recherche web est épuisé : aucune "
+            "recherche supplémentaire n'est possible. Réponds uniquement à "
+            "partir des résultats de recherche fournis ; ce qu'ils ne "
+            "permettent pas d'établir reste incertain."
+        )
+        synthesis_user = (
+            f"{user}\n\nRésultats des recherches web déjà effectuées :\n\n{excerpts}"
+        )
+        cmd = self._build_command(exe, system=synthesis_system, schema=schema, web_search=False)
+        result = self._run(cmd, synthesis_user, schema, timeout=CALL_TIMEOUT_SECONDS)
+        result.web_searches = capped.web_searches
+        result.sources = list(dict.fromkeys([*capped.sources, *result.sources]))
+        return result
 
     def _build_command(
         self, exe: str, *, system: str, schema: dict | None, web_search: bool, fast: bool = False
@@ -267,6 +323,12 @@ class CliBackend:
         # ci-dessus (``threading.Event`` + ``process.kill()``) : chaque
         # recherche web constatée dans le flux incrémente le compteur, et le
         # dépassement du plafond tue le processus sur-le-champ.
+        #
+        # Seule une *nouvelle* salve de recherches, lancée alors que le
+        # plafond est déjà atteint, déclenche l'arrêt : des recherches émises
+        # d'un même coup (en parallèle) vont à leur terme, quitte à dépasser
+        # le plafond de cette salve. Les tuer au milieu ne laissait aucun
+        # résultat exploitable, et la relance échouait à l'identique.
         search_cap = self.settings.factcheck_max_searches
         capped = threading.Event()
 
@@ -280,7 +342,11 @@ class CliBackend:
         last_assistant_text = ""
         web_searches = 0
         sources: list[str] = []
+        search_results: list[str] = []
         websearch_tool_ids: set[str] = set()
+        # Nombre de recherches déjà lancées au début de la salve en cours ;
+        # ``None`` tant qu'aucune salve n'est ouverte (fermée par un résultat).
+        batch_start: int | None = None
 
         try:
             for line in process.stdout:
@@ -301,16 +367,26 @@ class CliBackend:
                         # Un même appel peut réapparaître dans le flux : ne
                         # compter que les identifiants nouveaux.
                         if tool_id not in websearch_tool_ids:
+                            if batch_start is None:
+                                batch_start = web_searches
                             websearch_tool_ids.add(tool_id)
                             web_searches += 1
-                    if web_search and search_cap and web_searches > search_cap:
-                        # Le plafond est franchi : tuer le processus tout de
-                        # suite plutôt que d'attendre une recherche de plus,
-                        # potentiellement longue.
+                    if (
+                        web_search and search_cap and batch_start is not None
+                        and batch_start >= search_cap
+                    ):
+                        # Le plafond était atteint avant cette salve : tuer
+                        # le processus tout de suite plutôt que d'attendre
+                        # une recherche de plus, potentiellement longue.
                         capped.set()
                         process.kill()
+                        break
                 elif event_type == "user":
-                    sources.extend(_scan_tool_results(event, websearch_tool_ids))
+                    urls, texts = _scan_tool_results(event, websearch_tool_ids)
+                    sources.extend(urls)
+                    search_results.extend(texts)
+                    if texts:
+                        batch_start = None
                 elif event_type == "result":
                     result_event = event
         except UnicodeDecodeError as exc:
@@ -340,6 +416,16 @@ class CliBackend:
             raise ProofreadError(
                 "Le CLI « claude » n'a pas répondu dans le délai imparti."
             )
+
+        if capped.is_set() and result_event is None and search_results:
+            # Arrêté au plafond sans réponse exploitable, mais avec des
+            # résultats de recherche en main : ``complete`` les fait
+            # synthétiser par un second passage sans outil.
+            usable = bool(last_assistant_text) and (
+                schema is None or _parse_schema(last_assistant_text, schema) is not None
+            )
+            if not usable:
+                raise _CappedWithoutAnswer(search_results, web_searches, sources)
 
         if result_event is None:
             # Rien d'exploitable n'est jamais arrivé sur stdout — repli sur le
@@ -411,11 +497,12 @@ def _scan_assistant(event: dict) -> tuple[str, list[str]]:
     return "".join(text_parts), tool_ids
 
 
-def _scan_tool_results(event: dict, websearch_ids: set[str]) -> list[str]:
-    """URLs trouvées dans les résultats des appels à WebSearch de ``websearch_ids``."""
+def _scan_tool_results(event: dict, websearch_ids: set[str]) -> tuple[list[str], list[str]]:
+    """URLs et textes des résultats des appels à WebSearch de ``websearch_ids``."""
     message = event.get("message") or {}
     content = message.get("content") or []
     urls: list[str] = []
+    texts: list[str] = []
     for block in content:
         if not isinstance(block, dict) or block.get("type") != "tool_result":
             continue
@@ -424,8 +511,9 @@ def _scan_tool_results(event: dict, websearch_ids: set[str]) -> list[str]:
         payload = block.get("content")
         text = payload if isinstance(payload, str) else json.dumps(payload, ensure_ascii=False)
         urls.extend(_URL_RE.findall(text))
+        texts.append(text)
     # Sans doublons, en gardant l'ordre d'apparition.
-    return list(dict.fromkeys(urls))
+    return list(dict.fromkeys(urls)), texts
 
 
 def _cli_schema(schema: dict) -> dict:
