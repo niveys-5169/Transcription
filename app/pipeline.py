@@ -207,6 +207,19 @@ _REJECT_REASON_LABELS = {
 }
 
 
+REPLACEMENT_CHAR = "�"
+
+
+def _replacement_char_location(segments: list[dict]) -> str | None:
+    """Horodatage (m:ss) du premier segment contenant U+FFFD, sinon None."""
+    for segment in segments:
+        texts = [segment.get("text")] + [w.get("text") for w in segment.get("words") or []]
+        if any(REPLACEMENT_CHAR in str(text or "") for text in texts):
+            start = int(float(segment.get("start") or 0))
+            return f"{start // 60}:{start % 60:02d}"
+    return None
+
+
 def _rejection_finding(rejection: dict) -> Finding:
     """Un bloc dont le candidat NIM a été rejeté devient un finding visible.
 
@@ -410,6 +423,13 @@ def run_transcription(job_id: str) -> None:
         report = progress.scaled(EXTRACTION_SHARE, TRANSCRIPTION_SHARE, "Transcription…")
         settings = config.load_settings()
         initial_prompt = lexicon.whisper_prompt() if settings.lexicon_enabled and settings.lexicon_whisper_prompt else None
+        if initial_prompt and REPLACEMENT_CHAR in initial_prompt:
+            # Whisper recopie l'orthographe de son amorce : un « � » ici
+            # finirait dans la transcription.
+            raise TranscriptionError(
+                "Le lexique contient le caractère de remplacement Unicode (U+FFFD) : "
+                "corrigez les termes concernés avant de transcrire."
+            )
         for segment in engine.transcribe(
             wav_path, model=job["model"], language=job["language"], duration=duration,
             workdir=config.MEDIA_DIR / job_id, initial_prompt=initial_prompt,
@@ -421,6 +441,15 @@ def run_transcription(job_id: str) -> None:
             raise TranscriptionError(
                 "Aucune parole n'a été détectée dans ce fichier. Vérifiez que "
                 "la piste audio n'est pas muette (le WAV extrait est téléchargeable pour contrôle)."
+            )
+        corrupted_at = _replacement_char_location(segments)
+        if corrupted_at is not None:
+            # Les accents d'origine ne sont plus récupérables : on refuse
+            # d'enregistrer plutôt que de laisser des « � » dans le texte.
+            raise TranscriptionError(
+                "La transcription contient le caractère de remplacement Unicode "
+                f"(U+FFFD, dès {corrupted_at}) : un accent a été perdu en chemin. "
+                "Rien n'a été enregistré ; relancez la transcription."
             )
         # Le contrôle garde la première passe immuable. Une seconde passe du
         # même moteur/configuration ne vise que les signaux ASR retryables.
@@ -436,6 +465,13 @@ def run_transcription(job_id: str) -> None:
             should_cancel=lambda: is_cancelled(job_id),
         )
         effective_segments = asr_retry.effective_asr_segments(segments)
+        corrupted_at = _replacement_char_location(effective_segments)
+        if corrupted_at is not None:
+            raise TranscriptionError(
+                "La retranscription ciblée contient le caractère de remplacement "
+                f"Unicode (U+FFFD, dès {corrupted_at}). Rien n'a été enregistré ; "
+                "relancez la transcription."
+            )
         review_blocks = db.review_blocks_from_segments(effective_segments)
         # La vue courante utilise l'ASR effectif, mais « Brut » conserve la
         # première passe, y compris quand plusieurs segments sont regroupés.
@@ -449,8 +485,20 @@ def run_transcription(job_id: str) -> None:
                 for index in source_indexes if 0 <= index < len(segments)
             ).strip()
 
+        stage = "Transcrit"
+        if (
+            job["engine"] == "runpod" and settings.diarization_enabled
+            and not any(segment.get("speaker") for segment in segments)
+        ):
+            # Sans locuteurs, chaque phrase reste un bloc à part : le dire,
+            # plutôt que laisser croire que les tours de parole ont disparu.
+            stage = "Transcrit — sans locuteurs (diarisation absente)"
+            logger.warning(
+                "Travail %s : diarisation demandée mais aucun locuteur rendu par le pod "
+                "(jeton Hugging Face absent ou refusé ?).", job_id,
+            )
         db.mark_finished(
-            job_id, status="transcribed", stage="Transcrit", progress=1.0, task=None,
+            job_id, status="transcribed", stage=stage, progress=1.0, task=None,
             segments=segments, review_blocks=review_blocks,
             raw_text=segments_to_text(segments),
             asr_quality=json.dumps(quality_issues, ensure_ascii=False) if quality_issues else None,
@@ -511,6 +559,13 @@ def run_proofread(job_id: str) -> None:
     try:
         if is_cancelled(job_id):
             raise ProofreadError("Relecture annulée.")
+        corrupted_at = _replacement_char_location(segments)
+        if corrupted_at is not None:
+            raise ProofreadError(
+                "La transcription brute contient déjà le caractère de remplacement "
+                f"Unicode (U+FFFD, dès {corrupted_at}) : les accents d'origine sont "
+                "perdus. Relancez la transcription avant de relire."
+            )
 
         result = _proofread(
             job,
@@ -519,6 +574,17 @@ def run_proofread(job_id: str) -> None:
             should_cancel=lambda: is_cancelled(job_id),
         )
 
+        blocks = db.review_blocks_from_pairs(result.pairs, segments)
+        clean_text = db.clean_text_from_blocks(blocks)
+        produced = [clean_text, result.title or "", json.dumps(result.summary, ensure_ascii=False)]
+        if any(REPLACEMENT_CHAR in text for text in produced):
+            # Levée avant l'archivage : la version précédente reste active.
+            raise ProofreadError(
+                f"La relecture ({result.mode}) a produit le caractère de remplacement "
+                "Unicode (U+FFFD). Elle est interrompue pour préserver la "
+                "transcription précédente."
+            )
+
         # Une relance ne détruit jamais une édition : la version courante est
         # figée avant de devenir la nouvelle transcription IA active.
         current = db.get_job(job_id)
@@ -526,8 +592,6 @@ def run_proofread(job_id: str) -> None:
         had_review = bool((current or {}).get("clean_text"))
         if had_review:
             db.archive_review_version(job_id, reason="Avant nouvelle relecture IA")
-        blocks = db.review_blocks_from_pairs(result.pairs, segments)
-        clean_text = db.clean_text_from_blocks(blocks)
 
         # La vérification sémantique (Claude) est indépendante du moteur qui a
         # produit le texte : une relecture NIM doit être comparée au brut au
