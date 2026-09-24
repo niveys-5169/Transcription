@@ -213,6 +213,8 @@ def _transcribe_with_whisperx(
     result = whisperx.align(result["segments"], align_model, metadata, audio_path, device)
     token = os.environ.get("HF_TOKEN")
     speakers: list[str] = []
+    if diarize and not token:
+        print("[pod_server] Diarisation demandée mais HF_TOKEN absent : pas de locuteurs.")
     if diarize and token:
         diarizer_key = (device, token)
         with _model_cache_lock:
@@ -348,12 +350,22 @@ def _parse_transcription_request(content_type: str, raw: bytes) -> tuple:
                 for part in message.iter_parts()
             }
             audio = fields["audio"].get_payload(decode=True) or b""
+
+            def texte(name: str, default):
+                # ``get_content()`` lit un champ sans charset en ASCII et
+                # remplace silencieusement les accents par U+FFFD : on décode
+                # nous-mêmes, en UTF-8 strict (une erreur donne un 400).
+                part = fields.get(name)
+                if part is None:
+                    return default
+                return (part.get_payload(decode=True) or b"").decode("utf-8")
+
             return (
                 base64.b64encode(audio).decode("ascii"),
-                fields.get("model").get_content() if fields.get("model") else "large-v3",
-                fields.get("language").get_content() if fields.get("language") else "auto",
-                fields.get("initial_prompt").get_content() if fields.get("initial_prompt") else None,
-                (fields.get("diarize").get_content().strip().lower() == "true") if fields.get("diarize") else False,
+                texte("model", "large-v3"),
+                texte("language", "auto"),
+                texte("initial_prompt", None) or None,
+                texte("diarize", "false").strip().lower() == "true",
             )
         except (KeyError, ValueError, TypeError) as exc:
             raise _RequeteInvalide(f"multipart invalide : {exc}") from exc

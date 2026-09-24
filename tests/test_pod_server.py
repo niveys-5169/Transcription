@@ -537,3 +537,44 @@ def test_les_travaux_termines_les_plus_anciens_sont_oublies(worker, monkeypatch)
     # Plafond à 2 : seuls les deux derniers travaux subsistent.
     assert [worker.job_status(job_id) is not None for job_id in identifiants] == [False, False, True, True]
     worker._jobs.clear()
+
+
+PHRASE_ACCENTUEE = "Stéphane, très âgé, peut-être à côté ; garçon, cœur."
+
+
+def _corps_multipart(**kwargs) -> tuple[str, bytes]:
+    requete = httpx.Request("POST", "http://pod/jobs", **kwargs)
+    return requete.headers["content-type"], requete.read()
+
+
+def test_multipart_de_l_application_garde_les_accents_de_l_amorce(worker):
+    from app.engines.runpod_pod import _multipart_fields
+
+    content_type, corps = _corps_multipart(files=_multipart_fields(
+        b"RIFF____WAVE", model="large-v3", language="fr",
+        initial_prompt=PHRASE_ACCENTUEE, diarize="true",
+    ))
+    _, modele, langue, amorce, diarize = worker._parse_transcription_request(content_type, corps)
+    assert (modele, langue, amorce, diarize) == ("large-v3", "fr", PHRASE_ACCENTUEE, True)
+    assert "�" not in amorce
+
+
+def test_multipart_sans_charset_est_lu_en_utf8(worker):
+    """Un champ de formulaire ordinaire (sans Content-Type) n'est plus lu en
+    ASCII : c'est ce qui transformait « Stéphane » en « St��phane »."""
+    content_type, corps = _corps_multipart(
+        data={"initial_prompt": PHRASE_ACCENTUEE},
+        files={"audio": ("cours.wav", b"RIFF____WAVE", "audio/wav")},
+    )
+    amorce = worker._parse_transcription_request(content_type, corps)[3]
+    assert amorce == PHRASE_ACCENTUEE
+
+
+def test_multipart_non_utf8_est_refuse(worker):
+    content_type, corps = _corps_multipart(
+        data={"initial_prompt": "x"},
+        files={"audio": ("cours.wav", b"RIFF____WAVE", "audio/wav")},
+    )
+    corps = corps.replace(b"\r\n\r\nx\r\n", b"\r\n\r\nSt\xe9phane\r\n")
+    with pytest.raises(worker._RequeteInvalide):
+        worker._parse_transcription_request(content_type, corps)
