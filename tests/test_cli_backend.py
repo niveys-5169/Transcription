@@ -284,6 +284,13 @@ def test_aucun_resultat_leve_une_erreur(backend, monkeypatch):
         backend.complete(system="s", user="u", max_tokens=100)
 
 
+def test_aucun_resultat_indique_le_code_de_sortie(backend, monkeypatch):
+    _make_available(monkeypatch)
+    monkeypatch.setattr("subprocess.Popen", lambda cmd, **k: _FakeProcess([], returncode=1))
+    with pytest.raises(ProofreadError, match="Code de sortie : 1"):
+        backend.complete(system="s", user="u", max_tokens=100)
+
+
 def test_recherche_web_constatee_via_tool_use_et_tool_result(backend, monkeypatch):
     _make_available(monkeypatch)
     events = _stream(

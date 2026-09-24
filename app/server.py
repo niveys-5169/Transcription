@@ -235,10 +235,8 @@ async def post_lexicon(payload: dict = Body(...)) -> dict:
 @app.post("/api/lexicon/verification")
 async def start_lexicon_verification(payload: dict | None = Body(default=None)) -> dict:
     terms = None if not payload or "termes" not in payload else [str(item) for item in payload.get("termes") or []]
-    result = lexicon_verification.start(terms)
-    if not result.pop("started", False):
-        raise HTTPException(409, "Une vérification du lexique est déjà en cours.")
-    return result
+    # Pendant une vérification, les nouveaux termes rejoignent la file.
+    return lexicon_verification.start(terms)
 
 
 @app.get("/api/lexicon/verification")
@@ -259,16 +257,56 @@ async def delete_lexicon_term(terme: str) -> dict:
     return _lexicon_response()
 
 
+def _bulk_validable(proposal: dict) -> bool:
+    """Proposition assez sûre pour être validée en lot, sans relecture."""
+    return (
+        proposal.get("status") == "attente"
+        and proposal.get("verdict") == "confirme"
+        and proposal.get("confiance") in ("haute", "moyenne")
+        and any(isinstance(source, dict) and source.get("url") for source in proposal.get("sources") or [])
+    )
+
+
+# Déclarée avant ``/api/lexicon/{terme}/valider``, qui l'intercepterait sinon.
+@app.post("/api/lexicon/verification/valider")
+async def validate_lexicon_proposals(payload: dict | None = Body(default=None)) -> dict:
+    """Valide en lot les propositions confirmées, sourcées, de confiance haute ou moyenne."""
+    requested = None if not payload or "termes" not in payload else {str(item) for item in payload.get("termes") or []}
+    unverified = {term.terme for term in lexicon.load_lexicon() if not term.verifie}
+    validated = 0
+    for proposal in lexicon_verification.proposals():
+        terme = proposal.get("terme")
+        if terme not in unverified or (requested is not None and terme not in requested):
+            continue
+        if not _bulk_validable(proposal):
+            continue
+        try:
+            _validate_lexicon_term(terme, {})
+        except HTTPException:
+            continue
+        validated += 1
+    return {**_lexicon_response(), "valides": validated}
+
+
 @app.post("/api/lexicon/{terme}/valider")
 async def validate_lexicon_term(terme: str, payload: dict | None = Body(default=None)) -> dict:
+    _validate_lexicon_term(terme, payload or {})
+    return _lexicon_response()
+
+
+def _validate_lexicon_term(terme: str, supplied: dict) -> None:
     current = next((item for item in lexicon.load_lexicon() if item.terme == terme), None)
     if current is None:
         raise HTTPException(404, "Ce terme est inconnu.")
     proposal = lexicon_verification.find_proposal(terme)
-    supplied = payload or {}
     is_manual_edit = any(key in supplied for key in ("definition", "reference", "sources"))
     if proposal is not None and proposal.get("status") != "attente" and not is_manual_edit:
         raise HTTPException(409, "Cette proposition a déjà été traitée.")
+    failed = proposal is not None and proposal.get("verdict") == "erreur"
+    if failed and not is_manual_edit:
+        raise HTTPException(
+            409, "La vérification de ce terme a échoué : il n'y a rien à valider. Relancez-la."
+        )
 
     changes = {key: supplied[key] for key in ("definition", "reference") if key in supplied}
     sources = supplied.get("sources") if "sources" in supplied else (proposal or {}).get("sources", current.sources)
@@ -280,9 +318,8 @@ async def validate_lexicon_term(terme: str, payload: dict | None = Body(default=
     })
     if lexicon.update_term(terme, **changes) is None:
         raise HTTPException(404, "Ce terme est inconnu.")
-    if proposal is not None and proposal.get("status") == "attente":
+    if proposal is not None and proposal.get("status") == "attente" and not failed:
         lexicon_verification.mark_proposal(terme, "validee")
-    return _lexicon_response()
 
 
 @app.post("/api/lexicon/{terme}/rejeter")
