@@ -93,6 +93,29 @@ le lanceur choisit automatiquement le premier port libre suivant et affiche
 l'URL réellement utilisée.
 </details>
 
+### Toujours à jour, sans recompiler
+
+Sur votre propre PC, le plus rapide est de lancer l'application depuis un
+clone git plutôt que depuis l'exe :
+
+```bash
+git clone https://github.com/niveys-5169/Transcription.git
+```
+
+puis de double-cliquer sur `lancer.bat` (ou `./lancer.sh`). À chaque
+lancement, le script exécute `git pull --ff-only` : un changement poussé sur
+la branche en cours est disponible au démarrage suivant, sans attendre la
+compilation de l'exe. Si `requirements-app.txt` a changé, les dépendances sont
+réinstallées automatiquement. Hors ligne, ou si des modifications locales
+bloquent la mise à jour, l'application démarre simplement sur la version
+présente.
+
+Si l'exe a déjà servi sur cette machine et qu'aucun `data\transcription.db`
+n'existe à côté du script, `lancer.bat` reprend les données de l'exe
+(`%LOCALAPPDATA%\Transcription`) : bibliothèque, réglages et clés API sont
+conservés. La variable `TRANSCRIPTION_DATA_DIR` permet de choisir un autre
+dossier.
+
 ## Application Windows (sans installer Python)
 
 Pour un usage courant sur une machine où l'on ne veut pas installer Python ni

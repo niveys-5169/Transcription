@@ -26,17 +26,27 @@ if [ -z "$PYTHON" ]; then
 fi
 echo "  Python détecté : $PYTHON ($("$PYTHON" --version))"
 
+# Si ce dossier est un clone git, on récupère la dernière version avant de
+# démarrer. Un échec (hors ligne, conflit local) n'empêche pas le lancement.
+if [ -d ".git" ] && command -v git >/dev/null 2>&1; then
+  echo "  Recherche de mises à jour…"
+  git pull --ff-only || echo "  [~] Mise à jour impossible, lancement de la version actuelle."
+fi
+
 VENV_PY=".venv/bin/python"
 if [ ! -x "$VENV_PY" ]; then
   echo "  Création de l'environnement Python (une seule fois)…"
   "$PYTHON" -m venv .venv
 fi
 
-if [ ! -f ".venv/.dependances-ok" ]; then
+# Copie du requirements-app.txt installé : s'il change après une mise à
+# jour, les dépendances sont réinstallées automatiquement.
+DEPS_MARKER=".venv/.requirements-installees.txt"
+if ! cmp -s requirements-app.txt "$DEPS_MARKER"; then
   echo "  Installation des dépendances (quelques minutes la première fois)…"
   "$VENV_PY" -m pip install --upgrade pip --quiet
   "$VENV_PY" -m pip install -r requirements-app.txt
-  touch ".venv/.dependances-ok"
+  cp requirements-app.txt "$DEPS_MARKER"
 fi
 
 echo "  Démarrage du serveur…"
