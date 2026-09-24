@@ -117,6 +117,32 @@ def test_ajout_confirme_conserve_source_et_date(client):
     assert term["verifie_le"]
 
 
+def _failed_proposal():
+    verification._save_proposals([{
+        "terme": _term().terme, "verdict": "erreur", "forme_correcte": "",
+        "explication": "Le CLI « claude » n'a produit aucun résultat.", "sources": [],
+        "confiance": "basse", "origine": "erreur", "status": "attente",
+    }])
+
+
+def test_un_echec_de_verification_ne_se_valide_pas(client):
+    _failed_proposal()
+    response = client.post(f"/api/lexicon/{_term().terme}/valider")
+    assert response.status_code == 409
+    assert verification.find_proposal(_term().terme)["status"] == "attente"
+
+
+def test_correction_manuelle_apres_echec_reste_non_verifiee(client):
+    _failed_proposal()
+    definition = "Mesure où le délégué préfère protéger l'œuvre à la façon d'un tuteur, même à l'écart."
+    response = client.post(f"/api/lexicon/{_term().terme}/valider", json={"definition": definition})
+    assert response.status_code == 200
+    updated = next(item for item in response.json()["terms"] if item["terme"] == _term().terme)
+    assert updated["definition"] == definition
+    assert updated["verifie"] is False
+    assert verification.find_proposal(_term().terme)["status"] == "attente"
+
+
 def test_proposition_deja_traitee_est_refusee(client):
     _proposal(status="rejetee")
     assert client.post(f"/api/lexicon/{_term().terme}/valider").status_code == 409

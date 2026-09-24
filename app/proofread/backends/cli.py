@@ -308,7 +308,7 @@ class CliBackend:
             stderr = process.stderr.read() if process.stderr else ""
             if process.stderr:
                 process.stderr.close()
-            process.wait()
+            returncode = process.wait()
 
         if capped.is_set():
             # Un arrêt sur plafond n'est pas une erreur, c'est une borne :
@@ -331,8 +331,21 @@ class CliBackend:
             if last_assistant_text:
                 text = last_assistant_text
             else:
+                # Le code de sortie est le seul indice quand stderr est vide
+                # (session expirée, option refusée, processus tué…).
+                logger.warning(
+                    "CLI « claude » sans résultat (code de sortie %s, plafond atteint : %s).",
+                    returncode, capped.is_set(),
+                )
+                if capped.is_set():
+                    detail = (
+                        f" Arrêté après {web_searches} recherches web "
+                        f"(plafond : {search_cap}) avant toute réponse."
+                    )
+                else:
+                    detail = f" Code de sortie : {returncode}."
                 raise ProofreadError(
-                    "Le CLI « claude » n'a produit aucun résultat."
+                    "Le CLI « claude » n'a produit aucun résultat." + detail
                     + (f"\n{stderr.strip()[:800]}" if stderr.strip() else "")
                 )
         else:

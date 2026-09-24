@@ -269,6 +269,11 @@ async def validate_lexicon_term(terme: str, payload: dict | None = Body(default=
     is_manual_edit = any(key in supplied for key in ("definition", "reference", "sources"))
     if proposal is not None and proposal.get("status") != "attente" and not is_manual_edit:
         raise HTTPException(409, "Cette proposition a déjà été traitée.")
+    failed = proposal is not None and proposal.get("verdict") == "erreur"
+    if failed and not is_manual_edit:
+        raise HTTPException(
+            409, "La vérification de ce terme a échoué : il n'y a rien à valider. Relancez-la."
+        )
 
     changes = {key: supplied[key] for key in ("definition", "reference") if key in supplied}
     sources = supplied.get("sources") if "sources" in supplied else (proposal or {}).get("sources", current.sources)
@@ -280,7 +285,7 @@ async def validate_lexicon_term(terme: str, payload: dict | None = Body(default=
     })
     if lexicon.update_term(terme, **changes) is None:
         raise HTTPException(404, "Ce terme est inconnu.")
-    if proposal is not None and proposal.get("status") == "attente":
+    if proposal is not None and proposal.get("status") == "attente" and not failed:
         lexicon_verification.mark_proposal(terme, "validee")
     return _lexicon_response()
 

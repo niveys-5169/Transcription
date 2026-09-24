@@ -662,6 +662,9 @@ function renderLexicon() {
         // Une entrée devenue fiable ne doit plus afficher une ancienne
         // proposition issue de sa vérification initiale.
         const proposal = term.verifie ? null : proposals.get(term.terme);
+        // Un verdict « erreur » est un échec technique (CLI muet, quota,
+        // délai…), pas une proposition : rien à valider, seulement à relancer.
+        const proposalFailed = proposal?.verdict === "erreur";
         const sources = (term.sources || []).filter((source) => /^https?:\/\//i.test(source.url || ""));
         const proposalSources = (proposal?.sources || []).filter((source) => /^https?:\/\//i.test(source.url || ""));
         const editing = state.lexiconEditingTerm === term.terme;
@@ -675,15 +678,20 @@ function renderLexicon() {
           <div class="pending-actions">
             ${!term.verifie ? `<button type="button" class="btn btn-mini btn-ghost" data-lexicon-action="verify">Vérifier</button>` : ""}
             <button type="button" class="btn btn-mini btn-ghost" data-lexicon-action="edit">Corriger</button>
-            ${proposal?.status === "attente" ? `<button type="button" class="btn btn-mini btn-ghost" data-lexicon-action="reject">Rejeter</button>` : ""}
+            ${proposal?.status === "attente" && !proposalFailed ? `<button type="button" class="btn btn-mini btn-ghost" data-lexicon-action="reject">Rejeter</button>` : ""}
             ${term.user_editable ? `<button type="button" class="btn btn-mini btn-ghost" data-lexicon-action="delete">Supprimer</button>` : ""}
           </div>
           ${editing ? `<form class="lexicon-edit-form">
             <textarea name="definition" rows="3" aria-label="Définition corrigée">${escapeHtml(term.definition || "")}</textarea>
             <input name="reference" value="${escapeHtml(term.reference || "")}" aria-label="Référence corrigée" placeholder="Référence juridique">
-            <div class="pending-actions"><button class="btn btn-primary btn-mini" type="submit">Enregistrer${proposal?.status === "attente" ? " et valider" : ""}</button><button class="btn btn-ghost btn-mini" type="button" data-lexicon-action="cancel-edit">Annuler</button></div>
+            <div class="pending-actions"><button class="btn btn-primary btn-mini" type="submit">Enregistrer${proposal?.status === "attente" && !proposalFailed ? " et valider" : ""}</button><button class="btn btn-ghost btn-mini" type="button" data-lexicon-action="cancel-edit">Annuler</button></div>
           </form>` : ""}
-          ${proposal ? `<div class="finding pending-correction lexicon-proposal">
+          ${proposalFailed ? `<div class="finding pending-correction lexicon-proposal">
+            <div class="finding-head"><span class="finding-kind">échec de la vérification</span></div>
+            ${proposal.explication ? `<p class="meta">${escapeHtml(proposal.explication)}</p>` : ""}
+            <p class="meta">Aucune proposition à valider : relancez la vérification avec « Vérifier ».</p>
+            ${proposal.status === "attente" ? `<div class="pending-actions"><button class="btn btn-ghost btn-mini" type="button" data-lexicon-action="reject">Ignorer</button></div>` : ""}
+          </div>` : proposal ? `<div class="finding pending-correction lexicon-proposal">
             <div class="finding-head"><span class="finding-kind">proposition ${escapeHtml(proposal.verdict)}</span><span class="finding-kind">confiance ${escapeHtml(proposal.confiance)}</span></div>
             ${proposal.forme_correcte ? `<p class="finding-message">Graphie proposée : <b>${escapeHtml(proposal.forme_correcte)}</b></p>` : ""}
             ${proposal.explication ? `<p class="meta">${escapeHtml(proposal.explication)}</p>` : ""}
