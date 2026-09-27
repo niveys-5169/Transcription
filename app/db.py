@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     proofread     TEXT,
     structure     INTEGER DEFAULT 1,
     verify        INTEGER DEFAULT 1,
+    claude_opt_in INTEGER DEFAULT 0,
     chain         INTEGER DEFAULT 1,
     task          TEXT,
     status        TEXT NOT NULL,
@@ -100,6 +101,7 @@ CREATE TABLE IF NOT EXISTS factcheck_cache (
 
 # Colonnes ajoutées après coup : appliquées à une base existante au démarrage.
 MIGRATIONS = {
+    "claude_opt_in": "INTEGER DEFAULT 0",
     "verify": "INTEGER DEFAULT 1",
     "chain": "INTEGER DEFAULT 1",
     "task": "TEXT",
@@ -181,7 +183,7 @@ STATUSES = (
 # un lien « Ouvrir dans Obsidian ».
 LIST_COLUMNS = (
     "id, filename, media_path, wav_path, size_bytes, duration, engine, model, "
-    "language, proofread, structure, verify, chain, factcheck, publish, manual_review_status, review_version, task, "
+    "language, proofread, structure, verify, claude_opt_in, chain, factcheck, publish, manual_review_status, review_version, task, "
     "status, stage, progress, title, summary, error, obsidian_path, obsidian_verbatim_path, obsidian_published_at, "
     "notebooklm_status, notebooklm_synced_at, notebooklm_error, notebooklm_doc_id, "
     "created_at, updated_at, finished_at"
@@ -246,7 +248,7 @@ def _row_to_dict(row: sqlite3.Row) -> dict:
         data["verification"] = []
     if data.get("entities") is None and "entities" in data:
         data["entities"] = []
-    for colonne in ("structure", "verify", "chain", "factcheck", "publish"):
+    for colonne in ("structure", "verify", "claude_opt_in", "chain", "factcheck", "publish"):
         if colonne in data:
             data[colonne] = bool(data[colonne])
     return data
@@ -263,6 +265,7 @@ def create_job(
     proofread: str,
     structure: bool,
     verify: bool = True,
+    claude_opt_in: bool = False,
     chain: bool = True,
     factcheck: bool = True,
     publish: bool = True,
@@ -273,10 +276,10 @@ def create_job(
         conn.execute(
             """
             INSERT INTO jobs (id, filename, media_path, size_bytes, engine, model,
-                              language, proofread, structure, verify, chain,
+                              language, proofread, structure, verify, claude_opt_in, chain,
                               factcheck, publish,
                               status, stage, progress, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 'En attente', 0, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 'En attente', 0, ?, ?)
             """,
             (
                 job_id,
@@ -289,6 +292,7 @@ def create_job(
                 proofread,
                 int(structure),
                 int(verify),
+                int(claude_opt_in),
                 int(chain),
                 int(factcheck),
                 int(publish),
@@ -307,7 +311,7 @@ def update_job(job_id: str, **fields: Any) -> None:
     ):
         if colonne in fields and not isinstance(fields[colonne], (str, type(None))):
             fields[colonne] = json.dumps(fields[colonne], ensure_ascii=False)
-    for colonne in ("structure", "verify", "chain", "factcheck", "publish"):
+    for colonne in ("structure", "verify", "claude_opt_in", "chain", "factcheck", "publish"):
         if colonne in fields:
             fields[colonne] = int(bool(fields[colonne]))
     fields["updated_at"] = _now()

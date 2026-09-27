@@ -144,16 +144,16 @@ async function loadStatus() {
   state.nimModels = nim?.models || [];
   state.nimModelsDetail = nim?.models_detail || "";
   const proofSelect = $("proofread");
-  proofSelect.options[0].disabled = !claude.available && !nim?.available;
+  proofSelect.options[0].disabled = !claude.available;
   proofSelect.options[1].disabled = !nim?.available;
-  const configuredMode = status.settings.default_proofread;
-  proofSelect.value = configuredMode === "nim" && nim?.available
-    ? "nim" : (claude.available || nim?.available) ? configuredMode : "basic";
+  proofSelect.value = "basic";
+  $("claude-opt-in").checked = false;
+  $("verify").checked = false;
   $("proofread-detail").textContent = claude.available
     ? `${claude.detail}${nim?.available ? " — NVIDIA NIM est aussi disponible." : ""}`
     : `${claude.detail}${nim?.available ? " NVIDIA NIM est disponible pour une relance directe." : " La relecture simple reste disponible."}`;
 
-  $("factcheck").checked = Boolean(status.settings.factcheck) && claude.available;
+  $("factcheck").checked = false;
   $("factcheck").disabled = !claude.available;
   const obsidian = status.obsidian;
   $("publish").checked = obsidian.available;
@@ -276,6 +276,7 @@ async function submitFiles(event, oneClick = false) {
     form.append("model", $("model").value);
     form.append("language", $("language").value);
     form.append("proofread", $("proofread").value);
+    form.append("claude_opt_in", $("claude-opt-in").checked ? "true" : "false");
     form.append("structure", $("structure").checked ? "true" : "false");
     form.append("verify", $("verify").checked ? "true" : "false");
     form.append("chain", $("chain").checked ? "true" : "false");
@@ -890,12 +891,13 @@ function openPassage(point) {
   $("passage-dialog").showModal();
 }
 
-/* Les règles mécaniques couvrent tout le document ; la lecture par Claude ne
-   porte que sur les blocs porteurs d'un signal (mode « claude-cible »). Dire
-   combien de blocs ont réellement été lus évite de laisser croire qu'ils
-   l'ont tous été. */
+/* Les règles comparent chaque passage au brut ; la lecture IA optionnelle
+   contrôle la cohérence du document relu en un appel. */
 function lectureClaudeLabel(rapport) {
   const mode = rapport.mode || "";
+  if (mode === "claude-document" || mode === "nim-document") {
+    return `règles + cohérence globale par ${mode === "nim-document" ? "NVIDIA NIM" : "Claude"}`;
+  }
   if (mode !== "claude" && mode !== "claude-cible" && mode !== "nim-cible") return "règles seules";
   const lecteur = mode === "nim-cible" ? "NVIDIA NIM" : "Claude";
   const lus = Number(rapport.claude_pairs || 0);
@@ -2579,6 +2581,7 @@ function initActions() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           proofread: mode,
+          claude_opt_in: $("claude-opt-in").checked,
           structure: $("structure").checked,
           verify: $("verify").checked,
         }),
@@ -2605,7 +2608,7 @@ function initActions() {
   $("revision-btn").addEventListener("click", async () => {
     if (!state.detail) return;
     try {
-      await api(`/api/jobs/${state.detail.id}/revision`, { method: "POST" });
+      await api(`/api/jobs/${state.detail.id}/revision`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ claude_opt_in: $("claude-opt-in").checked }) });
       toast("Fiche de révision en cours de génération.");
       refreshJobs();
     } catch (error) { toast(error.message, true); }
@@ -2614,7 +2617,7 @@ function initActions() {
   $("knowledge-btn").addEventListener("click", async () => {
     if (!state.detail) return;
     try {
-      await api(`/api/jobs/${state.detail.id}/knowledge`, { method: "POST" });
+      await api(`/api/jobs/${state.detail.id}/knowledge`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ claude_opt_in: $("claude-opt-in").checked }) });
       toast("Propositions de mémoire en cours de génération.");
       refreshJobs();
     } catch (error) { toast(error.message, true); }
@@ -2641,7 +2644,10 @@ function initActions() {
     const button = $("factcheck-btn");
     button.disabled = true;
     try {
-      await api(`/api/jobs/${job.id}/factcheck`, { method: "POST" });
+      await api(`/api/jobs/${job.id}/factcheck`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ claude_opt_in: $("claude-opt-in").checked }),
+      });
       toast("Vérification par recherche web lancée.");
       await refreshJobs();
     } catch (error) {

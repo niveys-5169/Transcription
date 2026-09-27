@@ -52,6 +52,10 @@
 
         <div class="upload-actions upload-actions-main">
           <p id="pending-files" class="pending"></p>
+          <label class="check">
+            <input type="checkbox" id="claude-opt-in">
+            <span>Utiliser Claude pour ce travail <small>(relecture, cohérence globale ou recherche web ; consomme des crédits)</small></span>
+          </label>
           <button type="button" id="one-click-btn" class="btn btn-primary btn-big" disabled>
             Importer et transcrire
           </button>
@@ -89,7 +93,7 @@
             <label class="field">
               <span>Relecture</span>
               <select id="proofread" name="proofread">
-                <option value="claude">Complète (Claude)</option>
+                <option value="claude">Complète (Claude, optionnel)</option>
                 <option value="nim">Complète (NVIDIA NIM)</option>
                 <option value="basic">Simple (hors ligne)</option>
                 <option value="none">Aucune</option>
@@ -103,8 +107,8 @@
             </label>
 
             <label class="check">
-              <input type="checkbox" id="verify" checked>
-              <span>Vérifier la fidélité au texte brut</span>
+              <input type="checkbox" id="verify">
+              <span>Faire une lecture de cohérence globale après la relecture <small>(un appel Claude ; les contrôles mécaniques restent automatiques)</small></span>
             </label>
 
             <label class="check">
@@ -113,7 +117,7 @@
             </label>
 
             <label class="check">
-              <input type="checkbox" id="factcheck" checked>
+              <input type="checkbox" id="factcheck">
               <span>Vérifier par recherche web <small>(noms propres, rapports, statistiques)</small></span>
             </label>
 

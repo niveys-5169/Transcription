@@ -136,6 +136,8 @@ VERIFICATION_USER = """\
 === VERSION RELUE ===
 {relu}"""
 
+COHERENCE_SYSTEM = """Tu lis le document relu dans son ensemble. Signale uniquement les contradictions internes, les incohérences de chronologie, de chiffres ou de termes, et les transitions qui rendent le propos incompréhensible. Ne vérifie pas les faits sur le web et ne réécris pas le texte. Réponds uniquement par un tableau JSON : [{"bloc":"identifiant exact du bloc", "type":"sens|terme|chiffre", "gravite":"haute|moyenne|basse", "relu":"courte citation exacte du bloc", "commentaire":"explication concise"}]. Un tableau vide [] signifie qu'aucune incohérence n'a été relevée. N'invente pas de problème."""
+
 
 # --------------------------------------------------------------- fact-check
 #

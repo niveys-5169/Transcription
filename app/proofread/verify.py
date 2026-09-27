@@ -28,7 +28,6 @@ from . import prompts
 from . import textloc
 from .backends import get_backend
 from .base import ProofreadError, TextPair
-from .parallel import run_in_parallel
 from .structure import parse_json_array
 
 logger = logging.getLogger(__name__)
@@ -342,10 +341,10 @@ def _multiset_difference(left: list[str], right: list[str]) -> list[str]:
 
 
 class ClaudeVerifier:
-    """Relit la relecture : ce qu'aucune règle ne peut voir."""
+    """Lit une fois le document relu pour sa cohérence interne."""
 
     name = "verification"
-    mode = "claude-cible"
+    mode = "claude-document"
 
     def __init__(self, settings=None):
         from ..config import load_settings
@@ -355,17 +354,6 @@ class ClaudeVerifier:
 
     def is_available(self) -> tuple[bool, str]:
         return self.backend.is_available()
-
-    def _compare(self, pair: TextPair) -> str:
-        return self.backend.complete(
-            system=prompts.VERIFICATION_SYSTEM,
-            user=prompts.VERIFICATION_USER.format(brut=pair.raw, relu=pair.clean),
-            max_tokens=MAX_TOKENS_VERIFICATION,
-            # Comparer deux textes proches est une tâche mécanique : le
-            # modèle/effort rapide suffit, et c'est nettement moins cher
-            # que le modèle par défaut appelé pour chaque bloc à risque.
-            fast=True,
-        ).text
 
     def verify(
         self,
@@ -378,62 +366,62 @@ class ClaudeVerifier:
         if not available:
             raise ProofreadError(detail)
 
-        a_lire = [pair for pair in pairs if pair.raw.strip() and pair.clean.strip()]
-        skipped = len(pairs) - len(a_lire)
-        faits = 0
-
-        def done(_index: int, _findings: list[Finding]) -> None:
-            nonlocal faits
-            faits += 1
-            if on_progress:
-                on_progress(faits / max(len(a_lire), 1), f"Vérification : {faits}/{len(a_lire)} blocs…")
-
-        resultats = run_in_parallel(
-            a_lire,
-            lambda pair: self._parse(self._compare(pair), pair),
-            workers=self.settings.proofread_workers,
-            should_cancel=should_cancel,
-            on_done=done,
-            cancel_message="Vérification annulée.",
+        if should_cancel and should_cancel():
+            raise ProofreadError("Vérification annulée.")
+        a_lire = [pair for pair in pairs if pair.clean.strip()]
+        if not a_lire:
+            return []
+        # Un document trop long reste couvert par les règles locales. Il n'est
+        # pas tronqué, ce qui donnerait une fausse impression de contrôle global.
+        body = "\n\n".join(
+            f"[BLOC {pair.block_id or index}]\n{pair.clean}"
+            for index, pair in enumerate(a_lire)
         )
-
-        if skipped:
-            logger.info("%d passage(s) non vérifié(s) : brut ou relu vide.", skipped)
-        return [finding for findings in resultats for finding in findings]
-
-    @staticmethod
-    def _parse(reponse: str, pair: TextPair) -> list[Finding]:
+        if len(body) > 120_000:
+            raise ProofreadError("Document trop long pour une lecture globale en un appel (120 000 caractères).")
+        response = self.backend.complete(
+            system=prompts.COHERENCE_SYSTEM,
+            user=body,
+            max_tokens=MAX_TOKENS_VERIFICATION,
+            fast=True,
+        ).text
+        if "\ufffd" in response:
+            raise ProofreadError("La lecture globale contient U+FFFD ; résultat écarté.")
+        if should_cancel and should_cancel():
+            raise ProofreadError("Vérification annulée.")
+        by_id = {str(pair.block_id or index): pair for index, pair in enumerate(a_lire)}
         findings = []
-        for brut in parse_json_array(reponse):
-            if not isinstance(brut, dict):
+        for item in parse_json_array(response):
+            if not isinstance(item, dict):
                 continue
-            message = str(brut.get("commentaire") or "").strip()
-            if not message:
+            pair = by_id.get(str(item.get("bloc") or ("0" if len(a_lire) == 1 else "")))
+            message = str(item.get("commentaire") or "").strip()
+            if pair is None or not message:
                 continue
-            kind = str(brut.get("type") or "sens").strip().lower()
-            severity = str(brut.get("gravite") or "moyenne").strip().lower()
-            findings.append(
-                Finding(
-                    kind=kind if kind in KINDS else "sens",
-                    severity=severity if severity in SEVERITIES else "moyenne",
-                    message=message,
-                    start=pair.start, block_id=pair.block_id,
-                    raw_excerpt=str(brut.get("brut") or "")[:EXCERPT_CHARS],
-                    clean_excerpt=str(brut.get("relu") or "")[:EXCERPT_CHARS],
-                    source="claude",
-                )
-            )
+            clean_excerpt = str(item.get("relu") or "")[:EXCERPT_CHARS]
+            if clean_excerpt and clean_excerpt not in pair.clean:
+                continue
+            kind = str(item.get("type") or "sens").strip().lower()
+            severity = str(item.get("gravite") or "moyenne").strip().lower()
+            findings.append(Finding(
+                kind=kind if kind in KINDS else "sens",
+                severity=severity if severity in SEVERITIES else "moyenne",
+                message=message, start=pair.start, block_id=pair.block_id,
+                clean_excerpt=clean_excerpt or _excerpt(pair.clean),
+                source="claude" if self.mode == "claude-document" else "nim",
+            ))
+        if on_progress:
+            on_progress(1.0, "Cohérence globale vérifiée.")
         return findings
 
-
 class NimVerifier(ClaudeVerifier):
-    """Même lecture ciblée, par le modèle NIM rapide, quand Claude est absent.
+    """Lecture globale par le modèle NIM rapide, quand Claude est absent.
 
     Sans lui, une relecture NIM faite parce que Claude est indisponible ne
     serait contrôlée que par les règles mécaniques.
     """
 
-    mode = "nim-cible"
+    mode = "nim-document"
 
     def __init__(self, settings=None):
         from ..config import load_settings
@@ -444,15 +432,6 @@ class NimVerifier(ClaudeVerifier):
 
     def is_available(self) -> tuple[bool, str]:
         return self.backend.is_available()
-
-    def _compare(self, pair: TextPair) -> str:
-        return self.backend.complete(
-            system=prompts.VERIFICATION_SYSTEM,
-            user=prompts.VERIFICATION_USER.format(brut=pair.raw, relu=pair.clean),
-            max_tokens=MAX_TOKENS_VERIFICATION,
-            fast=True,
-        ).text
-
 
 # --------------------------------------------------------------- orchestration
 
@@ -524,11 +503,10 @@ def verify(
     on_progress=None,
     should_cancel=None,
 ) -> VerificationReport:
-    """Vérifie une relecture. Les règles tournent toujours ; Claude si possible.
+    """Vérifie une relecture : règles locales et lecture globale optionnelle.
 
-    Les règles couvrent 100 % du document, gratuitement. Claude ne relit que
-    les blocs à risque (voir ``pairs_a_risque``) : un document propre peut ne
-    déclencher aucun appel, ce qui n'est pas un échec mais le cas nominal.
+    Les règles couvrent 100 % des passages. Si demandé, le modèle lit le
+    document relu en un appel pour repérer ses incohérences internes.
 
     Un échec de la vérification par Claude ne fait pas échouer le travail :
     le rapport des règles est rendu tel quel, et l'utilisateur garde son
@@ -542,7 +520,7 @@ def verify(
         skipped_pairs=sum(1 for p in pairs if not p.raw.strip() or not p.clean.strip()),
     )
 
-    a_relire = pairs_a_risque(pairs, findings_regles) if use_claude else []
+    a_relire = [pair for pair in pairs if pair.clean.strip()] if use_claude else []
 
     verifier = _available_verifier(settings) if a_relire else None
     if verifier is not None:
@@ -552,12 +530,12 @@ def verify(
                     a_relire, on_progress=on_progress, should_cancel=should_cancel
                 )
             )
-            report.mode = getattr(verifier, "mode", "claude-cible")
+            report.mode = getattr(verifier, "mode", "claude-document")
             report.claude_pairs = len(a_relire)
         except ProofreadError as exc:
             if should_cancel is not None and should_cancel():
                 raise
-            logger.warning("Vérification ciblée interrompue : %s", exc)
+            logger.warning("Vérification globale interrompue : %s", exc)
 
     report.findings.sort(key=lambda f: (_ORDER.get(f.severity, 3), f.start))
     if on_progress:

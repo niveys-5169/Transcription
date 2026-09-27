@@ -177,7 +177,7 @@ class Settings:
     claude_cli_path: str = ""
 
     # --- Relecture (optionnelle) ---
-    default_proofread: str = "claude"
+    default_proofread: str = "basic"
     anthropic_api_key: str = ""
     # Modèle de base de tous les appels à Claude (relecture, sommaire,
     # vérification, extraction des affirmations, fact-check) : un seul

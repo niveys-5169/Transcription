@@ -425,9 +425,10 @@ async def create_job(
     language: str | None = Form(None),
     proofread: str | None = Form(None),
     structure: bool = Form(True),
-    verify: bool = Form(True),
+    verify: bool = Form(False),
+    claude_opt_in: bool = Form(False),
     chain: bool = Form(True),
-    factcheck: bool = Form(True),
+    factcheck: bool = Form(False),
     publish: bool = Form(True),
     one_click: bool = Form(False),
 ) -> dict:
@@ -435,17 +436,13 @@ async def create_job(
     engine = engine or settings.default_engine
     model = model or settings.default_model
     language = (language if language is not None else settings.language) or ""
-    proofread = proofread or settings.default_proofread
+    proofread = proofread or "basic"
 
-    # « Tout faire » : le bouton principal de la page. Il n'ajoute aucune
-    # option nouvelle — chain/factcheck/publish sont déjà les valeurs par
-    # défaut de ce formulaire — mais force la relecture Claude si elle est
-    # disponible, pour qu'un simple dépôt donne la chaîne complète sans
-    # avoir à déplier les options avancées.
+    # Le raccourci ne peut pas activer un fournisseur IA sans accord explicite.
     if one_click:
-        chain, factcheck, publish = True, True, True
+        chain, publish = True, True
         if proofread == "none":
-            proofread = settings.default_proofread
+            proofread = "basic"
 
     if engine not in config.ENGINES:
         raise HTTPException(400, f"Moteur inconnu : {engine}")
@@ -453,6 +450,8 @@ async def create_job(
         raise HTTPException(400, f"Modèle inconnu : {model}")
     if proofread not in config.PROOFREAD_MODES:
         raise HTTPException(400, f"Mode de relecture inconnu : {proofread}")
+    if not claude_opt_in and (proofread == "claude" or verify or factcheck):
+        raise HTTPException(400, "Cochez « Utiliser Claude » pour la relecture IA, la cohérence globale ou la recherche web.")
 
     original = Path(file.filename or "cours").name
     config.ensure_dirs()
@@ -486,6 +485,7 @@ async def create_job(
         proofread=proofread,
         structure=structure,
         verify=verify,
+        claude_opt_in=claude_opt_in,
         chain=chain,
         factcheck=factcheck,
         publish=publish,
@@ -763,12 +763,17 @@ async def proofread_job(job_id: str, payload: dict = Body(default={})) -> dict:
     mode = payload.get("proofread") or job["proofread"] or "basic"
     if mode not in config.PROOFREAD_MODES:
         raise HTTPException(400, f"Mode de relecture inconnu : {mode}")
+    claude_opt_in = payload.get("claude_opt_in") is True
+    use_verify = payload.get("verify") is True
+    if not claude_opt_in and (mode == "claude" or use_verify):
+        raise HTTPException(400, "Cochez « Utiliser Claude » avant cette relecture ou vérification globale.")
 
     db.update_job(
         job_id,
         proofread=mode,
         structure=bool(payload.get("structure", job["structure"])),
-        verify=bool(payload.get("verify", job["verify"])),
+        verify=use_verify,
+        claude_opt_in=claude_opt_in,
         status="queued",
         stage="Relecture en attente",
         progress=0.0,
@@ -779,26 +784,30 @@ async def proofread_job(job_id: str, payload: dict = Body(default={})) -> dict:
 
 
 @app.post("/api/jobs/{job_id}/revision")
-async def revision_job(job_id: str) -> dict:
+async def revision_job(job_id: str, payload: dict = Body(default={})) -> dict:
     job = db.get_job(job_id, with_content=False)
     if job is None:
         raise HTTPException(404, "Travail introuvable.")
     if job["status"] not in {"done", "checked", "published"}:
         raise HTTPException(409, "La fiche de révision exige un cours relu.")
-    db.update_job(job_id, task=pipeline.TASK_REVISION, stage="Fiche de révision en attente", progress=0.0)
+    if payload.get("claude_opt_in") is not True:
+        raise HTTPException(400, "Cochez « Utiliser Claude » avant de générer une fiche de révision.")
+    db.update_job(job_id, claude_opt_in=True, task=pipeline.TASK_REVISION, stage="Fiche de révision en attente", progress=0.0)
     pipeline.enqueue(job_id, pipeline.TASK_REVISION)
     return _decorate(db.get_job(job_id, with_content=False))
 
 
 @app.post("/api/jobs/{job_id}/knowledge")
-async def knowledge_job(job_id: str) -> dict:
+async def knowledge_job(job_id: str, payload: dict = Body(default={})) -> dict:
     """Prépare des propositions de mémoire, sans publier quoi que ce soit."""
     job = db.get_job(job_id, with_content=False)
     if job is None:
         raise HTTPException(404, "Travail introuvable.")
     if job["status"] not in {"done", "checked", "published"}:
         raise HTTPException(409, "La capitalisation exige un cours relu.")
-    db.update_job(job_id, task=pipeline.TASK_KNOWLEDGE, stage="Capitalisation en attente", progress=0.0)
+    if payload.get("claude_opt_in") is not True:
+        raise HTTPException(400, "Cochez « Utiliser Claude » avant la capitalisation.")
+    db.update_job(job_id, claude_opt_in=True, task=pipeline.TASK_KNOWLEDGE, stage="Capitalisation en attente", progress=0.0)
     pipeline.enqueue(job_id, pipeline.TASK_KNOWLEDGE)
     return _decorate(db.get_job(job_id, with_content=False))
 
@@ -823,7 +832,7 @@ async def validate_knowledge_job(job_id: str, payload: dict = Body(...)) -> dict
 
 
 @app.post("/api/jobs/{job_id}/factcheck")
-async def factcheck_job(job_id: str) -> dict:
+async def factcheck_job(job_id: str, payload: dict = Body(default={})) -> dict:
     """Lance (ou relance) la vérification externe d'un travail déjà relu.
 
     C'est l'étape 3, indépendante : elle repart du texte relu déjà en base,
@@ -836,6 +845,8 @@ async def factcheck_job(job_id: str) -> dict:
         raise HTTPException(409, "Ce travail est déjà en cours.")
     if job["status"] not in {"done", "checked", "published", "error", "canceled"}:
         raise HTTPException(409, "Ce travail n'est pas encore relu.")
+    if payload.get("claude_opt_in") is not True:
+        raise HTTPException(400, "Cochez « Utiliser Claude » avant la recherche web.")
 
     complet = db.get_job(job_id)
     if not (complet and complet.get("clean_text")):
@@ -845,6 +856,7 @@ async def factcheck_job(job_id: str) -> dict:
 
     db.update_job(
         job_id,
+        claude_opt_in=True,
         status="queued",
         stage="Vérification externe en attente",
         progress=0.0,

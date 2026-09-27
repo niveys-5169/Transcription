@@ -139,7 +139,7 @@ def test_sans_publish_s_arrete_a_checked(client):
         data={
             "engine": "local", "model": "tiny", "language": "fr",
             "proofread": "basic", "structure": "false",
-            "chain": "true", "factcheck": "true", "publish": "false",
+            "chain": "true", "factcheck": "true", "publish": "false", "claude_opt_in": "true",
         },
     )
     job_id = reponse.json()["id"]
@@ -212,7 +212,7 @@ def test_publication_exporte_le_cours_dans_data_cours(client, vault):
         files={"file": ("cours.mp4", b"\x00" * 2048, "video/mp4")},
         data={
             "engine": "local", "model": "tiny", "language": "fr",
-            "proofread": "basic", "structure": "false", "one_click": "true",
+            "proofread": "basic", "structure": "false", "one_click": "true", "factcheck": "true", "claude_opt_in": "true",
         },
     )
     job_id = reponse.json()["id"]
@@ -300,7 +300,7 @@ def test_echec_publication_obsidian_n_empeche_pas_l_export_intermediaire(
         files={"file": ("cours.mp4", b"\x00" * 2048, "video/mp4")},
         data={
             "engine": "local", "model": "tiny", "language": "fr",
-            "proofread": "basic", "structure": "false", "one_click": "true",
+            "proofread": "basic", "structure": "false", "one_click": "true", "factcheck": "true", "claude_opt_in": "true",
         },
     )
     job_id = reponse.json()["id"]

@@ -15,7 +15,7 @@ class Backend:
 def test_build_knowledge_reste_une_proposition(monkeypatch):
     monkeypatch.setattr(knowledge, "get_backend", lambda _settings: Backend())
     monkeypatch.setattr(knowledge.exporters, "editorial_text", lambda _job: "La tutelle est une mesure.")
-    result = knowledge.build_knowledge({"id": "cours"}, Settings())
+    result = knowledge.build_knowledge({"id": "cours", "claude_opt_in": True}, Settings())
     assert result["status"] == "proposed"
     assert result["concepts"][0]["nom"] == "Tutelle"
     assert result["themes"][0]["nom"] == "Protection juridique"

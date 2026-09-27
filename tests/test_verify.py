@@ -236,7 +236,7 @@ def test_verify_combine_regles_et_claude(monkeypatch):
     rapport = verify([pair("il y a 42 cas précis", "il y a des cas")])
     sources = {f.source for f in rapport.findings}
     assert sources == {"regles", "claude"}
-    assert rapport.mode == "claude-cible"
+    assert rapport.mode == "claude-document"
     assert rapport.claude_pairs == 1
 
 
@@ -340,15 +340,15 @@ def test_l_ordre_d_origine_est_preserve():
 # --------------------------------------------------- verify : tri ciblé
 
 
-def test_une_paire_propre_n_est_pas_envoyee_a_claude(monkeypatch):
+def test_une_paire_propre_participe_a_la_coherence_globale(monkeypatch):
     fake = _FakeBackend("[]")
     monkeypatch.setattr(verify_module, "get_backend", lambda settings=None: fake)
 
     propre = pair("Donc on reprend le cours de thermodynamique ici.", "Donc on reprend le cours de thermodynamique ici.")
     rapport = verify([propre])
-    assert fake.calls == 0
-    assert rapport.claude_pairs == 0
-    assert rapport.mode == "regles"
+    assert fake.calls == 1
+    assert rapport.claude_pairs == 1
+    assert rapport.mode == "claude-document"
 
 
 def test_une_reference_juridique_est_envoyee_a_claude_sans_finding_de_regle(monkeypatch):
@@ -359,7 +359,7 @@ def test_une_reference_juridique_est_envoyee_a_claude_sans_finding_de_regle(monk
     rapport = verify([pair(texte, texte)])
     assert fake.calls == 1
     assert rapport.claude_pairs == 1
-    assert rapport.mode == "claude-cible"
+    assert rapport.mode == "claude-document"
 
 
 def test_une_paire_a_pre_alerte_est_envoyee_meme_sans_regle_de_coupure(monkeypatch):
@@ -380,7 +380,7 @@ def test_claude_pairs_compte_seulement_les_blocs_lus(monkeypatch):
     propre = pair("Donc on reprend le cours de thermodynamique ici.", "Donc on reprend le cours de thermodynamique ici.", start=0.0)
     risquee = pair("le seuil est à 42 degrés", "le seuil est à quelques degrés", start=10.0)
     rapport = verify([propre, risquee])
-    assert rapport.claude_pairs == 1
+    assert rapport.claude_pairs == 2
     assert fake.calls == 1
 
 
@@ -390,7 +390,7 @@ def test_mode_regles_quand_aucune_paire_a_risque(monkeypatch):
 
     propre = pair("Donc on reprend le cours de thermodynamique ici.", "Donc on reprend le cours de thermodynamique ici.")
     rapport = verify([propre])
-    assert rapport.mode == "regles"
+    assert rapport.mode == "claude-document"
 
 
 def test_les_regles_couvrent_tout_le_document_meme_les_blocs_non_lus_par_claude(monkeypatch):
@@ -406,7 +406,7 @@ def test_les_regles_couvrent_tout_le_document_meme_les_blocs_non_lus_par_claude(
 
     chiffres = [f for f in rapport.findings if f.kind == "chiffre"]
     assert len(chiffres) == 1
-    assert rapport.claude_pairs == 1
+    assert rapport.claude_pairs == 2
     assert fake.calls == 1
 
 
@@ -426,7 +426,27 @@ def test_sans_claude_la_lecture_ciblee_passe_par_nim(monkeypatch):
 
     rapport = verify([pair("il y a 42 cas", "il y a des cas")], settings=settings)
 
-    assert rapport.mode == "nim-cible"
+    assert rapport.mode == "nim-document"
     assert rapport.claude_pairs == 1
     assert appels == [True]
     assert any(f.message == "Sens inversé." for f in rapport.findings)
+
+
+def test_coherence_globale_un_seul_appel_et_localisation_exacte(monkeypatch):
+    class Backend(_FakeBackend):
+        def complete(self, **kwargs):
+            self.user = kwargs["user"]
+            return super().complete(**kwargs)
+
+    backend = Backend('[{"bloc":"bloc-2","type":"sens","gravite":"haute",'
+                      '"relu":"œuvre","commentaire":"Contradiction entre les deux parties."}]')
+    monkeypatch.setattr(verify_module, "get_backend", lambda settings=None: backend)
+    phrase = "é è ê à ç œ"
+    pairs = [TextPair(0, 1, phrase, phrase, block_id="bloc-1"),
+             TextPair(2, 3, "œuvre", "œuvre", block_id="bloc-2")]
+    report = verify(pairs)
+    assert backend.calls == 1
+    assert phrase in backend.user
+    assert report.claude_pairs == 2
+    assert report.findings[0].block_id == "bloc-2"
+    assert "\ufffd" not in backend.user

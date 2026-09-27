@@ -41,6 +41,44 @@ def _job(tmp_path: Path) -> str:
     return job_id
 
 
+def test_claude_exige_un_opt_in_explicite(client, tmp_path, monkeypatch):
+    job_id = _job(tmp_path)
+    monkeypatch.setattr(pipeline, "enqueue", lambda *args, **kwargs: None)
+    refused = client.post(f"/api/jobs/{job_id}/proofread", json={"proofread": "claude"})
+    assert refused.status_code == 400
+    assert db.get_job(job_id)["claude_opt_in"] is False
+    allowed = client.post(f"/api/jobs/{job_id}/proofread", json={"proofread": "claude", "claude_opt_in": True})
+    assert allowed.status_code == 200
+    assert db.get_job(job_id)["claude_opt_in"] is True
+
+
+def test_depot_sans_opt_in_ne_prevoit_aucun_appel_claude(client, monkeypatch):
+    monkeypatch.setattr(pipeline, "enqueue", lambda *args, **kwargs: None)
+    response = client.post("/api/jobs", files={"file": ("cours.wav", b"audio", "audio/wav")})
+    assert response.status_code == 200
+    job = db.get_job(response.json()["id"])
+    assert job["proofread"] == "basic"
+    assert job["claude_opt_in"] is False
+    assert job["verify"] is False
+    assert job["factcheck"] is False
+    refused = client.post("/api/jobs", files={"file": ("cours.wav", b"audio", "audio/wav")},
+                          data={"proofread": "claude"})
+    assert refused.status_code == 400
+
+
+def test_factcheck_exige_un_nouvel_opt_in(client, tmp_path, monkeypatch):
+    job_id = _job(tmp_path)
+    phrase = "é è ê à ç œ"
+    db.update_job(job_id, status="done", clean_text=phrase)
+    monkeypatch.setattr(pipeline, "enqueue", lambda *args, **kwargs: None)
+    assert client.post(f"/api/jobs/{job_id}/factcheck").status_code == 400
+    response = client.post(f"/api/jobs/{job_id}/factcheck", json={"claude_opt_in": True})
+    assert response.status_code == 200
+    assert db.get_job(job_id)["claude_opt_in"] is True
+    assert db.get_job(job_id)["clean_text"] == phrase
+    assert "\ufffd" not in response.text
+
+
 def test_migration_ajoute_les_primitives_editeur_sans_effacer_les_jobs(tmp_path):
     legacy = tmp_path / "legacy.sqlite"
     with sqlite3.connect(legacy) as conn:

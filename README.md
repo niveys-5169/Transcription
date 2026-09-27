@@ -294,9 +294,15 @@ secondes que le fichier est bien lu.
 
 ### La relecture
 
+Par défaut, la relecture est **simple et hors ligne**. Pour appeler Claude,
+cochez **Utiliser Claude pour ce travail** puis choisissez la relecture Claude,
+la lecture de cohérence globale ou la recherche web. La case est désactivée
+au prochain chargement de l'interface : chaque nouvelle action payante exige
+un choix explicite. Le serveur applique aussi cette règle aux appels API.
+
 | Mode | Ce qu'il fait | Ce qu'il suppose |
 |---|---|---|
-| **Complète (Claude)** | Ponctuation, orthographe, suppression des hésitations, correction des erreurs de reconnaissance d'après le contexte, paragraphes, titre, résumé, intertitres | Un back-end Claude disponible (CLI ou clé) |
+| **Complète (Claude)** | Ponctuation, orthographe, suppression des hésitations, correction des erreurs de reconnaissance d'après le contexte, paragraphes, titre, résumé, intertitres | Un back-end Claude disponible (CLI ou clé) et la case d'accord cochée |
 | **Simple** | Hésitations, bégaiements, ponctuation, majuscules, paragraphes — par règles, sans rien « comprendre » | Rien, fonctionne hors ligne |
 | **Aucune** | Le texte de Whisper tel quel, juste regroupé en paragraphes | Rien |
 
@@ -320,19 +326,17 @@ Deux niveaux, complémentaires :
   longueur, une graphie proche d'un terme du lexique sans lui être
   identique. « 1 000 » relu en « 1000 » n'est pas une perte ; « vingt » relu
   en « 20 » non plus — seul le sens de la disparition compte.
-- **Une lecture par Claude**, qui repère ce qu'aucune règle ne voit : un sens
-  qui glisse, une nuance perdue, une phrase ajoutée. Elle ignore délibérément
-  la ponctuation, les majuscules et le retrait des hésitations, qui sont
-  précisément le travail attendu. Elle ne porte pas sur tous les blocs : les
-  règles mécaniques, elles, couvrent 100 % du document et ne coûtent rien ;
-  Claude ne relit que les blocs qui portent un signal — une règle déjà
-  déclenchée dessus, une référence juridique repérée, ou un raccourcissement
-  net par rapport au brut. Le rapport indique combien de blocs ont
-  effectivement été lus par Claude, pour ne pas laisser croire qu'il les a
-  tous vus.
+- **Une lecture de cohérence globale**, facultative : après la relecture,
+  Claude reçoit le document relu en un seul appel et signale les contradictions
+  internes, les chiffres ou les termes incohérents. Chaque signalement garde
+  l'identifiant du bloc concerné. Un document de plus de 120 000 caractères
+  ne part pas tronqué : les règles locales restent disponibles. Cette lecture
+  globale ne remplace pas la comparaison au brut ni la vérification des faits
+  par recherche web.
 
-C'est une vérification de **fidélité** : elle dit si le texte relu rend
-fidèlement ce qui a été dit, pas si ce qui a été dit est exact — un nom
+C'est une vérification de **fidélité** pour les règles comparant le brut et le
+relu, complétée au choix par une lecture de cohérence interne. Elle ne dit pas
+si ce qui a été dit est exact — un nom
 propre mal reconnu à l'oral, puis « corrigé » par la relecture d'après le
 contexte, y passera inaperçu puisque rien n'a été perdu. C'est le rôle de
 l'étape suivante.
@@ -412,8 +416,8 @@ référence citable.
 Les points non confirmés partent aussi dans le panneau **Sources** — qui
 liste également, dans un repli, ce qui a été repéré hors périmètre — distinct
 du panneau **Vérification** (fidélité). Un [lexique du domaine](#le-lexique-mjpm) répond sans
-recherche pour les termes déjà vérifiés. Décochable au dépôt : le coût n'est
-pas un critère de conception ici, mais le tri par périmètre, la
+recherche pour les termes déjà vérifiés. Décochée au dépôt et soumise à la
+case d'accord Claude : le tri par périmètre, la
 déduplication et la mémorisation des verdicts limitent le nombre d'appels
 réellement effectués, et l'abonnement Claude a ses propres limites d'usage.
 

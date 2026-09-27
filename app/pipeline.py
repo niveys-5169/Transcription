@@ -601,7 +601,7 @@ def run_proofread(job_id: str) -> None:
         # inutile de le décider ici en fonction du moteur de relecture.
         report = verify(
             result.pairs,
-            use_claude=bool(job.get("verify", True)),
+            use_claude=bool(job.get("claude_opt_in") and job.get("verify")),
             on_progress=progress.scaled(
                 PROOFREAD_SHARE, VERIFICATION_SHARE, "Vérification…"
             ),
@@ -678,7 +678,7 @@ def run_proofread(job_id: str) -> None:
     # « relecture puis publication, sans vérification externe » reste
     # possible en un clic.
     if job.get("chain", True):
-        if job.get("factcheck", True):
+        if job.get("claude_opt_in") and job.get("factcheck", False):
             enqueue(job_id, TASK_FACTCHECK)
         elif job.get("publish", True):
             enqueue(job_id, TASK_PUBLISH)
@@ -693,6 +693,8 @@ def run_proofread(job_id: str) -> None:
 def _proofread(job: dict, segments: list[dict], *, on_progress, should_cancel):
     """Applique le mode de relecture demandé, avec repli en cas d'échec."""
     mode = job.get("proofread") or "none"
+    if mode == "claude" and not job.get("claude_opt_in"):
+        mode = "basic"
 
     def checkpoint_pairs() -> list[TextPair]:
         checkpoint = (db.get_job(job["id"]) or {}).get("review_checkpoint") or {}
@@ -801,6 +803,10 @@ def run_factcheck(job_id: str) -> None:
     job = db.get_job(job_id)
     if job is None:
         logger.warning("Travail %s introuvable", job_id)
+        return
+    if not job.get("claude_opt_in"):
+        db.mark_finished(job_id, status="done", stage="Relu — accord Claude requis", task=None,
+                         error="Cochez « Utiliser Claude » avant la recherche web.")
         return
 
     clean_text = job.get("clean_text") or ""

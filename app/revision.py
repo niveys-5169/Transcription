@@ -9,6 +9,8 @@ from .proofread import prompts
 
 
 def build_revision(job: dict, settings) -> dict | None:
+    if not job.get("claude_opt_in"):
+        return None
     backend = get_backend(settings)
     available, _ = backend.is_available()
     if not available:

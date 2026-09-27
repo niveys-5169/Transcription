@@ -15,7 +15,7 @@ def _job_id(**overrides):
     job_id = db.create_job(
         filename="cours.mp4", media_path="/tmp/x.mp4", size_bytes=10,
         engine="local", model="tiny", language="fr",
-        proofread="nim", structure=False, verify=True,
+        proofread="nim", structure=False, verify=True, claude_opt_in=True,
         chain=False, factcheck=False, publish=False,
     )
     segments = [{"start": 0.0, "end": 2.0, "text": "Le texte brut du cours."}]
@@ -76,7 +76,7 @@ def test_verify_true_appelle_claude_meme_pour_une_relecture_nim(monkeypatch):
 
     job = db.get_job(job_id)
     assert job["status"] == "done"
-    assert job["verification"]["mode"] == "claude-cible"
+    assert job["verification"]["mode"] == "claude-document"
     assert claude_calls, "Claude aurait dû être appelé pour vérifier la relecture NIM"
 
 
