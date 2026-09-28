@@ -123,6 +123,16 @@ def test_status_expose_les_capacites(client):
     assert "settings" in body
 
 
+def test_rafraichir_les_modeles_nim_recharge_le_catalogue(client, monkeypatch):
+    from app.proofread.nim import NimProofreader
+
+    monkeypatch.setattr(NimProofreader, "refresh_models", lambda self: (["nvidia/frais"], "1 modèle"))
+
+    body = client.post("/api/nim/models/refresh").json()
+
+    assert body == {"models": ["nvidia/frais"], "detail": "1 modèle"}
+
+
 def test_status_ne_divulgue_jamais_les_cles(client):
     settings = client.get("/api/status").json()["settings"]
     assert settings["anthropic_api_key"] == ""

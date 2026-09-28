@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import threading
 import time
 from dataclasses import dataclass
@@ -41,9 +42,15 @@ from .validation import validate_proofread_candidate
 logger = logging.getLogger(__name__)
 
 # Le catalogue est téléchargé une seule fois par démarrage de l'application.
-# Cela évite de refaire une requête réseau à chaque rafraîchissement de l'UI.
+# Cela évite de refaire une requête réseau à chaque rafraîchissement de l'UI ;
+# le bouton « Rafraîchir » des réglages le recharge à la demande.
 _MODELS_CACHE_LOCK = threading.Lock()
 _MODELS_CACHE: dict[tuple[str, str], tuple[list[str], str]] = {}
+
+# Le catalogue NIM mêle aux modèles de conversation des modèles qui ne
+# génèrent pas de texte (embeddings, reranking, filtres de sécurité, notation,
+# extraction de PDF). Les proposer en relecture ne mènerait qu'à des échecs.
+_NON_CHAT_MODEL = re.compile(r"embed|rerank|reward|safety|guard|nemotron-parse|retriever", re.IGNORECASE)
 
 # Saturation passagère (429 limite de débit, 503 surcharge) : fréquente sur
 # l'API hébergée dès que plusieurs blocs partent de front. On patiente sur le
@@ -132,10 +139,11 @@ class NimProofreader:
             models = sorted({
                 str(entry.get("id")).strip()
                 for entry in entries if isinstance(entry, dict) and entry.get("id")
-            }, key=str.casefold)
+            } - {""}, key=str.casefold)
+            models = [model for model in models if not _NON_CHAT_MODEL.search(model)]
             if not models:
                 return [], "NVIDIA NIM n'a renvoyé aucun modèle de texte."
-            return models, f"{len(models)} modèle(s) NIM chargé(s) au démarrage."
+            return models, f"{len(models)} modèle(s) NIM disponible(s), chargé(s) à {time.strftime('%H:%M')}."
         except HTTPError as exc:
             return [], f"Impossible de charger les modèles NIM ({exc.code})."
         except (URLError, TimeoutError, json.JSONDecodeError, ValueError) as exc:
@@ -152,6 +160,13 @@ class NimProofreader:
         result = self.list_models()
         with _MODELS_CACHE_LOCK:
             return _MODELS_CACHE.setdefault(fingerprint, result)
+
+    def refresh_models(self) -> tuple[list[str], str]:
+        """Recharge le catalogue maintenant et remplace celui du démarrage."""
+        result = self.list_models()
+        with _MODELS_CACHE_LOCK:
+            _MODELS_CACHE[(self.settings.nim_base_url, self.settings.nim_api_key)] = result
+        return result
 
     def _models_to_try(self) -> list[str]:
         """Modèle principal puis deux secours, sans jamais essayer un doublon."""

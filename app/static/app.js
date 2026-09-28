@@ -2889,6 +2889,7 @@ function initActions() {
     } catch (error) { button.disabled = false; button.textContent = "Mise à jour disponible"; toast(error.message, true); }
   });
   $("settings-save").addEventListener("click", saveSettings);
+  $("nim-models-refresh").addEventListener("click", refreshNimModels);
   $("settings-cancel").addEventListener("click", () => $("settings-dialog").close());
   $("notebooklm-initialize").addEventListener("click", initializeNotebookLM);
   $("notebooklm-test").addEventListener("click", testNotebookLMSync);
@@ -3062,7 +3063,9 @@ function populateNimModels(primary, fallback1, fallback2, fast) {
     if (optional) select.append(new Option("Aucun", ""));
     models.forEach((model) => {
       select.append(new Option(
-        model === selectedModel && !state.nimModels.includes(model) ? `${model} — modèle enregistré` : model,
+        model === selectedModel && !state.nimModels.includes(model)
+          ? `${model} — ${state.nimModels.length ? "absent du catalogue" : "modèle enregistré"}`
+          : model,
         model,
       ));
     });
@@ -3070,6 +3073,28 @@ function populateNimModels(primary, fallback1, fallback2, fast) {
     select.value = selectedModel || (optional ? "" : models[0] || "");
   });
   $("nim-model-detail").textContent = state.nimModelsDetail || "Les modèles seront chargés au démarrage avec la clé NIM.";
+}
+
+async function refreshNimModels() {
+  const button = $("nim-models-refresh");
+  if ($("nim_api_key").value.trim()) {
+    toast("Enregistrez d'abord la nouvelle clé NIM, puis rafraîchissez.", true);
+    return;
+  }
+  button.disabled = true;
+  try {
+    const response = await api("/api/nim/models/refresh", { method: "POST" });
+    state.nimModels = response.models || [];
+    state.nimModelsDetail = response.detail || "";
+    // Les choix en cours (même non enregistrés) sont conservés ; un modèle
+    // retiré par NVIDIA reste sélectionné mais signalé « absent du catalogue ».
+    populateNimModels($("nim_model").value, $("nim_fallback_model_1").value, $("nim_fallback_model_2").value, $("nim_model_fast").value);
+    toast(state.nimModels.length ? "Liste des modèles NIM rafraîchie." : state.nimModelsDetail, !state.nimModels.length);
+  } catch (error) {
+    toast(error.message, true);
+  } finally {
+    button.disabled = false;
+  }
 }
 
 /* ------------------------------------------------------------ init */

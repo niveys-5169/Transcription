@@ -53,6 +53,37 @@ def test_startup_models_ne_rafraichit_qu_une_fois_par_configuration(monkeypatch)
     assert calls == [True]
 
 
+def test_refresh_models_ignore_le_cache_et_le_remplace(monkeypatch):
+    nim_module._MODELS_CACHE.clear()
+    proofreader = NimProofreader(Settings(nim_api_key="nim-test"))
+    catalogues = iter([(["nvidia/ancien"], "chargé"), (["nvidia/nouveau"], "rechargé")])
+    monkeypatch.setattr(proofreader, "list_models", lambda: next(catalogues))
+
+    assert proofreader.startup_models()[0] == ["nvidia/ancien"]
+    assert proofreader.refresh_models()[0] == ["nvidia/nouveau"]
+    # Le démarrage suivant (rechargement de /api/status) voit le nouveau catalogue.
+    assert proofreader.startup_models()[0] == ["nvidia/nouveau"]
+
+
+def test_list_models_ecarte_les_modeles_qui_ne_generent_pas_de_texte(monkeypatch):
+    monkeypatch.setattr(
+        "app.proofread.nim.urlopen",
+        lambda request, timeout: _Response({"data": [
+            {"id": "nvidia/nemotron-3-super-120b-a12b"},
+            {"id": "nvidia/nemotron-3-embed-1b"},
+            {"id": "nvidia/llama-3.1-nemotron-safety-guard-8b-v3"},
+            {"id": "nvidia/nemotron-4-340b-reward"},
+            {"id": "nvidia/nemotron-parse-2.0"},
+            {"id": "nvidia/nv-rerankqa-mistral-4b-v3"},
+        ]}),
+    )
+    proofreader = NimProofreader(Settings(nim_api_key="nim-test"))
+
+    models, _detail = proofreader.list_models()
+
+    assert models == ["nvidia/nemotron-3-super-120b-a12b"]
+
+
 def test_complete_bascule_sur_le_modele_suivant_si_reponse_trop_courte(monkeypatch):
     requests = []
 

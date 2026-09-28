@@ -476,9 +476,10 @@
       <label class="check"><input type="checkbox" id="nim_fallback_enabled"><span>Utiliser NVIDIA NIM comme repli pour la relecture</span></label>
       <label class="field"><span>Clé API NVIDIA NIM</span><input type="password" id="nim_api_key" placeholder="nvapi-…" autocomplete="off"><small id="nim-state"></small></label>
       <label class="field"><span>Modèle NIM principal</span><select id="nim_model"></select><small id="nim-model-detail"></small></label>
+      <p class="hint"><button type="button" class="btn btn-mini btn-ghost" id="nim-models-refresh">Rafraîchir la liste des modèles</button> Interroge NVIDIA avec la clé enregistrée ; vos choix sont conservés.</p>
       <label class="field"><span>1er modèle de secours NIM</span><select id="nim_fallback_model_1"></select></label>
-      <label class="field"><span>2e modèle de secours NIM</span><select id="nim_fallback_model_2"></select><small>Utilisés seulement si le modèle précédent est saturé ou répond mal.</small></label>
-      <label class="field"><span>Modèle NIM des passes légères</span><select id="nim_model_fast"></select><small>Sommaire et vérification ciblée. La relecture reste sur le modèle principal.</small></label>
+      <label class="field"><span>2e modèle de secours NIM</span><select id="nim_fallback_model_2"></select><small>Essayés dans cet ordre si le modèle précédent est absent, saturé ou répond mal. Relecture et lecture globale en une passe utilisent cette chaîne.</small></label>
+      <label class="field"><span>Modèle NIM des passes légères</span><select id="nim_model_fast"></select><small>Sommaire seulement. La relecture et la lecture globale restent sur le modèle principal.</small></label>
       <label class="field"><span>URL API NIM</span><input type="url" id="nim_base_url" placeholder="https://integrate.api.nvidia.com/v1/chat/completions"></label>
     </details>
 

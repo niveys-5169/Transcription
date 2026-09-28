@@ -98,6 +98,13 @@ async def status() -> dict:
     }
 
 
+@app.post("/api/nim/models/refresh")
+async def refresh_nim_models() -> dict:
+    """Recharge le catalogue NIM avec la clé enregistrée, sans redémarrer."""
+    models, detail = await asyncio.to_thread(NimProofreader(config.load_settings()).refresh_models)
+    return {"models": models, "detail": detail}
+
+
 @app.get("/api/update")
 async def check_update() -> dict:
     return updates.check()
