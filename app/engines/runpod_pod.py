@@ -440,7 +440,8 @@ class PodFallbackSession:
     ) -> tuple[httpx.Response, dict]:
         """Envoie le média entier (multipart) sur ``path`` et rend la réponse
         JSON, en retentant les corps illisibles du proxy (voir
-        PROXY_RETRY_STATUSES). Lève sur erreur réseau ou proxy muet."""
+        PROXY_RETRY_STATUSES) et les coupures réseau pendant l'envoi. Lève
+        sur erreur réseau persistante ou proxy muet."""
         url = f"{self._client.proxy_url(self.pod_id, self.settings.runpod_pod_port)}{path}"
         attempts = 3
         statuts_muets: list[int] = []
@@ -456,6 +457,15 @@ class PodFallbackSession:
                     ),
                     timeout=httpx.Timeout(120.0, read=read_timeout),
                 )
+            except httpx.TransportError as exc:
+                # Une coupure pendant l'envoi (ex. WinError 10053, connexion
+                # réinitialisée) est fréquente sur un gros fichier envoyé
+                # lentement : un raté ponctuel ne doit pas perdre tout le
+                # travail, comme pour les sondes de _wait_job.
+                if attempt < attempts:
+                    time.sleep(POLL_INTERVAL)
+                    continue
+                raise TranscriptionError(f"Pod RunPod injoignable : {exc}") from exc
             except httpx.HTTPError as exc:
                 raise TranscriptionError(f"Pod RunPod injoignable : {exc}") from exc
             if response.status_code == 413:

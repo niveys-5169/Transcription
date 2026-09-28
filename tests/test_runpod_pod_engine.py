@@ -692,6 +692,44 @@ def test_transcribe_audio_abandonne_apres_trop_de_sondes_ratees(monkeypatch):
         session.transcribe_audio(b"RIFF____WAVE", "large-v3", "fr")
 
 
+def test_transcribe_audio_retente_une_coupure_reseau_pendant_l_envoi(monkeypatch):
+    """Une réinitialisation de connexion pendant l'envoi du fichier (ex.
+    WinError 10053, coupure Wi-Fi/VPN) ne doit pas perdre tout le travail au
+    premier raté : on retente l'envoi comme pour les sondes de _wait_job."""
+    appels = []
+
+    def http(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            appels.append("POST")
+            if len(appels) == 1:
+                raise httpx.WriteError("[Errno 10053] connexion abandonnée")
+            return httpx.Response(202, json={"job_id": "j1"})
+        return httpx.Response(200, json={"status": "done", "result": {"segments": []}})
+
+    monkeypatch.setattr("app.engines.runpod_pod.time.sleep", lambda s: None)
+    session = _session(_Settings(), lambda r: httpx.Response(200), http)
+    session.pod_id = "pod123"
+
+    output = session.transcribe_audio(b"RIFF____WAVE", "large-v3", "fr")
+
+    assert output == {"segments": []}
+    assert appels == ["POST", "POST"]
+
+
+def test_transcribe_audio_abandonne_apres_coupures_reseau_repetees(monkeypatch):
+    def http(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            raise httpx.WriteError("[Errno 10053] connexion abandonnée")
+        raise AssertionError("ne doit jamais sonder : l'envoi n'a jamais abouti")
+
+    monkeypatch.setattr("app.engines.runpod_pod.time.sleep", lambda s: None)
+    session = _session(_Settings(), lambda r: httpx.Response(200), http)
+    session.pod_id = "pod123"
+
+    with pytest.raises(TranscriptionError, match="Pod RunPod injoignable"):
+        session.transcribe_audio(b"RIFF____WAVE", "large-v3", "fr")
+
+
 def test_transcribe_audio_signale_un_travail_oublie_par_le_pod(monkeypatch):
     """Un conteneur redémarré (plantage) repart avec une mémoire vide : son
     404 JSON « travail inconnu » doit être expliqué, pas retenté à
