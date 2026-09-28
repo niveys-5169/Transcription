@@ -220,6 +220,48 @@ def test_start_transmet_le_jeton_hugging_face_au_pod():
     assert entrees[0]["env"] == [{"key": "HF_TOKEN", "value": "hf_test_token"}]
 
 
+def test_start_retente_le_type_de_gpu_suivant_si_le_premier_est_indisponible():
+    gpu_types_essayes = []
+
+    def graphql(request: httpx.Request) -> httpx.Response:
+        entree = json.loads(request.content)["variables"]["input"]
+        gpu_types_essayes.append(entree["gpuTypeId"])
+        if entree["gpuTypeId"] == "NVIDIA RTX A5000":
+            # Aucun GPU disponible pour ce type : pas d'id renvoyé.
+            return httpx.Response(200, json={"data": {"podFindAndDeployOnDemand": None}})
+        return httpx.Response(200, json={"data": {"podFindAndDeployOnDemand": {"id": "pod123"}}})
+
+    def http(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"status": "ok"})
+
+    class _SettingsAvecRepli(_Settings):
+        runpod_pod_gpu_type_id = "NVIDIA RTX A5000,NVIDIA GeForce RTX 3090"
+
+    session = _session(_SettingsAvecRepli(), graphql, http)
+    session.start()
+
+    assert gpu_types_essayes == ["NVIDIA RTX A5000", "NVIDIA GeForce RTX 3090"]
+    assert session.pod_id == "pod123"
+
+
+def test_start_leve_une_erreur_recapitulant_chaque_type_de_gpu_si_tous_echouent():
+    def graphql(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"data": {"podFindAndDeployOnDemand": None}})
+
+    def http(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"status": "ok"})
+
+    class _SettingsAvecRepli(_Settings):
+        runpod_pod_gpu_type_id = "NVIDIA RTX A5000,NVIDIA GeForce RTX 3090"
+
+    session = _session(_SettingsAvecRepli(), graphql, http)
+
+    with pytest.raises(TranscriptionError, match="NVIDIA RTX A5000.*NVIDIA GeForce RTX 3090"):
+        session.start()
+
+    assert session.pod_id is None
+
+
 def test_start_leve_une_erreur_si_le_pod_ne_repond_jamais(monkeypatch):
     def graphql(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"data": {"podFindAndDeployOnDemand": {"id": "pod123"}}})

@@ -2340,7 +2340,7 @@ function openSettings() {
   $("nim_base_url").value = settings.nim_base_url || "";
   $("runpod_chunk_seconds").value = settings.runpod_chunk_seconds || 180;
   $("runpod_pod_image").value = settings.runpod_pod_image || "";
-  $("runpod_pod_gpu_type_id").value = settings.runpod_pod_gpu_type_id || "NVIDIA L4";
+  $("runpod_pod_gpu_type_id").value = settings.runpod_pod_gpu_type_id || "NVIDIA RTX A5000,NVIDIA GeForce RTX 3090,NVIDIA GeForce RTX 4090";
   $("runpod_pod_network_volume_id").value = settings.runpod_pod_network_volume_id || "";
   $("keep_media").checked = Boolean(settings.keep_media);
   $("notebooklm_sync_enabled").checked = Boolean(settings.notebooklm_sync_enabled);
@@ -2420,7 +2420,7 @@ async function saveSettings() {
     nim_base_url: $("nim_base_url").value.trim(),
     runpod_chunk_seconds: Number($("runpod_chunk_seconds").value) || 180,
     runpod_pod_image: $("runpod_pod_image").value.trim(),
-    runpod_pod_gpu_type_id: $("runpod_pod_gpu_type_id").value.trim() || "NVIDIA L4",
+    runpod_pod_gpu_type_id: $("runpod_pod_gpu_type_id").value.trim() || "NVIDIA RTX A5000,NVIDIA GeForce RTX 3090,NVIDIA GeForce RTX 4090",
     runpod_pod_network_volume_id: $("runpod_pod_network_volume_id").value.trim(),
     diarization_enabled: $("diarization_enabled").checked,
     keep_media: $("keep_media").checked,

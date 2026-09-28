@@ -124,6 +124,12 @@ def _multipart_fields(audio_bytes: bytes, **fields: str) -> dict:
     return parts
 
 
+def _gpu_type_ids(raw: str) -> list[str]:
+    """Types de GPU à essayer, dans l'ordre, à partir du réglage brut
+    (chaîne séparée par des virgules — voir Settings.runpod_pod_gpu_type_id)."""
+    return [item.strip() for item in raw.split(",") if item.strip()]
+
+
 class RunPodPodClient:
     """Fine couche autour de l'API GraphQL RunPod pour les pods à la demande."""
 
@@ -256,19 +262,43 @@ class PodFallbackSession:
                 "(réglages → Pod de secours)."
             )
 
+        gpu_type_ids = _gpu_type_ids(settings.runpod_pod_gpu_type_id)
+        if not gpu_type_ids:
+            raise TranscriptionError(
+                "Pod de secours activé mais aucun type de GPU configuré "
+                "(réglages → Pod de secours)."
+            )
+
         name = f"transcription-fallback-{uuid.uuid4().hex[:8]}"
         token_env = _hf_token_env(settings)
         logger.info("Création d'un pod RunPod : HF_TOKEN configuré=%s.", bool(token_env))
-        self.pod_id = self._client.create(
-            name=name,
-            image=settings.runpod_pod_image,
-            gpu_type_id=settings.runpod_pod_gpu_type_id,
-            container_disk_gb=settings.runpod_pod_container_disk_gb,
-            port=settings.runpod_pod_port,
-            start_command="python3 -u /pod_server.py",
-            network_volume_id=getattr(settings, "runpod_pod_network_volume_id", "") or None,
-            env=token_env,
-        )
+
+        errors: list[str] = []
+        for gpu_type_id in gpu_type_ids:
+            try:
+                self.pod_id = self._client.create(
+                    name=name,
+                    image=settings.runpod_pod_image,
+                    gpu_type_id=gpu_type_id,
+                    container_disk_gb=settings.runpod_pod_container_disk_gb,
+                    port=settings.runpod_pod_port,
+                    start_command="python3 -u /pod_server.py",
+                    network_volume_id=getattr(settings, "runpod_pod_network_volume_id", "") or None,
+                    env=token_env,
+                )
+            except TranscriptionError as exc:
+                logger.warning("Pod RunPod : GPU %s indisponible (%s).", gpu_type_id, exc)
+                errors.append(f"{gpu_type_id} : {exc}")
+                continue
+            else:
+                logger.info("Pod RunPod : GPU retenu %s.", gpu_type_id)
+                break
+        else:
+            raise TranscriptionError(
+                "RunPod n'a pu déployer de pod de secours pour aucun des types de "
+                "GPU configurés : " + " ; ".join(errors)
+            )
+
         self._wait_ready()
 
     def _wait_ready(self) -> None:

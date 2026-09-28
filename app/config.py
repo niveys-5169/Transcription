@@ -132,7 +132,11 @@ class Settings:
     # ce dépôt : il faut construire et pousser l'image vous-même (voir le
     # README) et renseigner sa référence ici.
     runpod_pod_image: str = ""
-    runpod_pod_gpu_type_id: str = "NVIDIA L4"
+    # Types de GPU essayés dans cet ordre, séparés par des virgules : si
+    # RunPod n'a aucune disponibilité pour le premier (ou refuse la
+    # création), le pod de secours retente avec le suivant plutôt que
+    # d'abandonner — voir PodFallbackSession.start() dans runpod_pod.py.
+    runpod_pod_gpu_type_id: str = "NVIDIA RTX A5000,NVIDIA GeForce RTX 3090,NVIDIA GeForce RTX 4090"
     # Volume reseau RunPod (optionnel) : persiste le cache Hugging Face
     # (modele Whisper) entre deux pods, pour que seul le tout premier
     # telechargement le paie — sans l'embarquer dans l'image Docker
