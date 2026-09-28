@@ -428,7 +428,9 @@ def test_sans_claude_la_lecture_ciblee_passe_par_nim(monkeypatch):
 
     assert rapport.mode == "nim-document"
     assert rapport.claude_pairs == 1
-    assert appels == [True]
+    # Lecture globale en une passe : chaîne principale (principal → secours),
+    # jamais le modèle des passes légères, trop faible pour tout un document.
+    assert appels == [False]
     assert any(f.message == "Sens inversé." for f in rapport.findings)
 
 

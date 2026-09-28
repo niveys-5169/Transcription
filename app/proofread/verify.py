@@ -345,6 +345,8 @@ class ClaudeVerifier:
 
     name = "verification"
     mode = "claude-document"
+    # Modèle rapide du backend pour la lecture globale (voir NimVerifier).
+    fast = True
 
     def __init__(self, settings=None):
         from ..config import load_settings
@@ -383,7 +385,7 @@ class ClaudeVerifier:
             system=prompts.COHERENCE_SYSTEM,
             user=body,
             max_tokens=MAX_TOKENS_VERIFICATION,
-            fast=True,
+            fast=self.fast,
         ).text
         if "\ufffd" in response:
             raise ProofreadError("La lecture globale contient U+FFFD ; résultat écarté.")
@@ -415,13 +417,16 @@ class ClaudeVerifier:
         return findings
 
 class NimVerifier(ClaudeVerifier):
-    """Lecture globale par le modèle NIM rapide, quand Claude est absent.
+    """Lecture globale par la chaîne NIM principale, quand Claude est absent.
 
     Sans lui, une relecture NIM faite parce que Claude est indisponible ne
-    serait contrôlée que par les règles mécaniques.
+    serait contrôlée que par les règles mécaniques. Le document entier part en
+    une passe : il faut le modèle principal (puis ses secours), pas le modèle
+    des passes légères, souvent trop petit pour juger toute sa cohérence.
     """
 
     mode = "nim-document"
+    fast = False
 
     def __init__(self, settings=None):
         from ..config import load_settings
