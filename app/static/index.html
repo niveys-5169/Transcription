@@ -652,11 +652,10 @@
         <span>Image Docker du pod</span>
         <input type="text" id="runpod_pod_image" placeholder="mon-registre/transcription-pod:latest">
       </label>
-      <label class="field">
-        <span>Types de GPU (repli)</span>
-        <input type="text" id="runpod_pod_gpu_type_id" placeholder="NVIDIA RTX A5000,NVIDIA GeForce RTX 3090,NVIDIA GeForce RTX 4090">
-        <small>Essayés dans cet ordre, séparés par des virgules : si le premier n'a aucune disponibilité, le pod retente avec le suivant.</small>
-      </label>
+      <label class="field"><span>GPU principal</span><select id="runpod_pod_gpu_1"></select><small id="runpod-gpu-detail"></small></label>
+      <p class="hint"><button type="button" class="btn btn-mini btn-ghost" id="runpod-gpus-refresh">Rafraîchir la liste des GPU</button> Interroge RunPod avec la clé enregistrée ; stock et prix changent d'une minute à l'autre.</p>
+      <label class="field"><span>1er GPU de secours</span><select id="runpod_pod_gpu_2"></select></label>
+      <label class="field"><span>2e GPU de secours</span><select id="runpod_pod_gpu_3"></select><small>Essayés dans cet ordre : si le GPU précédent n'a aucune disponibilité, le pod retente avec le suivant.</small></label>
       <label class="field">
         <span>Volume réseau (optionnel)</span>
         <input type="text" id="runpod_pod_network_volume_id" placeholder="ex. l6y182wxyv">

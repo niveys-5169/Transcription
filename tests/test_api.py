@@ -133,6 +133,17 @@ def test_rafraichir_les_modeles_nim_recharge_le_catalogue(client, monkeypatch):
     assert body == {"models": ["nvidia/frais"], "detail": "1 modèle"}
 
 
+def test_liste_des_gpu_runpod(client, monkeypatch):
+    from app.engines import runpod_pod
+
+    gpu = {"id": "NVIDIA L4", "name": "L4", "memory_gb": 24, "price": 0.4, "stock": "Low"}
+    monkeypatch.setattr(runpod_pod, "list_gpu_types", lambda settings: ([gpu], "1 type"))
+
+    body = client.get("/api/runpod/gpu-types").json()
+
+    assert body == {"types": [gpu], "detail": "1 type"}
+
+
 def test_status_ne_divulgue_jamais_les_cles(client):
     settings = client.get("/api/status").json()["settings"]
     assert settings["anthropic_api_key"] == ""

@@ -144,6 +144,40 @@ def test_terminate_envoie_bien_le_bon_pod_id():
     assert appels == ["pod123"]
 
 
+def test_gpu_types_garde_nvidia_et_met_le_stock_en_premier():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert "gpuTypes" in json.loads(request.content)["query"]
+        return httpx.Response(200, json={"data": {"gpuTypes": [
+            {"id": "NVIDIA RTX A5000", "displayName": "RTX A5000", "memoryInGb": 24,
+             "lowestPrice": {"uninterruptablePrice": None, "stockStatus": None}},
+            {"id": "AMD Instinct MI300X OAM", "displayName": "MI300X", "memoryInGb": 192,
+             "lowestPrice": {"uninterruptablePrice": 2.0, "stockStatus": "Low"}},
+            {"id": "unknown", "displayName": "unknown", "memoryInGb": 0, "lowestPrice": None},
+            {"id": "NVIDIA L40S", "displayName": "L40S", "memoryInGb": 48,
+             "lowestPrice": {"uninterruptablePrice": 0.79, "stockStatus": "Low"}},
+            {"id": "NVIDIA GeForce RTX 3090", "displayName": "RTX 3090", "memoryInGb": 24,
+             "lowestPrice": {"uninterruptablePrice": 0.22, "stockStatus": "Medium"}},
+        ]}})
+
+    types_gpu = _mock_client(handler).gpu_types()
+
+    assert [g["id"] for g in types_gpu] == [
+        "NVIDIA GeForce RTX 3090", "NVIDIA L40S", "NVIDIA RTX A5000",
+    ]
+    assert types_gpu[0] == {
+        "id": "NVIDIA GeForce RTX 3090", "name": "RTX 3090", "memory_gb": 24,
+        "price": 0.22, "stock": "Medium",
+    }
+
+
+def test_list_gpu_types_sans_cle_ne_contacte_pas_runpod():
+    types_gpu, detail = runpod_pod_module.list_gpu_types(
+        types.SimpleNamespace(runpod_api_key="")
+    )
+    assert types_gpu == []
+    assert "clé API RunPod" in detail
+
+
 def test_proxy_url_suit_la_convention_runpod():
     client = RunPodPodClient("rpa_test")
     assert client.proxy_url("pod123", 8000) == "https://pod123-8000.proxy.runpod.net"

@@ -21,6 +21,7 @@ from . import __version__, config, db, exporters, lexicon, media, obsidian, pipe
 from .lexicon import verification as lexicon_verification
 from .obsidian import index as vault_index
 from .engines import availability as engine_availability
+from .engines import runpod_pod
 from .proofread import factcheck as factcheck_module
 from .proofread.claude import ClaudeProofreader
 from .proofread.nim import NimProofreader
@@ -103,6 +104,13 @@ async def refresh_nim_models() -> dict:
     """Recharge le catalogue NIM avec la clé enregistrée, sans redémarrer."""
     models, detail = await asyncio.to_thread(NimProofreader(config.load_settings()).refresh_models)
     return {"models": models, "detail": detail}
+
+
+@app.get("/api/runpod/gpu-types")
+async def runpod_gpu_types() -> dict:
+    """Types de GPU proposés pour le pod RunPod, avec stock et prix actuels."""
+    types, detail = await asyncio.to_thread(runpod_pod.list_gpu_types, config.load_settings())
+    return {"types": types, "detail": detail}
 
 
 @app.get("/api/update")

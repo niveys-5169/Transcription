@@ -38,6 +38,9 @@ def test_confiance_et_repli_nim_sont_visibles_sans_exposer_la_cle():
     assert 'id="nim_fallback_model_2"' in html
     assert "populateNimModels" in script
     assert "nimModelsDetail" in script
+    for gpu_select in ("runpod_pod_gpu_1", "runpod_pod_gpu_2", "runpod_pod_gpu_3"):
+        assert f'<select id="{gpu_select}">' in html
+    assert "/api/runpod/gpu-types" in script
     assert "timeline-marker.needs-review" in css
     assert "confidence-badge" in css
     assert "markerLabel" in script

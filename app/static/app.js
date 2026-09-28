@@ -36,6 +36,8 @@ const state = {
   lexiconEditingTerm: null,
   nimModels: [],
   nimModelsDetail: "",
+  runpodGpus: [],
+  runpodGpusDetail: "",
 };
 
 /* ----------------------------------------------------------- utilitaires */
@@ -2340,7 +2342,8 @@ function openSettings() {
   $("nim_base_url").value = settings.nim_base_url || "";
   $("runpod_chunk_seconds").value = settings.runpod_chunk_seconds || 180;
   $("runpod_pod_image").value = settings.runpod_pod_image || "";
-  $("runpod_pod_gpu_type_id").value = settings.runpod_pod_gpu_type_id || "NVIDIA RTX A5000,NVIDIA GeForce RTX 3090,NVIDIA GeForce RTX 4090";
+  populateRunpodGpus((settings.runpod_pod_gpu_type_id || DEFAULT_RUNPOD_GPUS).split(",").map((id) => id.trim()));
+  if (!state.runpodGpus.length) loadRunpodGpus();
   $("runpod_pod_network_volume_id").value = settings.runpod_pod_network_volume_id || "";
   $("keep_media").checked = Boolean(settings.keep_media);
   $("notebooklm_sync_enabled").checked = Boolean(settings.notebooklm_sync_enabled);
@@ -2420,7 +2423,7 @@ async function saveSettings() {
     nim_base_url: $("nim_base_url").value.trim(),
     runpod_chunk_seconds: Number($("runpod_chunk_seconds").value) || 180,
     runpod_pod_image: $("runpod_pod_image").value.trim(),
-    runpod_pod_gpu_type_id: $("runpod_pod_gpu_type_id").value.trim() || "NVIDIA RTX A5000,NVIDIA GeForce RTX 3090,NVIDIA GeForce RTX 4090",
+    runpod_pod_gpu_type_id: [...new Set(RUNPOD_GPU_SELECTS.map((id) => $(id).value).filter(Boolean))].join(",") || DEFAULT_RUNPOD_GPUS,
     runpod_pod_network_volume_id: $("runpod_pod_network_volume_id").value.trim(),
     diarization_enabled: $("diarization_enabled").checked,
     keep_media: $("keep_media").checked,
@@ -2890,6 +2893,7 @@ function initActions() {
   });
   $("settings-save").addEventListener("click", saveSettings);
   $("nim-models-refresh").addEventListener("click", refreshNimModels);
+  $("runpod-gpus-refresh").addEventListener("click", () => loadRunpodGpus(true));
   $("settings-cancel").addEventListener("click", () => $("settings-dialog").close());
   $("notebooklm-initialize").addEventListener("click", initializeNotebookLM);
   $("notebooklm-test").addEventListener("click", testNotebookLMSync);
@@ -3073,6 +3077,53 @@ function populateNimModels(primary, fallback1, fallback2, fast) {
     select.value = selectedModel || (optional ? "" : models[0] || "");
   });
   $("nim-model-detail").textContent = state.nimModelsDetail || "Les modèles seront chargés au démarrage avec la clé NIM.";
+}
+
+const DEFAULT_RUNPOD_GPUS = "NVIDIA RTX A5000,NVIDIA GeForce RTX 3090,NVIDIA GeForce RTX 4090";
+const RUNPOD_GPU_SELECTS = ["runpod_pod_gpu_1", "runpod_pod_gpu_2", "runpod_pod_gpu_3"];
+const RUNPOD_STOCK_LABELS = { High: "stock élevé", Medium: "stock moyen", Low: "stock faible" };
+
+function runpodGpuLabel(gpu) {
+  const stock = gpu.stock ? RUNPOD_STOCK_LABELS[gpu.stock] || gpu.stock : "indisponible";
+  const price = gpu.price != null ? ` — ${gpu.price.toFixed(2)} $/h` : "";
+  return `${gpu.name} (${gpu.memory_gb} Go) — ${stock}${price}`;
+}
+
+function populateRunpodGpus(selected) {
+  const known = new Set(state.runpodGpus.map((gpu) => gpu.id));
+  RUNPOD_GPU_SELECTS.forEach((id, index) => {
+    const select = $(id);
+    const value = selected[index] || "";
+    select.innerHTML = "";
+    if (index > 0) select.append(new Option("Aucun", ""));
+    // Un GPU enregistré mais absent du catalogue chargé reste sélectionnable.
+    if (value && !known.has(value)) {
+      select.append(new Option(`${value} — ${state.runpodGpus.length ? "absent du catalogue" : "GPU enregistré"}`, value));
+    }
+    state.runpodGpus.forEach((gpu) => select.append(new Option(runpodGpuLabel(gpu), gpu.id)));
+    select.value = value;
+  });
+  $("runpod-gpu-detail").textContent = state.runpodGpusDetail || "Chargement de la liste des GPU RunPod…";
+}
+
+async function loadRunpodGpus(manual = false) {
+  const button = $("runpod-gpus-refresh");
+  const current = RUNPOD_GPU_SELECTS.map((id) => $(id).value);
+  button.disabled = true;
+  try {
+    const response = await api("/api/runpod/gpu-types");
+    state.runpodGpus = response.types || [];
+    state.runpodGpusDetail = response.detail || "";
+    // Les choix en cours (même non enregistrés) sont conservés.
+    populateRunpodGpus(current);
+    if (manual) toast(state.runpodGpus.length ? "Liste des GPU RunPod rafraîchie." : state.runpodGpusDetail, !state.runpodGpus.length);
+  } catch (error) {
+    state.runpodGpusDetail = error.message;
+    populateRunpodGpus(current);
+    if (manual) toast(error.message, true);
+  } finally {
+    button.disabled = false;
+  }
 }
 
 async function refreshNimModels() {
