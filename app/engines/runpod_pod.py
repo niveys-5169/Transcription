@@ -233,6 +233,53 @@ class RunPodPodClient:
     def proxy_url(self, pod_id: str, port: int) -> str:
         return f"https://{pod_id}-{port}.proxy.runpod.net"
 
+    def gpu_types(self) -> list[dict]:
+        """Catalogue des types de GPU RunPod, avec prix et stock indicatifs
+        pour un pod à 1 GPU. Seuls les GPU NVIDIA sont gardés : l'image du
+        pod est construite pour CUDA."""
+        data = self._graphql(
+            """
+            query GpuTypes {
+              gpuTypes {
+                id displayName memoryInGb
+                lowestPrice(input: {gpuCount: 1}) { uninterruptablePrice stockStatus }
+              }
+            }
+            """,
+            {},
+        )
+        types: list[dict] = []
+        for item in data.get("gpuTypes") or []:
+            gpu_id = item.get("id") or ""
+            if not gpu_id.startswith(("NVIDIA", "Tesla")):
+                continue
+            price = item.get("lowestPrice") or {}
+            types.append({
+                "id": gpu_id,
+                "name": item.get("displayName") or gpu_id,
+                "memory_gb": item.get("memoryInGb") or 0,
+                "price": price.get("uninterruptablePrice"),
+                "stock": price.get("stockStatus"),
+            })
+        # Les GPU en stock d'abord, du moins cher au plus cher.
+        types.sort(key=lambda g: (g["stock"] is None, g["price"] or 0, g["name"]))
+        return types
+
+
+def list_gpu_types(settings) -> tuple[list[dict], str]:
+    """Catalogue pour les listes de l'interface, et un message d'état."""
+    if not settings.runpod_api_key:
+        return [], "Renseignez la clé API RunPod pour charger la liste des GPU."
+    client = RunPodPodClient(settings.runpod_api_key)
+    try:
+        types = client.gpu_types()
+    except TranscriptionError as exc:
+        return [], str(exc)
+    finally:
+        client.close()
+    in_stock = sum(1 for g in types if g["stock"])
+    return types, f"{len(types)} types de GPU, dont {in_stock} disponibles en ce moment."
+
 
 class PodFallbackSession:
     """Un pod créé pour la durée d'une seule transcription, puis détruit.
