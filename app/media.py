@@ -16,6 +16,7 @@ from __future__ import annotations
 import re
 import shutil
 import subprocess
+import threading
 import wave
 from dataclasses import dataclass
 from pathlib import Path
@@ -176,6 +177,19 @@ def extract_wav(
         **_ffmpeg_process_options(),
     )
     assert process.stdout is not None
+    assert process.stderr is not None
+
+    # ffmpeg peut écrire sur stderr (avertissements répétés sur un fichier aux
+    # timestamps irréguliers, p. ex.) pendant qu'on lit stdout pour la
+    # progression. Sans lecture concurrente, le tube stderr sature (64 Ko sous
+    # Windows) et ffmpeg se bloque en écriture — l'extraction semble alors
+    # traîner indéfiniment sur un fichier qui n'a pourtant rien d'énorme.
+    stderr_chunks: list[str] = []
+    stderr_thread = threading.Thread(
+        target=lambda: stderr_chunks.append(process.stderr.read()),
+        daemon=True,
+    )
+    stderr_thread.start()
 
     try:
         for line in process.stdout:
@@ -189,10 +203,10 @@ def extract_wav(
                 on_progress(min(elapsed / duration, 1.0))
     finally:
         process.stdout.close()
-        stderr = process.stderr.read() if process.stderr else ""
-        if process.stderr:
-            process.stderr.close()
         returncode = process.wait()
+        stderr_thread.join()
+        process.stderr.close()
+        stderr = stderr_chunks[0] if stderr_chunks else ""
 
     if returncode != 0:
         raise MediaError(
@@ -230,6 +244,17 @@ def extract_wav_clip(
         errors="replace", **_ffmpeg_process_options(),
     )
     assert process.stdout is not None
+    assert process.stderr is not None
+
+    # Voir extract_wav : drainer stderr en parallèle évite un blocage si
+    # ffmpeg y écrit plus que la taille du tube pendant qu'on lit stdout.
+    stderr_chunks: list[str] = []
+    stderr_thread = threading.Thread(
+        target=lambda: stderr_chunks.append(process.stderr.read()),
+        daemon=True,
+    )
+    stderr_thread.start()
+
     try:
         for _line in process.stdout:
             if should_cancel is not None and should_cancel():
@@ -237,10 +262,10 @@ def extract_wav_clip(
                 raise MediaError("Extraction annulée.")
     finally:
         process.stdout.close()
-        stderr = process.stderr.read() if process.stderr else ""
-        if process.stderr:
-            process.stderr.close()
         returncode = process.wait()
+        stderr_thread.join()
+        process.stderr.close()
+        stderr = stderr_chunks[0] if stderr_chunks else ""
     if returncode != 0:
         raise MediaError(f"ffmpeg n'a pas pu extraire le clip audio.\n{stderr.strip()[:800]}")
     if not dst.exists() or dst.stat().st_size <= 44:
