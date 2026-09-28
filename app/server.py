@@ -44,8 +44,26 @@ async def lifespan(_: FastAPI):
     yield
 
 
+class RevalidatingStaticFiles(StaticFiles):
+    """Statics avec ``Cache-Control: no-cache``.
+
+    La fenêtre de l'app packagée (``lancer.bat``) réutilise un profil
+    Chrome persistant d'un lancement à l'autre. Sans cet en-tête, le cache
+    disque du navigateur peut servir un ``app.js`` périmé après une mise à
+    jour du dépôt (au lieu de revalider via ETag/Last-Modified), pendant que
+    la page « / » — non mise en cache — est bien fraîche : le JS périmé
+    référence alors des éléments du DOM déjà renommés côté HTML et casse
+    silencieusement les boutons qui en dépendent (ex. Réglages).
+    """
+
+    def file_response(self, *args, **kwargs) -> Response:
+        response = super().file_response(*args, **kwargs)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
 app = FastAPI(title="Transcription de cours", version=__version__, lifespan=lifespan)
-app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+app.mount("/static", RevalidatingStaticFiles(directory=STATIC_DIR), name="static")
 
 
 # ------------------------------------------------------------------- page
