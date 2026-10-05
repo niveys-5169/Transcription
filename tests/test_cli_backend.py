@@ -43,7 +43,7 @@ class _FakeProcess:
 @pytest.fixture
 def backend(monkeypatch):
     monkeypatch.setattr("shutil.which", lambda name: "/usr/local/bin/claude")
-    instance = CliBackend(Settings(claude_backend="cli", proofread_model="claude-sonnet-5"))
+    instance = CliBackend(Settings(claude_backend="cli", proofread_model="claude-sonnet-5-5"))
     return instance
 
 
@@ -413,7 +413,7 @@ def test_fast_utilise_le_modele_et_l_effort_rapides(monkeypatch):
     instance = CliBackend(
         Settings(
             claude_backend="cli",
-            proofread_model="claude-sonnet-5",
+            proofread_model="claude-sonnet-5-5",
             proofread_effort="high",
             proofread_model_fast="claude-haiku-4-5-20251001",
             proofread_effort_fast="low",
@@ -446,7 +446,7 @@ def test_sans_fast_le_modele_normal_est_utilise(backend, monkeypatch):
     backend.complete(system="s", user="u", max_tokens=100)
 
     cmd = captured["cmd"]
-    assert cmd[cmd.index("--model") + 1] == "claude-sonnet-5"
+    assert cmd[cmd.index("--model") + 1] == "claude-sonnet-5-5"
 
 
 # ------------------------------------------------------------ délai par appel

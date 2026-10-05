@@ -26,7 +26,7 @@ def relecteur(monkeypatch):
     settings = Settings(
         anthropic_api_key="sk-ant-test",
         claude_backend="api",
-        proofread_model="claude-sonnet-5",
+        proofread_model="claude-sonnet-5-5",
         proofread_chunk_chars=600,
     )
     instance = ClaudeProofreader(settings)

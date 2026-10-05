@@ -926,7 +926,7 @@ faire. Trois garde-fous :
   titres sont insérés par le programme. Une citation introuvable est ignorée.
   Le texte relu n'est jamais modifié à cette étape, seulement complété.
 
-Modèle par défaut : `claude-sonnet-5`, effort `high`, modifiable dans les
+Modèle par défaut : `claude-sonnet-5-5`, effort `medium`, modifiable dans les
 réglages — un seul modèle pour tous les appels (relecture, sommaire,
 vérification de fidélité, extraction des affirmations, fact-check).
 
