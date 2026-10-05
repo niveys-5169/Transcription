@@ -18,7 +18,7 @@ from .base import BackendResult
 logger = logging.getLogger(__name__)
 
 # Nécessite Opus 5/4.8/4.7/4.6, Sonnet 5 ou Sonnet 4.6 — le modèle par défaut
-# de l'application (claude-sonnet-5) le supporte.
+# de l'application (claude-sonnet-5-5) le supporte.
 WEB_SEARCH_TOOL = "web_search_20260209"
 
 

@@ -186,7 +186,7 @@ class Settings:
     # Modèle de base de tous les appels à Claude (relecture, sommaire,
     # vérification, extraction des affirmations, fact-check) : un seul
     # réglage, pas de modèle différent par étape.
-    proofread_model: str = "claude-sonnet-5"
+    proofread_model: str = "claude-sonnet-5-5"
     # « medium » : une relecture fidèle corrige et ponctue, elle ne raisonne
     # pas ; l'effort élevé allonge chaque bloc sans gain mesurable, alors que
     # les garde-fous (anti-résumé, règles, vérification ciblée) restent actifs.
@@ -351,6 +351,16 @@ def _from_env(settings: Settings) -> Settings:
     return settings
 
 
+# Un modèle ou un effort vide n'a aucun sens : le CLI le transmet tel quel et
+# l'API répond « model: String should have at least 1 character » (400).
+_NEVER_BLANK = {
+    "proofread_model",
+    "proofread_model_fast",
+    "proofread_effort",
+    "proofread_effort_fast",
+}
+
+
 def load_settings(refresh: bool = False) -> Settings:
     """Charge (et met en cache) les réglages."""
     global _settings
@@ -367,6 +377,8 @@ def load_settings(refresh: bool = False) -> Settings:
             known = {f.name for f in fields(Settings)}
             for key, value in raw.items():
                 if key in known and value is not None:
+                    if key in _NEVER_BLANK and not str(value).strip():
+                        continue  # champ vidé dans l'UI : garder le défaut
                     setattr(settings, key, value)
 
         # Les clés partagées priment : c'est la dernière saisie, où qu'elle
