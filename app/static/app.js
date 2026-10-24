@@ -168,6 +168,7 @@ async function loadStatus() {
   const pills = [
     pill(status.ffmpeg.available, "Extraction audio", status.ffmpeg.detail),
     pill(status.engines.local.available, "Moteur local", status.engines.local.detail),
+    pill(status.engines.modal?.available, "Modal", status.engines.modal?.detail || "", true),
     pill(status.engines.runpod.available, "RunPod", status.engines.runpod.detail, true),
     pill(claude.available, "Claude", claude.detail, true),
     pill(obsidian.available, "Obsidian", obsidian.detail, true),
@@ -469,7 +470,8 @@ function renderDetailHeader(job) {
 function metaLine(job) {
   const parts = [statusLabel(job)];
   if (job.duration) parts.push(clock(job.duration));
-  parts.push(`${job.engine === "runpod" ? "RunPod" : "local"} · ${job.model}`);
+  const engineLabel = job.engine === "runpod" ? "RunPod" : job.engine === "modal" ? "Modal" : "local";
+  parts.push(`${engineLabel} · ${job.model}`);
   if (job.proofread === "claude") parts.push("relu par Claude");
   else if (job.proofread === "nim") parts.push("relu par NVIDIA NIM (repli)");
   else if (job.proofread === "basic") parts.push("relecture simple");
@@ -2340,6 +2342,14 @@ function openSettings() {
   $("nim_fallback_enabled").checked = Boolean(settings.nim_fallback_enabled);
   populateNimModels(settings.nim_model || "", settings.nim_fallback_model_1 || "", settings.nim_fallback_model_2 || "", settings.nim_model_fast || "");
   $("nim_base_url").value = settings.nim_base_url || "";
+  $("modal_endpoint_url").value = settings.modal_endpoint_url || "";
+  $("modal_api_token").value = "";
+  $("modal-token-state").textContent = settings.modal_api_token_set
+    ? "Un jeton est enregistré. Laissez vide pour le conserver."
+    : "Aucun jeton enregistré (optionnel).";
+  $("modal-test-state").textContent = settings.modal_endpoint_url
+    ? `Serveur configuré : ${settings.modal_endpoint_url}`
+    : "Non configuré : déployez avec « modal deploy modal_server.py ».";
   $("runpod_chunk_seconds").value = settings.runpod_chunk_seconds || 180;
   $("runpod_pod_image").value = settings.runpod_pod_image || "";
   populateRunpodGpus((settings.runpod_pod_gpu_type_id || DEFAULT_RUNPOD_GPUS).split(",").map((id) => id.trim()));
@@ -2421,6 +2431,7 @@ async function saveSettings() {
     nim_fallback_model_2: $("nim_fallback_model_2").value.trim(),
     nim_model_fast: $("nim_model_fast").value.trim(),
     nim_base_url: $("nim_base_url").value.trim(),
+    modal_endpoint_url: $("modal_endpoint_url").value.trim(),
     runpod_chunk_seconds: Number($("runpod_chunk_seconds").value) || 180,
     runpod_pod_image: $("runpod_pod_image").value.trim(),
     runpod_pod_gpu_type_id: [...new Set(RUNPOD_GPU_SELECTS.map((id) => $(id).value).filter(Boolean))].join(",") || DEFAULT_RUNPOD_GPUS,
@@ -2458,6 +2469,8 @@ async function saveSettings() {
   if (nim) payload.nim_api_key = nim;
   const runpod = $("runpod_api_key").value.trim();
   if (runpod) payload.runpod_api_key = runpod;
+  const modalToken = $("modal_api_token").value.trim();
+  if (modalToken) payload.modal_api_token = modalToken;
   const hfToken = $("hf_token").value.trim();
   if (hfToken) payload.hf_token = hfToken;
 
@@ -2516,6 +2529,34 @@ async function testNotebookLMSync() {
     toast(error.message, true);
   } finally {
     button.disabled = false;
+  }
+}
+
+async function testModalEndpoint() {
+  const button = $("modal-test");
+  button.disabled = true;
+  button.textContent = "Test en cours…";
+  try {
+    const settingsPayload = {
+      modal_endpoint_url: $("modal_endpoint_url").value.trim(),
+    };
+    const modalToken = $("modal_api_token").value.trim();
+    if (modalToken) settingsPayload.modal_api_token = modalToken;
+    await api("/api/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(settingsPayload),
+    });
+    const result = await api("/api/modal/test", { method: "POST" });
+    $("modal-test-state").textContent = result.detail;
+    await loadStatus();
+    toast(result.detail);
+  } catch (error) {
+    $("modal-test-state").textContent = error.message;
+    toast(error.message, true);
+  } finally {
+    button.disabled = false;
+    button.textContent = "Tester le serveur Modal";
   }
 }
 
@@ -2897,6 +2938,7 @@ function initActions() {
   $("settings-cancel").addEventListener("click", () => $("settings-dialog").close());
   $("notebooklm-initialize").addEventListener("click", initializeNotebookLM);
   $("notebooklm-test").addEventListener("click", testNotebookLMSync);
+  $("modal-test").addEventListener("click", testModalEndpoint);
   document.querySelectorAll(".settings-section").forEach((section) => {
     section.addEventListener("toggle", () => {
       if (!section.open) return;

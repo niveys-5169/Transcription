@@ -21,6 +21,7 @@ from . import __version__, config, db, exporters, lexicon, media, obsidian, pipe
 from .lexicon import verification as lexicon_verification
 from .obsidian import index as vault_index
 from .engines import availability as engine_availability
+from .engines import modal as modal_engine
 from .engines import runpod_pod
 from .proofread import factcheck as factcheck_module
 from .proofread.claude import ClaudeProofreader
@@ -129,6 +130,15 @@ async def runpod_gpu_types() -> dict:
     """Types de GPU proposés pour le pod RunPod, avec stock et prix actuels."""
     types, detail = await asyncio.to_thread(runpod_pod.list_gpu_types, config.load_settings())
     return {"types": types, "detail": detail}
+
+
+@app.post("/api/modal/test")
+async def modal_test() -> dict:
+    """Teste la joignabilité du point de terminaison Modal configuré."""
+    ok, detail = await asyncio.to_thread(modal_engine.check_endpoint, config.load_settings())
+    if not ok:
+        raise HTTPException(409, detail)
+    return {"ok": True, "detail": detail}
 
 
 @app.get("/api/update")

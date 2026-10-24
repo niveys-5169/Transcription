@@ -109,3 +109,12 @@ def test_suivi_audio_est_borne_par_animation_frame():
     script = (STATIC / "app.js").read_text(encoding="utf-8")
     assert "requestAnimationFrame" in script
     assert 'addEventListener("timeupdate", schedulePlayerTimeDisplay)' in script
+
+
+def test_reglages_modal_sont_exposes_sans_exposer_le_jeton():
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+    script = (STATIC / "app.js").read_text(encoding="utf-8")
+    assert 'id="modal_endpoint_url"' in html
+    assert 'type="password" id="modal_api_token"' in html
+    assert 'id="modal-test"' in html
+    assert "/api/modal/test" in script

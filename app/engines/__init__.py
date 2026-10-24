@@ -3,10 +3,12 @@ from __future__ import annotations
 
 from .base import Segment, TranscriptionEngine, TranscriptionError
 from .local import LocalWhisperEngine
+from .modal import ModalEngine
 from .runpod import RunPodEngine
 
 _ENGINES: dict[str, type[TranscriptionEngine]] = {
     "local": LocalWhisperEngine,
+    "modal": ModalEngine,
     "runpod": RunPodEngine,
 }
 

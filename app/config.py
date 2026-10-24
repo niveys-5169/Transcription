@@ -70,7 +70,7 @@ COURSES_DIR = DATA_DIR / "cours"
 WHISPER_MODELS = ["tiny", "base", "small", "medium", "large-v3"]
 
 # Moteurs de transcription disponibles.
-ENGINES = ["local", "runpod"]
+ENGINES = ["local", "modal", "runpod"]
 
 
 # Modes de relecture. NVIDIA NIM reste un repli opt-in de Claude ; il n'est
@@ -84,7 +84,7 @@ PROOFREAD_MODES = ["claude", "nim", "basic", "none"]
 CLAUDE_BACKENDS = ["cli", "api"]
 
 # Champs considérés comme secrets : jamais renvoyés en clair par l'API.
-SECRET_FIELDS = {"runpod_api_key", "anthropic_api_key", "nim_api_key", "hf_token"}
+SECRET_FIELDS = {"runpod_api_key", "anthropic_api_key", "nim_api_key", "hf_token", "modal_api_token"}
 
 
 def obsidian_domain_defaults(domain_label: str) -> dict[str, str]:
@@ -108,6 +108,15 @@ class Settings:
     default_engine: str = "local"
     default_model: str = "large-v3"
     language: str = "fr"  # "auto" laisse Whisper détecter la langue.
+
+    # --- Modal (GPU serverless cloud, 30 $/mois gratuits, optionnel) ---
+    # URL du point de terminaison web créé par ``modal deploy modal_server.py``
+    # (ex. https://mon-espace--verbatim-transcription-serve.modal.run).
+    modal_endpoint_url: str = ""
+    # Jeton Bearer optionnel (si MODAL_AUTH_TOKEN est défini côté Modal).
+    modal_api_token: str = ""
+    modal_boot_timeout_seconds: int = 600
+    modal_job_timeout_seconds: int = 4 * 3600
 
     # --- RunPod (GPU cloud, optionnel) ---
     runpod_api_key: str = ""
@@ -318,6 +327,9 @@ def _from_env(settings: Settings) -> Settings:
     """Applique les variables d'environnement par-dessus les réglages."""
     env_map = {
         "runpod_api_key": "RUNPOD_API_KEY",
+        "modal_endpoint_url": "MODAL_ENDPOINT_URL",
+        "modal_api_token": "MODAL_API_TOKEN",
+        "hf_token": "HF_TOKEN",
         "anthropic_api_key": "ANTHROPIC_API_KEY",
         "nim_api_key": "NIM_API_KEY",
         "nim_base_url": "NIM_BASE_URL",

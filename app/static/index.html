@@ -62,7 +62,7 @@
         </div>
 
         <details id="advanced-options">
-          <summary>Moteur, modèle, RunPod, chaîne de traitement…</summary>
+          <summary>Moteur, modèle, Modal / RunPod, chaîne de traitement…</summary>
 
           <div class="options">
             <label class="field">
@@ -614,6 +614,30 @@
         <input type="checkbox" id="obsidian_create_entities">
         <span>Créer une fiche pour chaque entité confirmée</span>
       </label>
+    </details>
+
+    <details class="settings-section" id="modal-settings"><summary>Modal <small>GPU serverless — 30 $/mois offerts</small></summary>
+      <p class="hint">
+        Alternative serverless gratuite à RunPod : Modal offre 30 $/mois de
+        crédits GPU renouvelés automatiquement et éteint le conteneur dès la
+        fin du calcul (scale-to-zero). Déployez une fois avec
+        <code>modal deploy modal_server.py</code> puis collez l'URL obtenue.
+        Le jeton Hugging Face et l'identification des locuteurs (section
+        RunPod ci-dessous) sont partagés automatiquement avec Modal.
+      </p>
+      <label class="field">
+        <span>URL du serveur Modal</span>
+        <input type="url" id="modal_endpoint_url" placeholder="https://mon-espace--verbatim-transcription-serve.modal.run">
+      </label>
+      <label class="field">
+        <span>Jeton d'authentification Modal <small>(optionnel, si MODAL_AUTH_TOKEN est défini)</small></span>
+        <input type="password" id="modal_api_token" placeholder="Bearer…" autocomplete="off">
+        <small id="modal-token-state"></small>
+      </label>
+      <div class="settings-inline-actions">
+        <button type="button" class="btn btn-ghost" id="modal-test">Tester le serveur Modal</button>
+      </div>
+      <p class="notebooklm-settings-state" id="modal-test-state"></p>
     </details>
 
     <details class="settings-section"><summary>RunPod <small>GPU cloud optionnel</small></summary>

@@ -17,7 +17,7 @@ fiches d'entités et son glossaire. Une publication peut enfin mettre à jour
 un unique document Google Docs, source de NotebookLM.
 
 Tout tourne sur votre machine. Rien n'est envoyé sur Internet, sauf si vous
-activez explicitement le GPU RunPod, la relecture et la vérification par
+activez explicitement un GPU cloud (Modal ou RunPod), la relecture et la vérification par
 Claude, ou la synchronisation Google Docs — voir
 [Accès à Claude](#accès-à-claude--cli-ou-clé-api).
 
@@ -280,11 +280,51 @@ explicite : **le texte n'est jamais perdu.**
 | Moteur | Où ça calcule | Quand le choisir |
 |---|---|---|
 | **Ordinateur** | Votre processeur (ou votre GPU s'il y en a un) | Par défaut. Gratuit, hors ligne. |
-| **RunPod** | Un GPU loué à la seconde | Cours longs en `large-v3`, quand le processeur devient trop lent |
+| **Modal** | Un GPU serverless sur Modal.com (30 $/mois offerts) | Cours longs en `large-v3` sur GPU sans frais (scale-to-zero automatique) |
+| **RunPod** | Un GPU loué à la seconde | Alternative GPU cloud à la demande |
 
 Le moteur navigateur (WASM) du prototype a disparu : il était le plus lent des
 trois et n'existait que pour éviter d'installer quoi que ce soit — ce que le
 lanceur fait maintenant tout seul.
+
+### GPU cloud gratuit : déploiement sur Modal.com
+
+Modal (modal.com) est l'option GPU cloud recommandée pour transcrire à grande
+vitesse sans laisser tourner de machine payante :
+
+- **30 $/mois de calcul offert** renouvelés chaque mois (environ 40 heures de
+  GPU par mois, largement suffisant pour un usage régulier).
+- **Scale-to-zero automatique :** dès que la transcription est terminée, le GPU
+  s'éteint automatiquement après 90 secondes d'inactivité. Aucun risque de
+  laisser tourner une machine facturée dans le vide.
+- **WhisperX + diarisation Pyannote :** la même pile GPU que RunPod (modèle
+  `large-v3`, alignement mot à mot précis, identification des locuteurs
+  via votre jeton Hugging Face transmis automatiquement).
+- **Mise en cache des modèles :** les poids Whisper et Pyannote sont stockés sur
+  un volume persistant Modal (`verbatim-model-cache`), téléchargés une seule
+  fois.
+
+#### Déploiement en 3 étapes (une seule fois)
+
+1. **Installer le client Modal et connecter votre compte :**
+   ```bash
+   .venv/bin/pip install modal            # Windows : .venv\Scripts\pip
+   .venv/bin/python -m modal setup        # Ouvre la page d'authentification
+   ```
+2. **Déployer le serveur de transcription GPU :**
+   ```bash
+   .venv/bin/python -m modal deploy modal_server.py
+   ```
+   Modal affiche l'URL publique de la fonction, par exemple :
+   `https://<votre-compte>--verbatim-transcription-serve.modal.run`
+3. **Configurer Verbatim :**
+   - Ouvrez **Réglages** → section **Modal**.
+   - Collez l'URL obtenue.
+   - Cliquez sur **Tester le serveur Modal** puis **Enregistrer**.
+
+Dès lors, choisissez le moteur **« Modal (GPU, cloud) »** au dépôt : l'audio est
+envoyé au conteneur GPU Modal, transcrit à pleine vitesse, puis le GPU s'éteint
+tout seul.
 
 ### Le modèle Whisper
 
@@ -951,7 +991,7 @@ tourne en quelques secondes.
 | `app/server.py` | API HTTP et page unique |
 | `app/pipeline.py` | Transcription, relecture, vérifications, publication et synchronisation |
 | `app/media.py` | ffmpeg, découpage sur les silences |
-| `app/engines/` | Moteurs de transcription (local, RunPod serverless, RunPod pod) |
+| `app/engines/` | Moteurs de transcription (local, Modal serverless GPU, RunPod pod) |
 | `app/proofread/backends/` | Accès à Claude : CLI (abonnement) ou API (clé) |
 | `app/proofread/` | Relecture : par Claude, ou par règles |
 | `app/proofread/verify.py` | Vérification de fidélité : règles, puis lecture par Claude |
@@ -967,8 +1007,9 @@ tourne en quelques secondes.
 | `app/updates.py` | Vérification, téléchargement et remplacement différé d'une version Windows publiée |
 | `app/build_info.py` | Identifiant de build injecté par GitHub Actions dans l'exécutable |
 | `.github/workflows/windows-build.yml` | Build Windows, artefact téléchargeable et release `latest` pour l'auto-update |
-| `handler.py`, `Dockerfile` | Worker RunPod Serverless |
-| `pod_server.py` | Même calcul que `handler.py`, exposé en HTTP pour le pod RunPod |
+| `modal_server.py` | Déploiement serverless GPU sur Modal.com (WhisperX + Pyannote, scale-to-zero) |
+| `pod_server.py` | Serveur HTTP de transcription GPU (partagé par Modal et RunPod) |
+| `handler.py`, `Dockerfile` | Worker RunPod Serverless (historique) |
 
 Ajouter un moteur : implémenter le protocole de `app/engines/base.py`
 (`is_available`, `transcribe` en générateur de `Segment`) et l'inscrire dans

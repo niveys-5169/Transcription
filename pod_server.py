@@ -13,6 +13,7 @@ import base64
 import ctypes
 from email import policy
 from email.parser import BytesParser
+import hmac
 import json
 import os
 import tempfile
@@ -370,8 +371,13 @@ def _parse_transcription_request(content_type: str, raw: bytes) -> tuple:
         except (KeyError, ValueError, TypeError) as exc:
             raise _RequeteInvalide(f"multipart invalide : {exc}") from exc
     try:
-        job_input = json.loads(raw or b"{}")
-    except json.JSONDecodeError as exc:
+        texte_json = (
+            (raw or b"{}").decode("utf-8")
+            if isinstance(raw, (bytes, bytearray))
+            else (raw or "{}")
+        )
+        job_input = json.loads(texte_json)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise _RequeteInvalide(f"JSON invalide : {exc}") from exc
     if not isinstance(job_input, dict):
         raise _RequeteInvalide("JSON invalide : un objet est attendu.")
@@ -469,14 +475,31 @@ class Handler(BaseHTTPRequestHandler):
         print(f"[pod_server] {self.address_string()} - {format % args}")
 
     def _send_json(self, status: int, payload: dict) -> None:
-        body = json.dumps(payload).encode("utf-8")
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
-        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
 
+    def _check_auth(self) -> bool:
+        expected = os.environ.get("MODAL_AUTH_TOKEN", "").strip()
+        if not expected:
+            return True
+        header = self.headers.get("Authorization", "")
+        if hmac.compare_digest(header, f"Bearer {expected}"):
+            return True
+        self._send_json(401, {"error": "jeton d'authentification invalide ou manquant."})
+        return False
+
+    def _apply_hf_token_header(self) -> None:
+        hf_token = (self.headers.get("X-HF-Token") or "").strip()
+        if hf_token and not os.environ.get("HF_TOKEN"):
+            os.environ["HF_TOKEN"] = hf_token
+
     def do_GET(self):
+        if not self._check_auth():
+            return
         if self.path == "/health":
             self._send_json(200, {"status": "ok"})
             return
@@ -496,6 +519,9 @@ class Handler(BaseHTTPRequestHandler):
         return _parse_transcription_request(self.headers.get("Content-Type", ""), raw)
 
     def do_POST(self):
+        if not self._check_auth():
+            return
+        self._apply_hf_token_header()
         if self.path == "/transcribe":
             try:
                 args = self._read_request()

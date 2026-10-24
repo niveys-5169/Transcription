@@ -487,7 +487,7 @@ def run_transcription(job_id: str) -> None:
 
         stage = "Transcrit"
         if (
-            job["engine"] == "runpod" and settings.diarization_enabled
+            job["engine"] in ("runpod", "modal") and settings.diarization_enabled
             and not any(segment.get("speaker") for segment in segments)
         ):
             # Sans locuteurs, chaque phrase reste un bloc à part : le dire,
