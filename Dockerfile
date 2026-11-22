@@ -37,7 +37,7 @@ RUN python3 -m pip install --no-cache-dir \
     && python3 -m pip install --no-cache-dir -r /requirements.txt \
     && python3 -c "import torch, ctranslate2, whisperx, pyannote.audio, os, nvidia.cudnn; \
          assert tuple(map(int, ctranslate2.__version__.split('.')[:2])) >= (4, 5), ctranslate2.__version__; \
-         lib = os.path.join(os.path.dirname(nvidia.cudnn.__file__), 'lib'); \
+         lib = os.path.join(list(nvidia.cudnn.__path__)[0], 'lib'); \
          assert os.path.exists(os.path.join(lib, 'libcudnn_ops.so.9')), lib" \
     && ffmpeg -version | head -1
 
@@ -60,6 +60,8 @@ RUN python3 -W ignore -c "exec(\"import huggingface_hub\\nfrom huggingface_hub i
 # « Unable to load any of {libcudnn_cnn.so.9.1.0, ...} » (abort natif, pas
 # d'exception Python) à la première transcription, le conteneur
 # redémarrait, et l'application ne voyait que des 502/404 du proxy RunPod.
+# `__path__` plutôt que `__file__` : depuis cuDNN 9.10 (torch 2.8),
+# nvidia.cudnn est un paquet espace de noms dont `__file__` vaut None.
 # Chemin fixe plutôt que calculé : ENV ne peut pas exécuter Python, et la
 # vérification ci-dessous fait échouer le build si le dossier bouge ou si
 # le chargeur ne trouve toujours pas la sous-bibliothèque par son nom —
@@ -69,8 +71,8 @@ RUN python3 -W ignore -c "exec(\"import huggingface_hub\\nfrom huggingface_hub i
 ENV LD_LIBRARY_PATH=/usr/local/lib/python3.10/dist-packages/nvidia/cudnn/lib:/usr/local/lib/python3.10/dist-packages/nvidia/cublas/lib:${LD_LIBRARY_PATH}
 RUN python3 -c "import os, nvidia.cudnn, nvidia.cublas; \
       chemins = os.environ['LD_LIBRARY_PATH'].split(':'); \
-      manquants = [p.__file__ for p in (nvidia.cudnn, nvidia.cublas) \
-                   if os.path.join(os.path.dirname(p.__file__), 'lib') not in chemins]; \
+      manquants = [p.__name__ for p in (nvidia.cudnn, nvidia.cublas) \
+                   if os.path.join(list(p.__path__)[0], 'lib') not in chemins]; \
       assert not manquants, f'dossiers absents de LD_LIBRARY_PATH : {manquants}'" \
     && python3 -c "import ctypes; ctypes.CDLL('libcudnn_cnn.so.9'); print('libcudnn_cnn.so.9 trouvée par son nom.')"
 

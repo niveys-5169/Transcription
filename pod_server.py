@@ -101,7 +101,15 @@ def _preload_cudnn() -> None:
         import nvidia.cudnn
     except ImportError:
         return
-    lib_dir = os.path.join(os.path.dirname(nvidia.cudnn.__file__), "lib")
+    # Depuis cuDNN 9.10 (torch 2.8), ``nvidia.cudnn`` est un paquet espace
+    # de noms, sans ``__init__.py`` : ``__file__`` vaut None, seul
+    # ``__path__`` donne son dossier.
+    package_dir = (
+        os.path.dirname(nvidia.cudnn.__file__)
+        if getattr(nvidia.cudnn, "__file__", None)
+        else list(nvidia.cudnn.__path__)[0]
+    )
+    lib_dir = os.path.join(package_dir, "lib")
     for name in CUDNN_SUBLIBS:
         path = os.path.join(lib_dir, name)
         if not os.path.exists(path):

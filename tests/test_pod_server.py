@@ -114,6 +114,23 @@ def test_les_sous_bibliotheques_cudnn_sont_prechargees_en_global(worker, monkeyp
     assert all(mode == worker.ctypes.RTLD_GLOBAL for _, mode in charges)
 
 
+def test_le_prechargement_cudnn_gere_un_paquet_espace_de_noms(worker, monkeypatch, faux_cudnn):
+    """Depuis cuDNN 9.10 (torch 2.8), ``nvidia.cudnn`` n'a plus de
+    ``__init__.py`` : ``__file__`` vaut None et seul ``__path__`` est fiable."""
+    sous = sys.modules["nvidia.cudnn"]
+    sous.__file__ = None
+    sous.__path__ = [str(faux_cudnn.parent)]
+    charges = []
+    monkeypatch.setattr(worker.ctypes, "CDLL", lambda path, mode=None: charges.append(path))
+    monkeypatch.setattr(worker, "_cudnn_preloaded", False)
+
+    worker._preload_cudnn()
+
+    assert [Path(p).name for p in charges] == [
+        "libcudnn_graph.so.9", "libcudnn_ops.so.9", "libcudnn_cnn.so.9",
+    ]
+
+
 def test_le_prechargement_cudnn_ne_se_fait_qu_une_fois(worker, monkeypatch, faux_cudnn):
     charges = []
     monkeypatch.setattr(worker.ctypes, "CDLL", lambda path, mode=None: charges.append(path))
