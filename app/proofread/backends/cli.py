@@ -46,6 +46,9 @@ from .base import BackendResult
 
 logger = logging.getLogger(__name__)
 
+# Processus de ``claude auth login`` en cours, pour ne pas en empiler plusieurs.
+_login_process: subprocess.Popen | None = None
+
 # Généreux à dessein : effort élevé et recherche web font des tours longs.
 # Nom conservé pour compatibilité (tests, appelants existants) : c'est le
 # délai par défaut, utilisé quand ni ``web_search`` ni ``fast`` ne
@@ -159,6 +162,36 @@ class CliBackend:
                 "réglages, ou reconnectez le CLI avec « claude setup-token »."
             )
         return True, f"Abonnement connecté ({status.get('authMethod') or 'oauth'})."
+
+    # --------------------------------------------------------------- connexion
+
+    def start_login(self) -> tuple[bool, str]:
+        """Lance ``claude auth login`` dans une console visible.
+
+        La commande ouvre le navigateur sur la page d'autorisation de
+        l'abonnement et attend le retour. La console reste visible à dessein :
+        si le navigateur ne peut pas rappeler le CLI, c'est là qu'on colle le
+        code affiché. Rien n'est lu ni stocké ici : l'identifiant est géré par
+        le CLI lui-même, ``is_available`` constate ensuite la connexion.
+        """
+        global _login_process
+        exe = self._executable()
+        if not exe:
+            return False, (
+                "Le CLI « claude » est introuvable. Installez Claude Code, ou "
+                "renseignez son chemin dans les réglages."
+            )
+        if _login_process is not None and _login_process.poll() is None:
+            return False, "Une connexion est déjà en cours : terminez-la dans la fenêtre ouverte."
+        new_console = getattr(subprocess, "CREATE_NEW_CONSOLE", 0)
+        try:
+            _login_process = subprocess.Popen([exe, "auth", "login"], creationflags=new_console)
+        except OSError as exc:
+            return False, f"Impossible de lancer le CLI « claude » ({exc})."
+        return True, (
+            "Connexion lancée : autorisez l'accès dans le navigateur qui vient de s'ouvrir "
+            "(si une fenêtre de commande demande un code, collez-le)."
+        )
 
     # ------------------------------------------------------------------ appel
 

@@ -2383,6 +2383,7 @@ function openSettings() {
   $("claude-state").textContent = settings.claude_backend === "cli"
     ? "Lancez « claude setup-token » une fois, sur cette machine, pour connecter l'abonnement."
     : "Facturé à l'usage sur le compte associé à la clé, indépendamment d'un abonnement Claude.";
+  updateClaudeLoginUI();
 
   $("factcheck_setting").checked = Boolean(settings.factcheck);
   $("factcheck_max_searches").value = settings.factcheck_max_searches || 8;
@@ -2558,6 +2559,42 @@ async function testModalEndpoint() {
     button.disabled = false;
     button.textContent = "Tester le serveur Modal";
   }
+}
+
+async function connectClaude() {
+  const button = $("claude-login");
+  const stateLine = $("claude-login-state");
+  button.disabled = true;
+  button.textContent = "Connexion en cours…";
+  try {
+    const result = await api("/api/claude/login", { method: "POST" });
+    stateLine.textContent = result.detail;
+    toast(result.detail);
+    // La connexion se fait hors de l'application : on attend que le CLI
+    // soit reconnu (3 min au plus), puis on rafraîchit le voyant.
+    for (let i = 0; i < 60; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 3000));
+      const status = await api("/api/status");
+      if (status.proofread.claude.available) {
+        await loadStatus();
+        stateLine.textContent = status.proofread.claude.detail;
+        toast("Claude est connecté.");
+        return;
+      }
+    }
+    stateLine.textContent = "Connexion non détectée. Relancez le bouton si besoin.";
+  } catch (error) {
+    stateLine.textContent = error.message;
+    toast(error.message, true);
+  } finally {
+    button.disabled = false;
+    button.textContent = "Connecter Claude";
+  }
+}
+
+function updateClaudeLoginUI() {
+  $("claude-login").hidden = $("claude_backend").value !== "cli";
+  $("claude-login-state").hidden = $("claude_backend").value !== "cli";
 }
 
 /* --------------------------------------------------- panneaux (mobile) */
@@ -2939,6 +2976,8 @@ function initActions() {
   $("notebooklm-initialize").addEventListener("click", initializeNotebookLM);
   $("notebooklm-test").addEventListener("click", testNotebookLMSync);
   $("modal-test").addEventListener("click", testModalEndpoint);
+  $("claude-login").addEventListener("click", connectClaude);
+  $("claude_backend").addEventListener("change", updateClaudeLoginUI);
   document.querySelectorAll(".settings-section").forEach((section) => {
     section.addEventListener("toggle", () => {
       if (!section.open) return;

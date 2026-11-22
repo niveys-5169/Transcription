@@ -125,6 +125,20 @@ async def refresh_nim_models() -> dict:
     return {"models": models, "detail": detail}
 
 
+@app.post("/api/claude/login")
+async def claude_login() -> dict:
+    """Lance la connexion du CLI claude à l'abonnement (ouvre le navigateur)."""
+    from .proofread.backends.cli import CliBackend
+
+    settings = config.load_settings()
+    if settings.claude_backend != "cli":
+        raise HTTPException(409, "La connexion ne concerne que l'accès par le CLI claude.")
+    started, detail = await asyncio.to_thread(CliBackend(settings).start_login)
+    if not started:
+        raise HTTPException(409, detail)
+    return {"started": True, "detail": detail}
+
+
 @app.get("/api/runpod/gpu-types")
 async def runpod_gpu_types() -> dict:
     """Types de GPU proposés pour le pod RunPod, avec stock et prix actuels."""
