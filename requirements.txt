@@ -10,7 +10,7 @@
 # ne pas dépasser 2.8 tant que pyannote reste en 3.x. Le Dockerfile installe
 # explicitement les roues CUDA 12.8 correspondantes depuis PyTorch avant ce
 # fichier ; les versions ci-dessous empêchent pip de les remplacer ensuite.
-torch==2.8.0
+torch==2.13.0
 torchaudio==2.8.0
 # whisperx 3.7.9 : dernière version compatible pyannote 3.x (la 3.8 passe à
 # pyannote 4, autre API et autre modèle de diarisation). Elle exige
