@@ -114,6 +114,23 @@ def test_les_sous_bibliotheques_cudnn_sont_prechargees_en_global(worker, monkeyp
     assert all(mode == worker.ctypes.RTLD_GLOBAL for _, mode in charges)
 
 
+def test_le_prechargement_cudnn_gere_un_paquet_espace_de_noms(worker, monkeypatch, faux_cudnn):
+    """Depuis cuDNN 9.10 (torch 2.8), ``nvidia.cudnn`` n'a plus de
+    ``__init__.py`` : ``__file__`` vaut None et seul ``__path__`` est fiable."""
+    sous = sys.modules["nvidia.cudnn"]
+    sous.__file__ = None
+    sous.__path__ = [str(faux_cudnn.parent)]
+    charges = []
+    monkeypatch.setattr(worker.ctypes, "CDLL", lambda path, mode=None: charges.append(path))
+    monkeypatch.setattr(worker, "_cudnn_preloaded", False)
+
+    worker._preload_cudnn()
+
+    assert [Path(p).name for p in charges] == [
+        "libcudnn_graph.so.9", "libcudnn_ops.so.9", "libcudnn_cnn.so.9",
+    ]
+
+
 def test_le_prechargement_cudnn_ne_se_fait_qu_une_fois(worker, monkeypatch, faux_cudnn):
     charges = []
     monkeypatch.setattr(worker.ctypes, "CDLL", lambda path, mode=None: charges.append(path))
@@ -346,9 +363,12 @@ def test_whisperx_reutilise_les_modeles_entre_deux_transcriptions(monkeypatch):
     faux_whisperx.load_model = load_model
     faux_whisperx.load_align_model = load_align_model
     faux_whisperx.align = lambda segments, *args, **kwargs: {"segments": segments}
-    faux_whisperx.DiarizationPipeline = DiarizationPipeline
     faux_whisperx.assign_word_speakers = lambda diarized, result: result
+    faux_diarize = types.ModuleType("whisperx.diarize")
+    faux_diarize.DiarizationPipeline = DiarizationPipeline
+    faux_whisperx.diarize = faux_diarize
     monkeypatch.setitem(sys.modules, "whisperx", faux_whisperx)
+    monkeypatch.setitem(sys.modules, "whisperx.diarize", faux_diarize)
     monkeypatch.setenv("HF_TOKEN", "<REDACTED>")
 
     spec = importlib.util.spec_from_file_location("pod_server_cache", POD_SERVER)

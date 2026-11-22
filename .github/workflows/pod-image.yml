@@ -12,6 +12,15 @@ on:
       - pod_server.py
       - requirements.txt
       - .github/workflows/pod-image.yml
+  # Une PR qui touche l'image la construit aussi, pour la tester sur RunPod
+  # avant fusion : elle est poussée sous `:pr-<numéro>` uniquement, jamais
+  # sous `:latest` (réservé à main), pour ne pas changer l'image des pods.
+  pull_request:
+    paths:
+      - Dockerfile
+      - pod_server.py
+      - requirements.txt
+      - .github/workflows/pod-image.yml
   workflow_dispatch: {}
 
 permissions:
@@ -40,7 +49,11 @@ jobs:
       - name: Préparer Buildx
         uses: docker/setup-buildx-action@v3
 
+      # Une PR venue d'un fork ou de Dependabot n'a qu'un GITHUB_TOKEN en
+      # lecture seule : l'image y est construite (vérification) sans être
+      # poussée.
       - name: Se connecter à GitHub Container Registry
+        if: github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]')
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -51,9 +64,9 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          push: true
+          push: ${{ github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]') }}
           tags: |
-            ghcr.io/${{ github.repository_owner }}/transcription-pod:latest
-            ghcr.io/${{ github.repository_owner }}/transcription-pod:${{ github.sha }}
+            ${{ github.ref == 'refs/heads/main' && format('ghcr.io/{0}/transcription-pod:latest', github.repository_owner) || '' }}
+            ${{ github.event_name == 'pull_request' && format('ghcr.io/{0}/transcription-pod:pr-{1}', github.repository_owner, github.event.number) || format('ghcr.io/{0}/transcription-pod:{1}', github.repository_owner, github.sha) }}
           cache-from: type=gha
           cache-to: type=gha,mode=min

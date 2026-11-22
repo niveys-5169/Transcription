@@ -29,7 +29,7 @@ JOB_TIMEOUT = int(os.environ.get("MODAL_JOB_TIMEOUT", str(4 * 3600)))
 ROOT_DIR = Path(__file__).resolve().parent
 
 # Même pile logicielle que le Dockerfile (CUDA 12.8 / Ubuntu 22.04, Python 3.10,
-# PyTorch 2.5.1, WhisperX 3.3.2, ctranslate2 4.5.0, pyannote.audio 3.3.2, cuDNN 9).
+# PyTorch 2.8.0, WhisperX 3.7.9, ctranslate2 4.5.0, pyannote.audio 3.4.0, cuDNN 9).
 image = (
     modal.Image.from_registry(
         "nvidia/cuda:12.8.2-runtime-ubuntu22.04",
@@ -57,8 +57,8 @@ image = (
     )
     .run_commands(
         "python3 -m pip install --no-cache-dir "
-        "--index-url https://download.pytorch.org/whl/cu121 "
-        "torch==2.5.1+cu121 torchaudio==2.5.1+cu121",
+        "--index-url https://download.pytorch.org/whl/cu128 "
+        "torch==2.8.0+cu128 torchaudio==2.8.0+cu128",
         "python3 -m pip install --no-cache-dir -r /requirements.txt",
         'python3 -c "import torch, ctranslate2, whisperx, pyannote.audio, nvidia.cudnn"',
     )

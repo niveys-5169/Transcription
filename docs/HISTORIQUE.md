@@ -7,6 +7,26 @@ Depuis le plan v2, Verbatim utilise un pod HTTP RunPod avec WhisperX,
 alignement mot à mot et diarisation pyannote ; les détails d’usage et de
 validation sont maintenus dans [PLAN.md](PLAN.md) et [RECETTE.md](RECETTE.md).
 
+## 2026-11-22 — torch 2.5.1 → 2.8.0 (CVE-2025-32434)
+
+torch <= 2.5.1 permettait d'exécuter du code au chargement d'un modèle
+piégé, même avec `torch.load(..., weights_only=True)` (CVE-2025-32434,
+critique, corrigée en 2.6). Montée groupée : torch/torchaudio 2.8.0 (roues
+cu128), whisperx 3.7.9, pyannote.audio 3.4.0, ctranslate2 inchangé (4.5.0).
+
+- Plafond : whisperx 3.7.9 est la dernière version sous pyannote 3.x, et
+  toutes les versions de whisperx exigent `torch~=2.8.0`. torchaudio 2.9
+  supprime `AudioMetaData`, dont pyannote 3.x dépend. Aller au-delà de 2.8
+  demande whisperx 3.8 + pyannote 4 (autre API, autre modèle de
+  diarisation, `token` au lieu de `use_auth_token`).
+- `whisperx.DiarizationPipeline` n'existe plus au niveau du paquet depuis
+  whisperx 3.4 : import depuis `whisperx.diarize`.
+- torch >= 2.6 charge en `weights_only=True` par défaut ; pyannote 3.x ne le
+  prévoit pas et le modèle VAD échouait (« Unsupported global:
+  omegaconf.listconfig.ListConfig »). `pod_server._allow_pyannote_checkpoints`
+  autorise les seules classes de données des checkpoints, et le build de
+  l'image charge le modèle VAD pour le vérifier.
+
 ## 2026-09-17 — 400 à la diarisation : huggingface_hub 1.x
 
 Troisième et dernier maillon de la même journée. Une fois cuDNN réglé
