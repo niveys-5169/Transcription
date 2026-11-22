@@ -14,7 +14,7 @@ Historiquement, l'application proposait deux moteurs :
 - **30 $/mois offerts :** crédit de calcul gratuit renouvelé chaque mois (soit environ 40 à 50 heures de transcription GPU par mois).
 - **Scale-to-zero automatique :** le conteneur GPU s'éteint automatiquement après **90 secondes d'inactivité** (`scaledown_window=90`). Quand vous ne transcrivez pas, vous payez **0,00 $**.
 - **Zéro build Docker manuel :** Modal construit l'image directement dans le cloud depuis [modal_server.py](file:///c:/Users/Famille/Documents/GitHub/Transcription/modal_server.py) en 3 minutes via `modal deploy modal_server.py`.
-- **Pile GPU de pointe :** CUDA 12.8, PyTorch 2.5.1, WhisperX 3.3.2 (`large-v3`), alignement mot à mot précis et diarisation Pyannote 3.3.2 sur GPU **NVIDIA L4** (ou T4).
+- **Pile GPU de pointe :** CUDA 12.8, PyTorch 2.8.0, WhisperX 3.7.9 (`large-v3`), alignement mot à mot précis et diarisation Pyannote 3.4.0 sur GPU **NVIDIA L4** (ou T4).
 
 ---
 

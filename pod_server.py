@@ -112,6 +112,51 @@ def _preload_cudnn() -> None:
             print(f"[pod_server] Préchargement de {name} impossible : {exc}")
 
 
+_pyannote_checkpoints_allowed = False
+
+
+def _allow_pyannote_checkpoints() -> None:
+    """Autorise les classes des checkpoints pyannote sous ``weights_only=True``.
+
+    Depuis torch 2.6, ``torch.load`` charge par défaut en ``weights_only=True``
+    (c'est la protection que CVE-2025-32434 contournait en 2.5.1). Pyannote
+    3.x charge ses modèles par ``lightning_fabric`` sans préciser
+    ``weights_only`` : le modèle VAD embarqué par WhisperX, puis les modèles
+    de segmentation et d'embedding de la diarisation, échouent alors sur
+    « Unsupported global: omegaconf.listconfig.ListConfig » ou
+    « torch.torch_version.TorchVersion ». Plutôt que de rouvrir le chargement
+    pickle complet (``TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD``), on n'autorise que
+    ces classes de données, recensées dans les checkpoints. Si RunPod journalise
+    un autre « Unsupported global: X », c'est ici qu'il faut ajouter X.
+    """
+    global _pyannote_checkpoints_allowed
+    if _pyannote_checkpoints_allowed:
+        return
+    try:
+        import collections
+        import typing
+
+        import torch
+        from omegaconf.base import ContainerMetadata, Metadata
+        from omegaconf.dictconfig import DictConfig
+        from omegaconf.listconfig import ListConfig
+        from omegaconf.nodes import AnyNode
+        from pyannote.audio.core.model import Introspection
+        from pyannote.audio.core.task import Problem, Resolution, Specifications
+        from torch.torch_version import TorchVersion
+    except ImportError:
+        return
+    torch.serialization.add_safe_globals([
+        TorchVersion, Problem, Resolution, Specifications, Introspection,
+        ListConfig, DictConfig, ContainerMetadata, Metadata, AnyNode,
+        typing.Any, collections.defaultdict,
+        # Types natifs cités comme ``ref_type``/``object_type`` des
+        # métadonnées omegaconf (référence de classe, pas un objet).
+        list, dict, int,
+    ])
+    _pyannote_checkpoints_allowed = True
+
+
 def _confidence_from_logprob(avg_logprob: float | None) -> float | None:
     """Mappage indicatif de avg_logprob (~[-1.5, 0]) vers [0, 1].
 
@@ -172,6 +217,8 @@ def _transcribe_with_whisperx(
     # whisperx importe torch ; les sous-bibliothèques cuDNN doivent être
     # chargées avant la première inférence ctranslate2 (model.transcribe).
     _preload_cudnn()
+    # Avant load_model (modèle VAD pyannote) et la diarisation.
+    _allow_pyannote_checkpoints()
     if model_size not in VALID_MODELS:
         model_size = "large-v3"
     device = "cuda"
@@ -223,7 +270,11 @@ def _transcribe_with_whisperx(
             if diarizer is None:
                 print("[pod_server] Chargement du modèle de diarisation…")
                 started = time.monotonic()
-                diarizer = whisperx.DiarizationPipeline(
+                # Depuis whisperx 3.4, DiarizationPipeline n'est plus
+                # exposé au niveau du paquet : il vit dans whisperx.diarize.
+                from whisperx.diarize import DiarizationPipeline
+
+                diarizer = DiarizationPipeline(
                     use_auth_token=token, device=device
                 )
                 _diarizer_cache.clear()

@@ -2,27 +2,36 @@
 # Les versions sont verrouillées : toute mise à jour CUDA/Torch se fait dans
 # une PR dédiée, validée par la construction de l'image RunPod.
 #
-# torch et torchaudio sont épinglés ensemble. Pyannote 3.3.2 ne définit que
-# des bornes minimales, mais son import dépend encore de ``AudioMetaData`` :
-# cette API n'est plus présente dans torchaudio 2.11. Le Dockerfile installe
-# explicitement les roues CUDA 12.1 correspondantes depuis PyTorch avant ce
+# torch 2.8 : torch <= 2.5.1 est touché par CVE-2025-32434 (exécution de code
+# au chargement d'un modèle piégé, même avec ``weights_only=True``), corrigée
+# en 2.6 ; 2.8.0 corrige aussi les failles publiées depuis. torch et
+# torchaudio sont épinglés ensemble. Pyannote 3.x dépend encore de
+# ``torchaudio.AudioMetaData``, absent de torchaudio 2.9+ (déprécié en 2.8) :
+# ne pas dépasser 2.8 tant que pyannote reste en 3.x. Le Dockerfile installe
+# explicitement les roues CUDA 12.8 correspondantes depuis PyTorch avant ce
 # fichier ; les versions ci-dessous empêchent pip de les remplacer ensuite.
-torch==2.5.1
-torchaudio==2.5.1
-whisperx==3.3.2
-# torch 2.5.1 installe nvidia-cudnn-cu12 9.1 (cuDNN 9). whisperx 3.3.1
-# épinglait ctranslate2<4.5.0 (donc 4.4.x), qui exige cuDNN 8 — absent de
-# l'image, d'où un crash natif « Could not load library
-# libcudnn_ops_infer.so.8 » qui tue le processus (pas une exception Python)
-# et fait redémarrer le conteneur. whisperx 3.3.2 a les mêmes dépendances
-# sauf ctranslate2>=4.5.0, qui utilise cuDNN 9 : épingler cette version ici
-# explicitement pour ne pas dépendre du minimum transitif de whisperx.
+torch==2.8.0
+torchaudio==2.8.0
+# whisperx 3.7.9 : dernière version compatible pyannote 3.x (la 3.8 passe à
+# pyannote 4, autre API et autre modèle de diarisation). Elle exige
+# torch~=2.8.0 et Python >= 3.10 (celui de l'image). Les versions 3.3.3 à
+# 3.4.x sont à éviter : elles réimposaient ctranslate2<4.5.0 (cuDNN 8).
+whisperx==3.7.9
+# torch 2.8.0 installe nvidia-cudnn-cu12 9.10 (cuDNN 9). ctranslate2 4.4.x
+# exige cuDNN 8 — absent de l'image, d'où un crash natif « Could not load
+# library libcudnn_ops_infer.so.8 » qui tue le processus (pas une exception
+# Python) et fait redémarrer le conteneur. ctranslate2 >= 4.5.0 utilise
+# cuDNN 9 : épingler cette version ici explicitement pour ne pas dépendre du
+# minimum transitif de whisperx.
 ctranslate2==4.5.0
-pyannote.audio==3.3.2
-# pyannote 3.3.2 importe matplotlib à l'initialisation mais ne le déclare
+# pyannote.audio 3.4.0 : même code que la 3.3.2 (même API
+# ``use_auth_token``, mêmes modèles), avec des bornes hautes sur ses
+# dépendances pyannote.*. Dernière version 3.x.
+pyannote.audio==3.4.0
+# pyannote 3.x importe matplotlib à l'initialisation mais ne le déclare
 # pas dans ses dépendances publiées.
 matplotlib>=3.7,<4
-# pyannote 3.3.2 ne déclare que huggingface_hub>=0.13 mais appelle encore
+# pyannote 3.x ne déclare que huggingface_hub>=0.13 mais appelle encore
 # hf_hub_download(..., use_auth_token=...), un argument que huggingface_hub
 # 1.0 a supprimé (remplacé par `token`). Sans borne haute, pip installait
 # la 1.x et la diarisation échouait à la première transcription :

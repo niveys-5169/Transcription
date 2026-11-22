@@ -346,9 +346,12 @@ def test_whisperx_reutilise_les_modeles_entre_deux_transcriptions(monkeypatch):
     faux_whisperx.load_model = load_model
     faux_whisperx.load_align_model = load_align_model
     faux_whisperx.align = lambda segments, *args, **kwargs: {"segments": segments}
-    faux_whisperx.DiarizationPipeline = DiarizationPipeline
     faux_whisperx.assign_word_speakers = lambda diarized, result: result
+    faux_diarize = types.ModuleType("whisperx.diarize")
+    faux_diarize.DiarizationPipeline = DiarizationPipeline
+    faux_whisperx.diarize = faux_diarize
     monkeypatch.setitem(sys.modules, "whisperx", faux_whisperx)
+    monkeypatch.setitem(sys.modules, "whisperx.diarize", faux_diarize)
     monkeypatch.setenv("HF_TOKEN", "<REDACTED>")
 
     spec = importlib.util.spec_from_file_location("pod_server_cache", POD_SERVER)
