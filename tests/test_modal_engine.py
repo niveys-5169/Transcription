@@ -219,6 +219,47 @@ def test_check_endpoint_verifie_health():
     assert not ok and "401" in detail
 
 
+def test_check_endpoint_patiente_pendant_le_demarrage_a_froid(monkeypatch):
+    monkeypatch.setattr("app.engines.modal.time.sleep", lambda s: None)
+    appels = {"n": 0}
+
+    def handler(req):
+        appels["n"] += 1
+        if appels["n"] < 3:
+            raise httpx.ReadTimeout("timeout", request=req)
+        return httpx.Response(200, json={"status": "ok"})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    ok, detail = check_endpoint(_Settings(), http_client=client)
+    assert ok and appels["n"] == 3
+
+
+def test_check_endpoint_abandonne_apres_le_delai(monkeypatch):
+    monkeypatch.setattr("app.engines.modal.time.sleep", lambda s: None)
+    s = _Settings()
+    s.modal_check_timeout_seconds = 0
+
+    def handler(req):
+        raise httpx.ReadTimeout("timeout", request=req)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    ok, detail = check_endpoint(s, http_client=client)
+    assert not ok and "injoignable" in detail
+
+
+def test_modal_server_gpu_de_repli(monkeypatch):
+    monkeypatch.delenv("MODAL_GPU", raising=False)
+    racine = Path(__file__).resolve().parent.parent
+    source = (racine / "modal_server.py").read_text(encoding="utf-8")
+    namespace: dict = {}
+    # _parse_gpus est pur : on l'extrait sans importer le SDK modal.
+    debut = source.index("def _parse_gpus")
+    fin = source.index("# Tous consomment")
+    exec(source[debut:fin], namespace)
+    assert namespace["_parse_gpus"]("L4, T4,,A10") == ["L4", "T4", "A10"]
+    assert namespace["_parse_gpus"]("") == ["L4"]
+
+
 def test_modal_server_se_charge_avec_sdk_modal_simule(monkeypatch):
     """Vérifie que modal_server.py déclare l'application, le volume et la fonction web."""
     enregistre = {}
@@ -259,6 +300,7 @@ def test_modal_server_se_charge_avec_sdk_modal_simule(monkeypatch):
     fake_modal.concurrent = lambda **kwargs: (lambda fn: fn)
     fake_modal.web_server = lambda port, **kwargs: (lambda fn: fn)
 
+    monkeypatch.delenv("MODAL_GPU", raising=False)
     monkeypatch.setitem(sys.modules, "modal", fake_modal)
     racine = Path(__file__).resolve().parent.parent
     spec = importlib.util.spec_from_file_location("modal_server", racine / "modal_server.py")
@@ -267,5 +309,6 @@ def test_modal_server_se_charge_avec_sdk_modal_simule(monkeypatch):
 
     assert enregistre["app_name"] == "verbatim-transcription"
     assert enregistre["add_python"] == "3.10"
+    assert enregistre["function_kwargs"]["gpu"] == ["L4", "T4", "A10"]
     assert enregistre["function_kwargs"]["volumes"] == {"/runpod-volume": "verbatim-model-cache"}
     assert ("pod_server.py", "/pod_server.py") in enregistre["files"]

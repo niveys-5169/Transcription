@@ -21,7 +21,18 @@ import modal
 
 APP_NAME = os.environ.get("MODAL_APP_NAME", "verbatim-transcription")
 VOLUME_NAME = os.environ.get("MODAL_VOLUME_NAME", "verbatim-model-cache")
-GPU_TYPE = os.environ.get("MODAL_GPU", "L4")
+
+def _parse_gpus(raw: str) -> list[str]:
+    """Liste ordonnée de GPU acceptés (« L4,T4,A10 ») : Modal essaie le premier,
+    puis passe au suivant quand il n'y a plus de capacité."""
+    gpus = [part.strip() for part in (raw or "").split(",") if part.strip()]
+    return gpus or ["L4"]
+
+
+# Tous consomment le crédit gratuit de 30 $/mois (T4 : le moins cher, souvent
+# disponible ; L4 : le plus rapide des trois en float16 pour son prix ; A10 : 24 Go).
+GPU_TYPES = _parse_gpus(os.environ.get("MODAL_GPU", "L4,T4,A10"))
+GPU_TYPE = GPU_TYPES if len(GPU_TYPES) > 1 else GPU_TYPES[0]
 PORT = 8000
 SCALEDOWN_WINDOW = int(os.environ.get("MODAL_SCALEDOWN_WINDOW", "90"))
 JOB_TIMEOUT = int(os.environ.get("MODAL_JOB_TIMEOUT", str(4 * 3600)))

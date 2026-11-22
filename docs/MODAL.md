@@ -102,4 +102,5 @@ La mise à jour est appliquée sans interruption de service.
 | `GET /health` met 15-20 s | Démarrage à froid (cold start) | Normal au premier appel après inactivité : Modal démarre la machine GPU. |
 | `HF_TOKEN présent : non` au démarrage | Le jeton n'est pas fixé en dur dans l'image | Normal : Verbatim le transmet à chaque envoi d'audio via `X-HF-Token`. |
 | Erreur 401 sur le serveur Modal | `MODAL_AUTH_TOKEN` est défini côté Modal mais absent ou erroné dans Verbatim | Vérifiez le jeton dans les Réglages Verbatim. |
+| Le test dans les Réglages échoue ou `/health` ne répond pas pendant des minutes | Modal attend un GPU libre (« waiting to be scheduled on a GPU_L4 worker ») | Le bouton de test patiente jusqu'à 4 min. Redéployez : `modal_server.py` accepte désormais plusieurs GPU de repli (`L4,T4,A10` par défaut, modifiable via `MODAL_GPU`, ex. `MODAL_GPU=T4`). Tous consomment le crédit gratuit de 30 $/mois ; le T4 est le moins cher. |
 | Le conteneur reste actif quelques minutes | Fenêtre d'inactivité de sécurité | Le conteneur s'éteint automatiquement après 90 s sans requête. |

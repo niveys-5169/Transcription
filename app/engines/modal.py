@@ -305,19 +305,36 @@ def check_endpoint(settings, *, http_client: httpx.Client | None = None) -> tupl
     if not url.startswith(("https://", "http://")):
         return False, "L'URL Modal doit commencer par https:// (ou http://)."
     session = ModalSession(settings, http_client=http_client)
+    # Un démarrage à froid peut durer plusieurs minutes quand Modal attend un GPU
+    # libre : on réessaie jusqu'à ``boot_timeout`` au lieu d'échouer après 30 s.
+    boot_timeout = float(getattr(settings, "modal_check_timeout_seconds", 240))
+    deadline = time.monotonic() + boot_timeout
+    last_error = ""
     try:
-        response = session._http.get(
-            f"{session.base_url}/health",
-            headers=session._headers(),
-            timeout=30.0,
-        )
-        if response.status_code == 200:
-            return True, f"Serveur Modal opérationnel ({session.base_url})."
-        if response.status_code in (401, 403):
-            return False, f"Jeton d'authentification Modal refusé (HTTP {response.status_code})."
-        return False, f"Le serveur Modal a répondu HTTP {response.status_code}."
-    except httpx.HTTPError as exc:
-        return False, f"Serveur Modal injoignable : {exc}"
+        while True:
+            try:
+                response = session._http.get(
+                    f"{session.base_url}/health",
+                    headers=session._headers(),
+                    timeout=30.0,
+                )
+                if response.status_code == 200:
+                    return True, f"Serveur Modal opérationnel ({session.base_url})."
+                if response.status_code in (401, 403):
+                    return False, (
+                        f"Jeton d'authentification Modal refusé (HTTP {response.status_code})."
+                    )
+                if response.status_code not in PROXY_RETRY_STATUSES:
+                    return False, f"Le serveur Modal a répondu HTTP {response.status_code}."
+                last_error = f"HTTP {response.status_code}"
+            except httpx.HTTPError as exc:
+                last_error = str(exc) or type(exc).__name__
+            if time.monotonic() >= deadline:
+                return False, (
+                    f"Serveur Modal injoignable après {int(boot_timeout)} s "
+                    f"(démarrage à froid ou GPU indisponible) : {last_error}"
+                )
+            time.sleep(POLL_INTERVAL)
     finally:
         session.close()
 
