@@ -11,6 +11,9 @@ from __future__ import annotations
 
 import base64
 import ctypes
+import gc
+import sys
+import traceback
 from email import policy
 from email.parser import BytesParser
 import hmac
@@ -165,6 +168,152 @@ def _allow_pyannote_checkpoints() -> None:
     _pyannote_checkpoints_allowed = True
 
 
+# ------------------------------------------------------ journal et mémoire GPU
+#
+# Chaque travail garde son propre journal (étapes, VRAM, erreurs complètes)
+# que l'application relève en direct par /jobs/{id}?since=N. Le même texte
+# part aussi sur la sortie standard, donc dans « modal app logs ».
+
+JOB_LOG_MAX = 400
+_current = threading.local()
+
+
+def _log(message: str) -> None:
+    """Journalise sur stdout et, dans un travail, dans le journal du travail."""
+    print(f"[pod_server] {message}", flush=True)
+    job_id = getattr(_current, "job_id", None)
+    if not job_id:
+        return
+    with _jobs_lock:
+        job = _jobs.get(job_id)
+        if job is None:
+            return
+        logs = job.setdefault("logs", [])
+        logs.append({"t": round(time.time(), 3), "msg": message})
+        job["log_total"] = job.get("log_total", 0) + 1
+        if len(logs) > JOB_LOG_MAX:
+            # Garder la fin (cause de l'échec) : le client lit par index absolu.
+            del logs[: len(logs) - JOB_LOG_MAX]
+
+
+def _set_stage(stage: str, progress: float) -> None:
+    job_id = getattr(_current, "job_id", None)
+    if job_id:
+        with _jobs_lock:
+            job = _jobs.get(job_id)
+            if job is not None:
+                job["stage"] = stage
+                job["progress"] = progress
+    _log(f"Étape : {stage}")
+
+
+def _torch_if_loaded():
+    """Le module torch s'il est déjà importé (ne jamais l'importer ici)."""
+    return sys.modules.get("torch")
+
+
+def _gpu_summary() -> str:
+    torch = _torch_if_loaded()
+    if torch is None:
+        return "GPU : torch non chargé"
+    try:
+        if not torch.cuda.is_available():
+            return "GPU : CUDA indisponible"
+        free, total = torch.cuda.mem_get_info()
+        name = torch.cuda.get_device_name(0)
+        reserved = torch.cuda.memory_reserved()
+        return (
+            f"GPU {name} : VRAM libre {free / 1e9:.1f} / {total / 1e9:.1f} Go "
+            f"(réservée par torch {reserved / 1e9:.1f} Go)"
+        )
+    except Exception as exc:  # noqa: BLE001 - diagnostic seulement
+        return f"GPU : état inconnu ({exc})"
+
+
+def _gpu_total_gb() -> float | None:
+    torch = _torch_if_loaded()
+    try:
+        if torch is not None and torch.cuda.is_available():
+            return torch.cuda.mem_get_info()[1] / 1e9
+    except Exception:  # noqa: BLE001
+        return None
+    return None
+
+
+def _is_cuda_oom(exc: BaseException) -> bool:
+    """« CUDA failed with error out of memory » (ctranslate2) ou
+    ``torch.OutOfMemoryError`` (alignement, diarisation)."""
+    return "out of memory" in str(exc).lower() or type(exc).__name__ == "OutOfMemoryError"
+
+
+def _empty_torch_cache() -> None:
+    gc.collect()
+    torch = _torch_if_loaded()
+    if torch is not None:
+        try:
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _release_gpu_memory(*, keep_asr: bool) -> None:
+    """Décharge les modèles en cache et rend au pilote la mémoire que
+    l'allocateur de torch garde en réserve.
+
+    ctranslate2 (ASR) et torch (alignement, diarisation) ont chacun leur
+    allocateur : la mémoire que torch garde « réservée » après une
+    diarisation reste invisible pour ctranslate2, qui tombe alors en
+    « CUDA failed with error out of memory » au travail suivant.
+    """
+    with _model_cache_lock:
+        _align_model_cache.clear()
+        _diarizer_cache.clear()
+        if not keep_asr:
+            _whisperx_model_cache.clear()
+            _model_cache.clear()
+    _empty_torch_cache()
+
+
+def _default_batch_size() -> int:
+    raw = os.environ.get("WHISPERX_BATCH_SIZE", "").strip()
+    if raw.isdigit() and int(raw) > 0:
+        return int(raw)
+    total = _gpu_total_gb()
+    # large-v3 en float16 : batch 16 tient sur 24 Go (L4, A10), pas toujours
+    # sur les 16 Go d'un T4.
+    return 16 if total is None or total >= 20 else 8
+
+
+class _StageError(RuntimeError):
+    """Échec d'une étape, avec son nom et l'état du GPU au moment de l'échec."""
+
+    def __init__(self, stage: str, exc: BaseException, gpu: str) -> None:
+        self.stage = stage
+        hint = ""
+        if _is_cuda_oom(exc):
+            hint = (
+                " — mémoire GPU saturée malgré les nouveaux essais "
+                "(redéployez avec un GPU de 24 Go : MODAL_GPU=L4,A10, "
+                "ou réduisez WHISPERX_BATCH_SIZE)"
+            )
+        super().__init__(f"Échec à l'étape « {stage} » : {exc}{hint}. {gpu}")
+
+
+def _with_oom_retry(label: str, fn, *, keep_asr: bool):
+    """Exécute ``fn`` ; sur saturation mémoire GPU, libère les caches et
+    réessaie une fois."""
+    try:
+        return fn()
+    except Exception as exc:
+        if not _is_cuda_oom(exc):
+            raise
+        _log(f"Mémoire GPU saturée pendant « {label} » : {exc}")
+        _release_gpu_memory(keep_asr=keep_asr)
+        _log(f"Caches libérés, nouvel essai — {_gpu_summary()}")
+        return fn()
+
+
 def _confidence_from_logprob(avg_logprob: float | None) -> float | None:
     """Mappage indicatif de avg_logprob (~[-1.5, 0]) vers [0, 1].
 
@@ -218,105 +367,170 @@ def _transcribe_with_whisperx(
     audio_path: str, model_size: str, language: str | None,
     initial_prompt: str | None, diarize: bool,
 ) -> dict:
-    """WhisperX : transcription, alignement mot à mot et diarisation optionnelle."""
+    """WhisperX : transcription, alignement mot à mot et diarisation optionnelle.
+
+    Chaque étape est journalisée (durée, VRAM) ; une saturation mémoire GPU
+    déclenche une libération des caches puis un nouvel essai (batch ASR
+    divisé par deux) au lieu d'un échec immédiat.
+    """
     _configure_model_cache_environment()
     import whisperx
 
-    # whisperx importe torch ; les sous-bibliothèques cuDNN doivent être
-    # chargées avant la première inférence ctranslate2 (model.transcribe).
-    _preload_cudnn()
-    # Avant load_model (modèle VAD pyannote) et la diarisation.
-    _allow_pyannote_checkpoints()
-    if model_size not in VALID_MODELS:
-        model_size = "large-v3"
-    device = "cuda"
-    language = None if language in (None, "", "auto") else language
-    prompt = initial_prompt or None
-    model_key = (model_size, language, prompt)
-    with _model_cache_lock:
-        model = _whisperx_model_cache.get(model_key)
-        if model is None:
-            # Ne conserver qu'un pipeline ASR pour éviter d'accumuler plusieurs
-            # modèles large-v3 en VRAM quand la langue ou le lexique change.
-            _whisperx_model_cache.clear()
-            print(f"[pod_server] Chargement WhisperX '{model_size}' sur GPU…")
+    stage = "Préparation"
+    try:
+        # whisperx importe torch ; les sous-bibliothèques cuDNN doivent être
+        # chargées avant la première inférence ctranslate2 (model.transcribe).
+        _preload_cudnn()
+        # Avant load_model (modèle VAD pyannote) et la diarisation.
+        _allow_pyannote_checkpoints()
+        if model_size not in VALID_MODELS:
+            model_size = "large-v3"
+        device = "cuda"
+        language = None if language in (None, "", "auto") else language
+        prompt = initial_prompt or None
+        model_key = (model_size, language, prompt)
+        _log(f"Début du travail — {_gpu_summary()}")
+
+        stage = f"Chargement du modèle {model_size}"
+        _set_stage(stage, 0.05)
+
+        def load_asr():
+            with _model_cache_lock:
+                model = _whisperx_model_cache.get(model_key)
+                if model is not None:
+                    _log("Modèle déjà en mémoire.")
+                    return model
+                # Un seul pipeline ASR en VRAM : quand la langue ou le
+                # lexique change, décharger l'ancien avant de charger.
+                _whisperx_model_cache.clear()
+            _empty_torch_cache()
             started = time.monotonic()
             model = whisperx.load_model(
                 model_size, device, compute_type="float16", language=language,
                 download_root=_model_cache_dir(),
                 # FasterWhisperPipeline.transcribe() ne reçoit pas d'options
-                # ASR personnalisées. WhisperX les fixe au chargement.
+                # ASR personnalisées : WhisperX les fixe au chargement.
                 asr_options={"initial_prompt": prompt},
             )
-            _whisperx_model_cache[model_key] = model
-            print(f"[pod_server] WhisperX prêt en {time.monotonic() - started:.1f}s.")
-    result = model.transcribe(audio_path, batch_size=16, language=language)
-    detected_language = result.get("language") or language or ""
-    with _model_cache_lock:
-        cached_alignment = _align_model_cache.get(detected_language)
-        if cached_alignment is None:
-            print(f"[pod_server] Chargement du modèle d'alignement '{detected_language}'…")
+            with _model_cache_lock:
+                _whisperx_model_cache[model_key] = model
+            _log(f"Modèle prêt en {time.monotonic() - started:.1f} s — {_gpu_summary()}")
+            return model
+
+        model = _with_oom_retry(stage, load_asr, keep_asr=False)
+
+        stage = "Transcription (ASR)"
+        _set_stage(stage, 0.15)
+        # Rendre au pilote ce que l'allocateur de torch garde en réserve
+        # d'un travail précédent (alignement, diarisation) : ctranslate2
+        # ne peut pas s'en servir. Les modèles restent en cache ; ils ne
+        # sont déchargés qu'en cas de saturation.
+        _empty_torch_cache()
+        batch_size = _default_batch_size()
+        while True:
+            _log(f"ASR avec batch {batch_size} — {_gpu_summary()}")
             started = time.monotonic()
-            cached_alignment = whisperx.load_align_model(
-                language_code=detected_language, device=device,
-            )
-            _align_model_cache[detected_language] = cached_alignment
-            print(
-                f"[pod_server] Alignement '{detected_language}' prêt en "
-                f"{time.monotonic() - started:.1f}s."
-            )
-    align_model, metadata = cached_alignment
-    result = whisperx.align(result["segments"], align_model, metadata, audio_path, device)
-    token = os.environ.get("HF_TOKEN")
-    speakers: list[str] = []
-    if diarize and not token:
-        print("[pod_server] Diarisation demandée mais HF_TOKEN absent : pas de locuteurs.")
-    if diarize and token:
-        diarizer_key = (device, token)
-        with _model_cache_lock:
-            diarizer = _diarizer_cache.get(diarizer_key)
-            if diarizer is None:
-                print("[pod_server] Chargement du modèle de diarisation…")
-                started = time.monotonic()
-                # Depuis whisperx 3.4, DiarizationPipeline n'est plus
-                # exposé au niveau du paquet : il vit dans whisperx.diarize.
-                from whisperx.diarize import DiarizationPipeline
+            try:
+                result = model.transcribe(audio_path, batch_size=batch_size, language=language)
+                break
+            except Exception as exc:
+                if not _is_cuda_oom(exc) or batch_size <= 1:
+                    raise
+                _log(f"Mémoire GPU saturée avec batch {batch_size} : {exc}")
+                _release_gpu_memory(keep_asr=True)
+                batch_size = max(1, batch_size // 2)
+        _log(
+            f"ASR terminée en {time.monotonic() - started:.1f} s : "
+            f"{len(result.get('segments') or [])} segments."
+        )
+        detected_language = result.get("language") or language or ""
 
-                diarizer = DiarizationPipeline(
-                    use_auth_token=token, device=device
-                )
-                _diarizer_cache.clear()
-                _diarizer_cache[diarizer_key] = diarizer
-                print(
-                    f"[pod_server] Diarisation prête en "
-                    f"{time.monotonic() - started:.1f}s."
-                )
-        diarized = diarizer(audio_path)
-        result = whisperx.assign_word_speakers(diarized, result)
-        speakers = sorted({str(segment["speaker"]) for segment in result["segments"] if segment.get("speaker")})
+        stage = f"Alignement mot à mot ({detected_language or '?'})"
+        _set_stage(stage, 0.6)
 
-    segments = []
-    for segment in result.get("segments") or []:
-        words = [
-            {
-                "start": round(float(word["start"]), 3),
-                "end": round(float(word["end"]), 3),
-                "text": str(word.get("word") or word.get("text") or "").strip(),
-                "confidence": word.get("score"),
-            }
-            for word in segment.get("words") or []
-            if word.get("start") is not None and word.get("end") is not None
-        ]
-        segments.append({
-            "start": round(float(segment.get("start") or 0), 3),
-            "end": round(float(segment.get("end") or 0), 3),
-            "text": str(segment.get("text") or ""),
-            "confidence": segment.get("score"),
-            "speaker": segment.get("speaker"),
-            "words": words,
-        })
-    return {"text": "".join(segment["text"] for segment in segments).strip(),
-            "segments": segments, "language": detected_language, "speakers": speakers}
+        def align():
+            with _model_cache_lock:
+                cached = _align_model_cache.get(detected_language)
+            if cached is None:
+                started_load = time.monotonic()
+                cached = whisperx.load_align_model(
+                    language_code=detected_language, device=device,
+                )
+                with _model_cache_lock:
+                    _align_model_cache[detected_language] = cached
+                _log(f"Modèle d'alignement prêt en {time.monotonic() - started_load:.1f} s.")
+            align_model, metadata = cached
+            return whisperx.align(result["segments"], align_model, metadata, audio_path, device)
+
+        started = time.monotonic()
+        # Sur saturation : décharger aussi l'ASR (rechargé au travail suivant).
+        result = _with_oom_retry(stage, align, keep_asr=False)
+        _log(f"Alignement terminé en {time.monotonic() - started:.1f} s — {_gpu_summary()}")
+        _empty_torch_cache()
+
+        token = os.environ.get("HF_TOKEN")
+        speakers: list[str] = []
+        if diarize and not token:
+            _log("Diarisation demandée mais HF_TOKEN absent : pas de locuteurs.")
+        if diarize and token:
+            stage = "Diarisation (locuteurs)"
+            _set_stage(stage, 0.75)
+            diarizer_key = (device, token)
+
+            def diarize_audio():
+                with _model_cache_lock:
+                    diarizer = _diarizer_cache.get(diarizer_key)
+                if diarizer is None:
+                    started_load = time.monotonic()
+                    # Depuis whisperx 3.4, DiarizationPipeline vit dans
+                    # whisperx.diarize.
+                    from whisperx.diarize import DiarizationPipeline
+
+                    diarizer = DiarizationPipeline(use_auth_token=token, device=device)
+                    with _model_cache_lock:
+                        _diarizer_cache.clear()
+                        _diarizer_cache[diarizer_key] = diarizer
+                    _log(f"Modèle de diarisation prêt en {time.monotonic() - started_load:.1f} s.")
+                return diarizer(audio_path)
+
+            started = time.monotonic()
+            diarized = _with_oom_retry(stage, diarize_audio, keep_asr=False)
+            result = whisperx.assign_word_speakers(diarized, result)
+            speakers = sorted({str(segment["speaker"]) for segment in result["segments"] if segment.get("speaker")})
+            _log(
+                f"Diarisation terminée en {time.monotonic() - started:.1f} s : "
+                f"{len(speakers)} locuteur(s) — {_gpu_summary()}"
+            )
+            _empty_torch_cache()
+
+        stage = "Mise en forme du résultat"
+        _set_stage(stage, 0.95)
+        segments = []
+        for segment in result.get("segments") or []:
+            words = [
+                {
+                    "start": round(float(word["start"]), 3),
+                    "end": round(float(word["end"]), 3),
+                    "text": str(word.get("word") or word.get("text") or "").strip(),
+                    "confidence": word.get("score"),
+                }
+                for word in segment.get("words") or []
+                if word.get("start") is not None and word.get("end") is not None
+            ]
+            segments.append({
+                "start": round(float(segment.get("start") or 0), 3),
+                "end": round(float(segment.get("end") or 0), 3),
+                "text": str(segment.get("text") or ""),
+                "confidence": segment.get("score"),
+                "speaker": segment.get("speaker"),
+                "words": words,
+            })
+        return {"text": "".join(segment["text"] for segment in segments).strip(),
+                "segments": segments, "language": detected_language, "speakers": speakers}
+
+    except Exception as exc:
+        _log(f"Échec à l'étape « {stage} » :\n{traceback.format_exc()}")
+        raise _StageError(stage, exc, _gpu_summary()) from exc
 
 
 def transcribe(
@@ -377,9 +591,13 @@ def transcribe(
             "segments": segments,
             "language": getattr(info, "language", language),
         }
+    except _StageError as e:
+        return {"error": str(e)}
     except Exception as e:
+        _log(f"Échec de la transcription :\n{traceback.format_exc()}")
         return {"error": str(e)}
     finally:
+        _empty_torch_cache()
         if tmp_path:
             try:
                 os.unlink(tmp_path)
@@ -472,13 +690,26 @@ _gpu_lock = threading.Lock()
 
 
 def _run_job(job_id: str, args: tuple) -> None:
+    _current.job_id = job_id
+    try:
+        _run_job_locked(job_id, args)
+    finally:
+        _current.job_id = None
+
+
+def _run_job_locked(job_id: str, args: tuple) -> None:
+    _log("En attente du GPU (un travail à la fois)…")
     with _gpu_lock:
         with _jobs_lock:
             _jobs[job_id]["status"] = "running"
             _jobs[job_id]["started_at"] = time.time()
+        audio_mb = len(args[0] or "") * 3 / 4 / 1e6
+        _log(f"Travail démarré : modèle {args[1]}, langue {args[2] or 'auto'}, "
+             f"diarisation {'oui' if args[4] else 'non'}, audio {audio_mb:.1f} Mo.")
         try:
             result = transcribe(*args)
         except Exception as exc:  # transcribe() attrape déjà tout ; ceinture et bretelles
+            _log(f"Échec inattendu :\n{traceback.format_exc()}")
             result = {"error": str(exc)}
         with _jobs_lock:
             job = _jobs[job_id]
@@ -490,7 +721,7 @@ def _run_job(job_id: str, args: tuple) -> None:
                 job["status"] = "done"
                 job["result"] = result
             statut = job["status"]
-    print(f"[pod_server] Travail {job_id} terminé ({statut}).")
+    _log(f"Travail {job_id} terminé ({statut}).")
 
 
 def submit_job(args: tuple) -> str:
@@ -512,14 +743,26 @@ def submit_job(args: tuple) -> str:
     return job_id
 
 
-def job_status(job_id: str) -> dict | None:
+def job_status(job_id: str, since: int = 0) -> dict | None:
     """État public d'un travail : ``status`` (queued/running/done/error),
+    ``stage``/``progress`` en cours, les lignes de journal à partir de
+    l'index absolu ``since`` (``log_total`` donne l'index suivant),
     ``result`` une fois terminé, ``error`` en cas d'échec."""
     with _jobs_lock:
         job = _jobs.get(job_id)
         if job is None:
             return None
-        payload = {"job_id": job_id, "status": job["status"]}
+        logs = job.get("logs") or []
+        total = job.get("log_total", len(logs))
+        first_kept = total - len(logs)
+        payload = {
+            "job_id": job_id,
+            "status": job["status"],
+            "stage": job.get("stage"),
+            "progress": job.get("progress"),
+            "logs": list(logs[max(0, since - first_kept):]),
+            "log_total": total,
+        }
         if job["status"] == "done":
             payload["result"] = job["result"]
         elif job["status"] == "error":
@@ -563,8 +806,14 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(200, {"status": "ok"})
             return
         if self.path.startswith("/jobs/"):
-            job_id = self.path[len("/jobs/"):].split("?", 1)[0].strip("/")
-            payload = job_status(job_id) if job_id else None
+            job_id, _, query = self.path[len("/jobs/"):].partition("?")
+            job_id = job_id.strip("/")
+            since = 0
+            for pair in query.split("&"):
+                key, _, value = pair.partition("=")
+                if key == "since" and value.isdigit():
+                    since = int(value)
+            payload = job_status(job_id, since) if job_id else None
             if payload is None:
                 self._send_json(404, {"error": f"travail inconnu : {job_id}"})
                 return
@@ -587,7 +836,8 @@ class Handler(BaseHTTPRequestHandler):
             except _RequeteInvalide as exc:
                 self._send_json(400, {"error": str(exc)})
                 return
-            result = transcribe(*args)
+            with _gpu_lock:
+                result = transcribe(*args)
             self._send_json(400 if "error" in result else 200, result)
             return
         if self.path == "/jobs":

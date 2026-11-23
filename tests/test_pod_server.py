@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import base64
 import importlib.util
+import json
 import sys
 import threading
 import types
@@ -598,3 +599,86 @@ def test_multipart_non_utf8_est_refuse(worker):
     corps = corps.replace(b"\r\n\r\nx\r\n", b"\r\n\r\nSt\xe9phane\r\n")
     with pytest.raises(worker._RequeteInvalide):
         worker._parse_transcription_request(content_type, corps)
+
+
+# ------------------------------------------- saturation mémoire GPU et journal
+
+
+def _faux_whisperx(monkeypatch, *, asr, diariser=None):
+    faux = types.ModuleType("whisperx")
+    faux.load_model = lambda *a, **k: types.SimpleNamespace(transcribe=asr)
+    faux.load_align_model = lambda **k: (object(), {"language": "fr"})
+    faux.align = lambda segments, *a, **k: {"segments": segments}
+    faux.assign_word_speakers = lambda diarized, result: result
+    faux_diarize = types.ModuleType("whisperx.diarize")
+
+    class DiarizationPipeline:
+        def __init__(self, **kwargs):
+            pass
+
+        def __call__(self, audio):
+            return diariser() if diariser else object()
+
+    faux_diarize.DiarizationPipeline = DiarizationPipeline
+    faux.diarize = faux_diarize
+    monkeypatch.setitem(sys.modules, "whisperx", faux)
+    monkeypatch.setitem(sys.modules, "whisperx.diarize", faux_diarize)
+    monkeypatch.setenv("HF_TOKEN", "<REDACTED>")
+    spec = importlib.util.spec_from_file_location("pod_server_oom", POD_SERVER)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_saturation_memoire_asr_reessaie_avec_un_batch_plus_petit(monkeypatch):
+    batchs = []
+
+    def asr(audio, *, batch_size, language):
+        batchs.append(batch_size)
+        if batch_size > 4:
+            raise RuntimeError("CUDA failed with error out of memory")
+        return {"language": "fr", "segments": [{"start": 0.0, "end": 1.0, "text": "Ça marche."}]}
+
+    module = _faux_whisperx(monkeypatch, asr=asr)
+    output = module._transcribe_with_whisperx("cours.wav", "large-v3", "fr", None, True)
+    assert batchs == [16, 8, 4]
+    assert output["text"] == "Ça marche."
+
+
+def test_saturation_persistante_nomme_l_etape_dans_l_erreur(monkeypatch):
+    def asr(audio, *, batch_size, language):
+        return {"language": "fr", "segments": [{"start": 0.0, "end": 1.0, "text": "Bonjour."}]}
+
+    def diariser():
+        raise RuntimeError("CUDA out of memory. Tried to allocate 2.00 GiB")
+
+    module = _faux_whisperx(monkeypatch, asr=asr, diariser=diariser)
+    sortie = module.transcribe(base64.b64encode(b"RIFF").decode(), "large-v3", "fr", None, True)
+    assert "Diarisation (locuteurs)" in sortie["error"]
+    assert "out of memory" in sortie["error"]
+
+
+def test_le_journal_du_travail_est_relu_par_increments(monkeypatch):
+    phrase = "Stéphane répète qu'être là, ça réchauffe le cœur."
+
+    def asr(audio, *, batch_size, language):
+        return {"language": "fr", "segments": [{"start": 0.0, "end": 1.0, "text": phrase}]}
+
+    module = _faux_whisperx(monkeypatch, asr=asr)
+    job_id = module.submit_job((base64.b64encode(b"RIFF").decode(), "large-v3", "fr", None, True))
+    import time
+
+    for _ in range(500):
+        etat = module.job_status(job_id)
+        if etat["status"] in ("done", "error"):
+            break
+        time.sleep(0.01)
+    assert etat["status"] == "done"
+    assert etat["result"]["text"] == phrase
+    messages = [ligne["msg"] for ligne in etat["logs"]]
+    assert any("Transcription (ASR)" in m for m in messages)
+    assert any("Diarisation (locuteurs)" in m for m in messages)
+    assert etat["log_total"] == len(messages)
+    suite = module.job_status(job_id, since=etat["log_total"] - 2)
+    assert [ligne["msg"] for ligne in suite["logs"]] == messages[-2:]
+    assert "�" not in json.dumps(etat, ensure_ascii=False)

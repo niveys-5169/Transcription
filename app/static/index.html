@@ -204,6 +204,12 @@
 
         <div id="result-error" class="banner banner-error" hidden></div>
 
+        <!-- Journal en direct d'un moteur distant (Modal) : étapes, VRAM, erreurs. -->
+        <details id="live-log" class="live-log" open hidden>
+          <summary>Journal en direct</summary>
+          <pre id="live-log-lines"></pre>
+        </details>
+
         <!-- Lecteur synchronisé : vidéo source prioritaire, repli automatique
              sur le WAV extrait si elle est absente ou illisible. -->
         <div class="player-zone" id="player-zone">

@@ -312,3 +312,55 @@ def test_modal_server_se_charge_avec_sdk_modal_simule(monkeypatch):
     assert enregistre["function_kwargs"]["gpu"] == ["L4", "T4", "A10"]
     assert enregistre["function_kwargs"]["volumes"] == {"/runpod-volume": "verbatim-model-cache"}
     assert ("pod_server.py", "/pod_server.py") in enregistre["files"]
+
+
+def test_journal_serveur_relaye_en_direct_et_joint_a_l_erreur(monkeypatch, tmp_path):
+    """Le journal du serveur arrive dans le journal en direct ; un échec cite
+    ses dernières lignes (accents intacts)."""
+    s = _Settings()
+    monkeypatch.setattr("app.engines.modal.load_settings", lambda: s)
+    monkeypatch.setattr("app.engines.modal.POLL_INTERVAL", 0)
+    sondes = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/health":
+            return httpx.Response(200, json={"status": "ok"})
+        if request.url.path == "/jobs" and request.method == "POST":
+            return httpx.Response(202, json={"job_id": "j1", "status": "queued"})
+        if request.url.path == "/jobs/j1":
+            sondes.append(request.url.params.get("since"))
+            if len(sondes) == 1:
+                payload = {"job_id": "j1", "status": "running", "stage": "Transcription (ASR)",
+                           "progress": 0.15, "log_total": 1,
+                           "logs": [{"t": 0, "msg": f"Étape : ASR — {PHRASE_FRANCAISE}"}]}
+            else:
+                payload = {"job_id": "j1", "status": "error", "log_total": 2,
+                           "error": "Échec à l'étape « Diarisation » : CUDA out of memory",
+                           "logs": [{"t": 1, "msg": "Mémoire GPU saturée pendant « Diarisation »"}]}
+            body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+            return httpx.Response(200, content=body,
+                                  headers={"Content-Type": "application/json; charset=utf-8"})
+        return httpx.Response(404, json={"error": "introuvable"})
+
+    orig_init = ModalSession.__init__
+    monkeypatch.setattr(ModalSession, "__init__", lambda self, settings, *, http_client=None: orig_init(
+        self, settings, http_client=httpx.Client(transport=httpx.MockTransport(handler))))
+
+    journal, etapes = [], []
+
+    def report(fraction, stage="Transcription…"):
+        etapes.append(stage)
+
+    report.log = journal.append
+    wav = tmp_path / "audio.wav"
+    wav.write_bytes(b"RIFF____WAVE")
+    with pytest.raises(TranscriptionError) as erreur:
+        list(ModalEngine().transcribe(wav, model="large-v3", language="fr", duration=1.0,
+                                      workdir=tmp_path, on_progress=report))
+
+    assert sondes == ["0", "1"]
+    assert f"Étape : ASR — {PHRASE_FRANCAISE}" in journal
+    assert any("Modal · Transcription (ASR)" in e for e in etapes)
+    message = str(erreur.value)
+    assert "Diarisation" in message and PHRASE_FRANCAISE in message
+    assert "�" not in message

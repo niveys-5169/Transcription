@@ -108,10 +108,18 @@ def is_cancelled(job_id: str) -> bool:
         return job_id in _cancelled
 
 
+LIVE_LOG_MAX = 300
+
+
 def live_state(job_id: str) -> dict | None:
     with _lock:
         state = _live.get(job_id)
-        return dict(state) if state else None
+        if not state:
+            return None
+        copy = dict(state)
+        if "log" in copy:
+            copy["log"] = list(copy["log"])
+        return copy
 
 
 _RUNNERS = {}  # peuplé plus bas, une fois les fonctions run_* définies
@@ -154,16 +162,25 @@ class _Progress:
     def __call__(self, fraction: float, stage: str) -> None:
         fraction = max(0.0, min(1.0, fraction))
         with _lock:
-            _live[self.job_id] = {
-                "progress": fraction,
-                "stage": stage,
-                "status": "running",
-            }
+            live = _live.setdefault(self.job_id, {})
+            live.update(progress=fraction, stage=stage, status="running")
         now = time.monotonic()
         if stage != self.stage or now - self.last_write >= DB_WRITE_INTERVAL:
             self.stage = stage
             self.last_write = now
             db.update_job(self.job_id, progress=fraction, stage=stage)
+
+    def log(self, message: str) -> None:
+        """Ajoute une ligne au journal en direct du travail (moteur distant)."""
+        line = f"{time.strftime('%H:%M:%S')}  {message}"
+        with _lock:
+            live = _live.setdefault(
+                self.job_id, {"progress": 0.0, "stage": self.stage, "status": "running"}
+            )
+            journal = live.setdefault("log", [])
+            journal.append(line)
+            if len(journal) > LIVE_LOG_MAX:
+                del journal[: len(journal) - LIVE_LOG_MAX]
 
     def scaled(self, base: float, share: float, label: str):
         """Sous-progression d'une étape, ramenée à l'échelle globale."""
@@ -171,6 +188,8 @@ class _Progress:
         def report(fraction: float, stage: str = label) -> None:
             self(base + fraction * share, stage)
 
+        # Les moteurs qui le savent (Modal) y versent leur journal détaillé.
+        report.log = self.log
         return report
 
 
