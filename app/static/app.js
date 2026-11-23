@@ -464,7 +464,23 @@ async function selectJob(jobId, keepTab = false) {
 function renderDetailHeader(job) {
   if (!state.detail || state.detail.id !== job.id) return;
   Object.assign(state.detail, job);
+  if (!job.live_log) delete state.detail.live_log;
   $("result-meta").textContent = metaLine(state.detail);
+  renderLiveLog(state.detail);
+}
+
+function renderLiveLog(job) {
+  const panel = $("live-log");
+  const lines = Array.isArray(job?.live_log) ? job.live_log : [];
+  const visible = ["running", "queued"].includes(job?.status) && lines.length > 0;
+  panel.hidden = !visible;
+  if (!visible) return;
+  const pre = $("live-log-lines");
+  const text = lines.join("\n");
+  if (pre.textContent === text) return;
+  const atBottom = pre.scrollHeight - pre.scrollTop - pre.clientHeight < 24;
+  pre.textContent = text;
+  if (atBottom) pre.scrollTop = pre.scrollHeight;
 }
 
 function metaLine(job) {
@@ -518,6 +534,7 @@ function renderDetail() {
   const errorBanner = $("result-error");
   errorBanner.hidden = !job.error;
   errorBanner.textContent = job.error || "";
+  renderLiveLog(job);
 
   $("cancel-btn").hidden = !["queued", "running"].includes(job.status);
   $("retry-btn").hidden = !["error", "canceled"].includes(job.status);

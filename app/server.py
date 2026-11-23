@@ -1173,8 +1173,10 @@ def _decorate(job: dict | None) -> dict:
     job = dict(job)
     live = pipeline.live_state(job["id"])
     if live and job["status"] == "running":
-        job["progress"] = live["progress"]
-        job["stage"] = live["stage"]
+        job["progress"] = live.get("progress", job.get("progress"))
+        job["stage"] = live.get("stage") or job.get("stage")
+        if live.get("log"):
+            job["live_log"] = live["log"]
     if isinstance(job.get("summary"), str):
         try:
             job["summary"] = json.loads(job["summary"]) if job["summary"] else []

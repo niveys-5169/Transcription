@@ -5,7 +5,7 @@ import json
 import logging
 import time
 from pathlib import Path
-from typing import Iterator
+from typing import Callable, Iterator
 
 import httpx
 
@@ -14,6 +14,17 @@ from .base import CancelCheck, ProgressCallback, Segment, TranscriptionError, Wo
 from .runpod_pod import POLL_INTERVAL, PROXY_RETRY_STATUSES, _multipart_fields
 
 logger = logging.getLogger(__name__)
+
+LogCallback = Callable[[str], None]
+# Lignes du journal serveur recopiées à la fin d'un message d'échec.
+ERROR_LOG_TAIL = 15
+
+
+def _progress_logger(on_progress) -> LogCallback | None:
+    """Canal « journal en direct » offert par le pipeline sur son rappel
+    d'avancement (attribut ``log``), s'il existe."""
+    log = getattr(on_progress, "log", None)
+    return log if callable(log) else None
 
 
 def _normalize_endpoint_url(raw: str) -> str:
@@ -89,15 +100,19 @@ class ModalSession:
             raise TranscriptionError("URL du serveur Modal non configurée.")
         url = f"{self.base_url}/health"
         boot_timeout = float(getattr(self.settings, "modal_boot_timeout_seconds", 600))
-        deadline = time.monotonic() + boot_timeout
+        started = time.monotonic()
+        deadline = started + boot_timeout
         last_error = ""
         first_attempt = True
+        log = _progress_logger(on_progress)
         while time.monotonic() < deadline:
             if should_cancel and should_cancel():
                 raise TranscriptionError("Transcription annulée.")
             try:
                 response = self._http.get(url, headers=self._headers(), timeout=15.0)
                 if response.status_code == 200:
+                    if log:
+                        log(f"Conteneur Modal prêt ({int(time.monotonic() - started)} s).")
                     return
                 if response.status_code in (401, 403):
                     raise TranscriptionError(
@@ -108,8 +123,11 @@ class ModalSession:
                 raise
             except httpx.HTTPError as exc:
                 last_error = str(exc) or type(exc).__name__
-            if first_attempt and on_progress:
-                on_progress(0.02, "Démarrage du conteneur GPU Modal (cold start)…")
+            if first_attempt:
+                if on_progress:
+                    on_progress(0.02, "Démarrage du conteneur GPU Modal (cold start)…")
+                if log:
+                    log(f"Conteneur pas encore prêt ({last_error}) : démarrage à froid en cours…")
                 first_attempt = False
             time.sleep(POLL_INTERVAL)
         raise TranscriptionError(
@@ -216,6 +234,9 @@ class ModalSession:
             raise TranscriptionError(
                 f"Le serveur Modal a refusé le travail : {output.get('error') or response.status_code}"
             )
+        log = _progress_logger(on_progress)
+        if log:
+            log(f"Travail Modal {output['job_id']} accepté.")
         result = self._wait_job(
             str(output["job_id"]),
             job_timeout,
@@ -239,6 +260,16 @@ class ModalSession:
         rates_consecutifs = 0
         max_rates = 10
         derniere_erreur = ""
+        log = _progress_logger(on_progress)
+        journal: list[str] = []
+        lignes_lues = 0
+
+        def avec_journal(message: str) -> str:
+            if not journal:
+                return message
+            fin = journal[-ERROR_LOG_TAIL:]
+            return message + "\n\nDernières lignes du serveur Modal :\n" + "\n".join(fin)
+
         while True:
             if should_cancel and should_cancel():
                 raise TranscriptionError("Transcription annulée.")
@@ -251,6 +282,7 @@ class ModalSession:
                 response = self._http.get(
                     url,
                     headers=self._headers(),
+                    params={"since": lignes_lues},
                     timeout=httpx.Timeout(30.0, read=30.0),
                 )
                 statut = _decode_json_strict(response)
@@ -267,15 +299,23 @@ class ModalSession:
                 time.sleep(POLL_INTERVAL)
                 continue
             rates_consecutifs = 0
+            for entree in statut.get("logs") or []:
+                message = str(entree.get("msg") if isinstance(entree, dict) else entree)
+                journal.append(message)
+                logger.info("Modal %s : %s", job_id, message)
+                if log:
+                    log(message)
+            if isinstance(statut.get("log_total"), int):
+                lignes_lues = statut["log_total"]
             if response.status_code == 404:
                 raise TranscriptionError(
                     f"Le serveur Modal a oublié le travail {job_id} (conteneur redémarré ?) : "
                     f"{statut.get('error') or 'travail inconnu'}"
                 )
             if response.status_code >= 400:
-                raise TranscriptionError(
+                raise TranscriptionError(avec_journal(
                     f"Le serveur Modal a échoué : {statut.get('error') or response.status_code}"
-                )
+                ))
             etat = statut.get("status")
             if etat == "done":
                 result = statut.get("result")
@@ -285,14 +325,22 @@ class ModalSession:
                     )
                 return result
             if etat == "error":
-                raise TranscriptionError(
+                raise TranscriptionError(avec_journal(
                     f"Le serveur Modal a échoué : {statut.get('error') or 'erreur inconnue'}"
-                )
+                ))
             if on_progress:
                 ecoule = int(time.monotonic() - debut)
+                etape = statut.get("stage") or (
+                    "en attente du GPU" if etat == "queued" else "transcription en cours"
+                )
+                avancement = statut.get("progress")
+                fraction = (
+                    0.1 + 0.85 * float(avancement)
+                    if isinstance(avancement, (int, float)) else 0.1
+                )
                 on_progress(
-                    0.1,
-                    f"Transcription en cours sur Modal ({ecoule // 60} min {ecoule % 60:02d} s)…",
+                    fraction,
+                    f"Modal · {etape} ({ecoule // 60} min {ecoule % 60:02d} s)…",
                 )
             time.sleep(POLL_INTERVAL)
 
@@ -374,14 +422,19 @@ class ModalEngine:
         if model not in WHISPER_MODELS:
             model = "large-v3"
         session = ModalSession(settings)
+        log = _progress_logger(on_progress)
         try:
             if on_progress:
                 on_progress(0.0, "Connexion au conteneur GPU Modal…")
+            if log:
+                log(f"Connexion à {session.base_url}…")
             session.wait_ready(on_progress=on_progress, should_cancel=should_cancel)
             if should_cancel and should_cancel():
                 raise TranscriptionError("Transcription annulée.")
             if on_progress:
                 on_progress(0.05, "Envoi du fichier complet à Modal…")
+            if log:
+                log(f"Envoi du fichier audio ({wav_path.stat().st_size / 1e6:.1f} Mo)…")
             output = session.transcribe_audio(
                 wav_path.read_bytes(),
                 model,

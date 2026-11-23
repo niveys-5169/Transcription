@@ -103,4 +103,12 @@ La mise à jour est appliquée sans interruption de service.
 | `HF_TOKEN présent : non` au démarrage | Le jeton n'est pas fixé en dur dans l'image | Normal : Verbatim le transmet à chaque envoi d'audio via `X-HF-Token`. |
 | Erreur 401 sur le serveur Modal | `MODAL_AUTH_TOKEN` est défini côté Modal mais absent ou erroné dans Verbatim | Vérifiez le jeton dans les Réglages Verbatim. |
 | Le test dans les Réglages échoue ou `/health` ne répond pas pendant des minutes | Modal attend un GPU libre (« waiting to be scheduled on a GPU_L4 worker ») | Le bouton de test patiente jusqu'à 4 min. Redéployez : `modal_server.py` accepte désormais plusieurs GPU de repli (`L4,T4,A10` par défaut, modifiable via `MODAL_GPU`, ex. `MODAL_GPU=T4`). Tous consomment le crédit gratuit de 30 $/mois ; le T4 est le moins cher. |
+| `CUDA failed with error out of memory` | VRAM saturée (T4 de 16 Go surtout) : modèle ASR, alignement, diarisation et réserve de PyTorch d'un travail précédent | Le serveur libère désormais la réserve de PyTorch entre les étapes et, en cas de saturation, décharge les modèles puis réessaie (batch ASR 16 → 8 → 4…). Si l'erreur persiste, redéployez sur un GPU de 24 Go : `MODAL_GPU=L4,A10 modal deploy modal_server.py`, ou baissez `WHISPERX_BATCH_SIZE`. |
 | Le conteneur reste actif quelques minutes | Fenêtre d'inactivité de sécurité | Le conteneur s'éteint automatiquement après 90 s sans requête. |
+
+
+## 6. Suivre une transcription en direct
+
+- **Dans Verbatim** : sélectionnez le travail en cours ; le panneau « Journal en direct », sous le titre, affiche chaque étape du serveur (chargement du modèle, ASR, alignement, diarisation), leur durée et la VRAM libre. En cas d'échec, le bandeau d'erreur nomme l'étape fautive et recopie les dernières lignes du serveur ; tout le journal est aussi dans `logs/app.log`.
+- **Côté Modal** : `modal app logs verbatim-transcription` (ou l'onglet *Logs* de l'application sur modal.com) montre les mêmes lignes `[pod_server]`, plus les traces Python complètes.
+- Le serveur doit être redéployé (`modal deploy modal_server.py`) pour bénéficier du journal détaillé.
